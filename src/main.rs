@@ -151,6 +151,12 @@ fn main() {
             println!("Order canceled: {order_id:?}");
         }
         CliTraderCommand::GetBalance => {
+            let op_wallet_balance = rt.block_on(get_balance::call_get_erc20_balance(
+                NamedChain::OptimismSepolia,
+                OP_SEPOLIA_RPC_URL,
+                OP_SEPOLIA_USDC_TOKEN_ADDRESS,
+            ));
+
             let op_available_balance = rt.block_on(get_balance::call_get_balance(
                 NamedChain::OptimismSepolia,
                 OP_SEPOLIA_RPC_URL,
@@ -163,11 +169,18 @@ fn main() {
                 OP_SEPOLIA_USDC_TOKEN_ADDRESS,
             ));
 
+            let base_wallet_balance = rt.block_on(get_balance::call_get_erc20_balance(
+                NamedChain::OptimismSepolia,
+                BASE_SEPOLIA_RPC_URL,
+                BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+            ));
+
             let base_available_balance = rt.block_on(get_balance::call_get_balance(
                 NamedChain::BaseSepolia,
                 BASE_SEPOLIA_RPC_URL,
                 BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
             ));
+
             let base_locked_balance = rt.block_on(get_balance::call_get_locked_balance(
                 NamedChain::BaseSepolia,
                 BASE_SEPOLIA_RPC_URL,
@@ -175,10 +188,10 @@ fn main() {
             ));
 
             let balance_table = get_balance::get_balance_table(
-                Uint::from(9999),
+                op_wallet_balance.unwrap_or(Uint::from(9999)),
                 op_available_balance.unwrap_or(Uint::from(9999)),
                 op_locked_balance.unwrap_or(Uint::from(9999)),
-                Uint::from(9999),
+                base_wallet_balance.unwrap_or(Uint::from(9999)),
                 base_available_balance.unwrap_or(Uint::from(9999)),
                 base_locked_balance.unwrap_or(Uint::from(9999)),
             );

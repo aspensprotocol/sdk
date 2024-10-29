@@ -3,6 +3,7 @@ use alloy::primitives::{Address, Uint};
 use alloy::providers::ProviderBuilder;
 use alloy_chains::NamedChain;
 use alloy_signer_local::PrivateKeySigner;
+use alloy_sol_types::sol;
 use anyhow::Result;
 use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
 use url::Url;
@@ -91,6 +92,39 @@ pub(crate) async fn call_get_locked_balance(
     Ok(result)
 }
 
+sol! {
+    #[sol(rpc)]
+    contract ERC20 {
+        #[derive(Debug)]
+        function balanceOf(address) external view returns (uint256);
+    }
+}
+
+pub(crate) async fn call_get_erc20_balance(
+    chain: NamedChain,
+    rpc_url: &str,
+    token_address: &str,
+) -> Result<Uint<256, 4>> {
+    let token_addr: Address = token_address.parse()?;
+    let signer = std::env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
+    let depositer_address: Address = signer.address();
+
+    let wallet = EthereumWallet::new(signer);
+
+    let rpc_url = Url::parse(rpc_url)?;
+    // Set up the provider
+    let provider = ProviderBuilder::new()
+        .with_chain(chain)
+        .with_recommended_fillers()
+        .wallet(wallet)
+        .on_http(rpc_url);
+
+    // Get an instance of the contract
+    let contract = ERC20::new(token_addr, &provider);
+    let result = contract.balanceOf(depositer_address).call().await?._0;
+
+    Ok(result)
+}
 
 pub(crate) fn get_balance_table(
     base_wallet_bal: Uint<256, 4>,
@@ -104,7 +138,7 @@ pub(crate) fn get_balance_table(
 
     table
         .load_preset(UTF8_BORDERS_ONLY)
-        .set_header(vec!["", "Base Chain", "Quote Chain"])
+        .set_header(vec!["USDC", "Base Chain", "Quote Chain"])
         .add_row(vec![
             "Wallet Balance",
             &format!("{base_wallet_bal}"),
