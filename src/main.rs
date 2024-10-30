@@ -9,7 +9,7 @@ use clap_repl::reedline::{
 use clap_repl::ClapEditor;
 use url::Url;
 
-use crate::commands::{deposit, get_balance};
+use crate::commands::{deposit, get_balance, withdraw};
 
 const OP_SEPOLIA_RPC_URL: &str = "https://sepolia.optimism.io";
 const OP_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "5fd84259d66Cd46123540766Be93DFE6D43130D7";
@@ -35,11 +35,8 @@ enum CliTraderCommand {
     },
     /// Withdraw token(s) to a local wallet
     Withdraw {
-        #[arg(short, long)]
         chain: SupportedChain,
-        #[arg(short, long)]
         token: String,
-        #[arg(short, long)]
         amount: u64,
     },
     /// Send an order
@@ -146,6 +143,28 @@ fn main() {
             amount,
         } => {
             println!("Withdrawing {amount:?} {token:?} on {chain:?}");
+            let named_chain = match chain {
+                SupportedChain::OptimismSepolia => NamedChain::OptimismSepolia,
+                SupportedChain::BaseSepolia => NamedChain::BaseSepolia,
+            };
+
+            let rpc_url = match chain {
+                SupportedChain::OptimismSepolia => OP_SEPOLIA_RPC_URL,
+                SupportedChain::BaseSepolia => BASE_SEPOLIA_RPC_URL,
+            };
+
+            let token_address = match chain {
+                SupportedChain::OptimismSepolia => OP_SEPOLIA_USDC_TOKEN_ADDRESS,
+                SupportedChain::BaseSepolia => BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+            };
+
+            let call_withdraw_result = rt.block_on(withdraw::call_withdraw(
+                named_chain,
+                rpc_url,
+                token_address,
+                amount,
+            ));
+            println!("Withdraw result: {call_withdraw_result:?}");
         }
         CliTraderCommand::SendOrder {
             side,
