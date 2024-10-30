@@ -45,9 +45,13 @@ impl fmt::Display for SendOrderReply {
     }
 }
 
-pub(crate) async fn call_send_order() -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn call_send_order(
+    side: i32,
+    quantity: u64,
+    price: Option<u64>,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Create a channel to connect to the gRPC server
-    let channel = tonic::transport::Channel::from_static("http://[::1]:50051")
+    let channel = tonic::transport::Channel::from_static("http://localhost:50051")
         .connect()
         .await?;
 
@@ -56,15 +60,15 @@ pub(crate) async fn call_send_order() -> Result<(), Box<dyn std::error::Error>> 
 
     // Create a request object
     let request = tonic::Request::new(Order {
-        side: 1,
-        quantity: 2,
-        price: Some(3),
-        market_name: "abc".to_owned(),
-        trade_symbol: "ABC/USD".to_owned(),
-        market_hash: "abc123".to_owned(),
-        base_account_address: "0xabc".to_owned(),
-        quote_account_address: "0xfeg".to_owned(),
-        execution_type: 1,
+        side,
+        quantity,
+        price,
+        market_name: "m1-irrelevant".to_owned(),
+        trade_symbol: "irrelevant".to_owned(),
+        market_hash: "1c4fd355c7cfbe92dbdb2dcc1f24dd83456c9b3c362949a92d15f915de9666af".to_owned(),
+        base_account_address: "<replace-me>".to_owned(),
+        quote_account_address: "<replace-me>".to_owned(),
+        execution_type: 0,
         matching_order_id: None,
         signature_hash: [1, 2, 3].to_vec(),
     });

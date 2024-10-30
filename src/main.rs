@@ -171,6 +171,11 @@ fn main() {
             amount,
             limit_price,
         } => {
+            let side = match side {
+                Side::BUY => 1,
+                Side::SELL => 2,
+            };
+
             let mut rl = Reedline::create();
             //let buy_or_sell = read_input(&mut rl, "Do you wish to BUY or SELL? ");
             let limit_price = limit_price.unwrap_or_else(|| {
@@ -181,7 +186,7 @@ fn main() {
 
             println!("Sending order to {side:?} {amount:?} at limit price {limit_price:?}");
 
-            let result = rt.block_on(send_order::call_send_order());
+            let result = rt.block_on(send_order::call_send_order(side, amount, Some(limit_price)));
             println!("SendOrder result: {result:?}");
 
             println!("Order sent");
