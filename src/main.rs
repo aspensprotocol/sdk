@@ -9,7 +9,7 @@ use clap_repl::reedline::{
 use clap_repl::ClapEditor;
 use url::Url;
 
-use crate::commands::get_balance;
+use crate::commands::{deposit, get_balance};
 
 const OP_SEPOLIA_RPC_URL: &str = "https://sepolia.optimism.io";
 const OP_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "5fd84259d66Cd46123540766Be93DFE6D43130D7";
@@ -28,11 +28,9 @@ enum CliTraderCommand {
     },
     /// Deposit token(s) to make them available for trading
     Deposit {
-        #[arg(short, long, value_enum, default_value_t = SupportedChain::BaseSepolia)]
+        //#[arg(short, long, value_enum)]
         chain: SupportedChain,
-        #[arg(short, long)]
         token: String,
-        #[arg(short, long)]
         amount: u64,
     },
     /// Withdraw token(s) to a local wallet
@@ -70,7 +68,7 @@ enum CliTraderCommand {
     Quit,
 }
 
-enum State {}
+//enum State {}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum SupportedChain {
@@ -119,6 +117,28 @@ fn main() {
             amount,
         } => {
             println!("Depositing {amount:?} {token:?} on {chain:?}");
+            let named_chain = match chain {
+                SupportedChain::OptimismSepolia => NamedChain::OptimismSepolia,
+                SupportedChain::BaseSepolia => NamedChain::BaseSepolia,
+            };
+
+            let rpc_url = match chain {
+                SupportedChain::OptimismSepolia => OP_SEPOLIA_RPC_URL,
+                SupportedChain::BaseSepolia => BASE_SEPOLIA_RPC_URL,
+            };
+
+            let token_address = match chain {
+                SupportedChain::OptimismSepolia => OP_SEPOLIA_USDC_TOKEN_ADDRESS,
+                SupportedChain::BaseSepolia => BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+            };
+
+            let call_deposit_result = rt.block_on(deposit::call_deposit(
+                named_chain,
+                rpc_url,
+                token_address,
+                amount,
+            ));
+            println!("Deposit result: {call_deposit_result:?}");
         }
         CliTraderCommand::Withdraw {
             chain,
@@ -170,7 +190,7 @@ fn main() {
             ));
 
             let base_wallet_balance = rt.block_on(get_balance::call_get_erc20_balance(
-                NamedChain::OptimismSepolia,
+                NamedChain::BaseSepolia,
                 BASE_SEPOLIA_RPC_URL,
                 BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
             ));

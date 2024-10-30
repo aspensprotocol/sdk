@@ -3,16 +3,11 @@ use alloy::primitives::{Address, Uint};
 use alloy::providers::ProviderBuilder;
 use alloy_chains::NamedChain;
 use alloy_signer_local::PrivateKeySigner;
-use alloy_sol_types::sol;
 use anyhow::Result;
 use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
 use url::Url;
 
-use super::Midrib;
-
-const OP_SEPOLIA_CONTRACT_ADDRESS: &str = "0x59305e29A1d409494937FB6EaED32187e143fac1";
-//const BASE_SEPOLIA_CONTRACT_ADDRESS: &str = "0x2D8d92AD00609f2fC5Cc7B10cEC9013bD3A4f9F2";
-const BASE_SEPOLIA_CONTRACT_ADDRESS: &str = "0x8B9A3a5e445a6810a0F7CfF01B26e79dc62841e1";
+use super::{IERC20, Midrib};
 
 pub(crate) async fn call_get_balance(
     chain: NamedChain,
@@ -20,11 +15,12 @@ pub(crate) async fn call_get_balance(
     token_address: &str,
 ) -> Result<Uint<256, 4>> {
     let contract_address = match chain {
-        NamedChain::BaseSepolia => BASE_SEPOLIA_CONTRACT_ADDRESS,
-        NamedChain::OptimismSepolia => OP_SEPOLIA_CONTRACT_ADDRESS,
+        NamedChain::BaseSepolia => super::BASE_SEPOLIA_CONTRACT_ADDRESS,
+        NamedChain::OptimismSepolia => super::OP_SEPOLIA_CONTRACT_ADDRESS,
         _ => unreachable!(),
     };
-    let op_sepolia_contract_address: Address = Address::parse_checksummed(contract_address, None)?;
+
+    let contract_addr: Address = Address::parse_checksummed(contract_address, None)?;
     let token_addr: Address = token_address.parse()?;
 
     let signer = std::env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
@@ -41,7 +37,7 @@ pub(crate) async fn call_get_balance(
         .on_http(rpc_url);
 
     // Get an instance of the contract
-    let contract = Midrib::new(op_sepolia_contract_address, &provider);
+    let contract = Midrib::new(contract_addr, &provider);
 
     // Call the contract function
     let result = contract
@@ -59,11 +55,11 @@ pub(crate) async fn call_get_locked_balance(
     token_address: &str,
 ) -> Result<Uint<256, 4>> {
     let contract_address = match chain {
-        NamedChain::BaseSepolia => BASE_SEPOLIA_CONTRACT_ADDRESS,
-        NamedChain::OptimismSepolia => OP_SEPOLIA_CONTRACT_ADDRESS,
+        NamedChain::BaseSepolia => super::BASE_SEPOLIA_CONTRACT_ADDRESS,
+        NamedChain::OptimismSepolia => super::OP_SEPOLIA_CONTRACT_ADDRESS,
         _ => unreachable!(),
     };
-    let op_sepolia_contract_address: Address = Address::parse_checksummed(contract_address, None)?;
+    let contract_addr: Address = Address::parse_checksummed(contract_address, None)?;
     let token_addr: Address = token_address.parse()?;
 
     let signer = std::env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
@@ -80,7 +76,7 @@ pub(crate) async fn call_get_locked_balance(
         .on_http(rpc_url);
 
     // Get an instance of the contract
-    let contract = Midrib::new(op_sepolia_contract_address, &provider);
+    let contract = Midrib::new(contract_addr, &provider);
 
     // Call the contract function
     let result = contract
@@ -92,13 +88,7 @@ pub(crate) async fn call_get_locked_balance(
     Ok(result)
 }
 
-sol! {
-    #[sol(rpc)]
-    contract ERC20 {
-        #[derive(Debug)]
-        function balanceOf(address) external view returns (uint256);
-    }
-}
+
 
 pub(crate) async fn call_get_erc20_balance(
     chain: NamedChain,
@@ -120,7 +110,7 @@ pub(crate) async fn call_get_erc20_balance(
         .on_http(rpc_url);
 
     // Get an instance of the contract
-    let contract = ERC20::new(token_addr, &provider);
+    let contract = IERC20::new(token_addr, &provider);
     let result = contract.balanceOf(depositer_address).call().await?._0;
 
     Ok(result)
