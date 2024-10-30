@@ -9,7 +9,7 @@ use clap_repl::reedline::{
 use clap_repl::ClapEditor;
 use url::Url;
 
-use crate::commands::{deposit, get_balance, withdraw};
+use crate::commands::{deposit, get_balance, send_order, withdraw};
 
 const OP_SEPOLIA_RPC_URL: &str = "https://sepolia.optimism.io";
 const OP_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "5fd84259d66Cd46123540766Be93DFE6D43130D7";
@@ -181,6 +181,9 @@ fn main() {
 
             println!("Sending order to {side:?} {amount:?} at limit price {limit_price:?}");
 
+            let result = rt.block_on(send_order::call_send_order());
+            println!("SendOrder result: {result:?}");
+
             println!("Order sent");
         }
         CliTraderCommand::GetOrders => {
@@ -190,50 +193,73 @@ fn main() {
             println!("Order canceled: {order_id:?}");
         }
         CliTraderCommand::GetBalance => {
-            let op_wallet_balance = rt.block_on(get_balance::call_get_erc20_balance(
-                NamedChain::OptimismSepolia,
-                OP_SEPOLIA_RPC_URL,
-                OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ));
+            let error_val = Uint::from(99999);
+            let op_wallet_balance = rt
+                .block_on(get_balance::call_get_erc20_balance(
+                    NamedChain::OptimismSepolia,
+                    OP_SEPOLIA_RPC_URL,
+                    OP_SEPOLIA_USDC_TOKEN_ADDRESS,
+                ))
+                .unwrap_or(error_val);
 
-            let op_available_balance = rt.block_on(get_balance::call_get_balance(
-                NamedChain::OptimismSepolia,
-                OP_SEPOLIA_RPC_URL,
-                OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ));
+            let op_available_balance = rt
+                .block_on(get_balance::call_get_balance(
+                    NamedChain::OptimismSepolia,
+                    OP_SEPOLIA_RPC_URL,
+                    OP_SEPOLIA_USDC_TOKEN_ADDRESS,
+                ))
+                .unwrap_or(error_val);
 
-            let op_locked_balance = rt.block_on(get_balance::call_get_locked_balance(
-                NamedChain::OptimismSepolia,
-                OP_SEPOLIA_RPC_URL,
-                OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ));
+            let op_locked_balance = rt
+                .block_on(get_balance::call_get_locked_balance(
+                    NamedChain::OptimismSepolia,
+                    OP_SEPOLIA_RPC_URL,
+                    OP_SEPOLIA_USDC_TOKEN_ADDRESS,
+                ))
+                .unwrap_or(error_val);
 
-            let base_wallet_balance = rt.block_on(get_balance::call_get_erc20_balance(
-                NamedChain::BaseSepolia,
-                BASE_SEPOLIA_RPC_URL,
-                BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ));
+            let base_wallet_balance = rt
+                .block_on(get_balance::call_get_erc20_balance(
+                    NamedChain::BaseSepolia,
+                    BASE_SEPOLIA_RPC_URL,
+                    BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+                ))
+                .unwrap_or(error_val);
 
-            let base_available_balance = rt.block_on(get_balance::call_get_balance(
-                NamedChain::BaseSepolia,
-                BASE_SEPOLIA_RPC_URL,
-                BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ));
+            let base_available_balance = rt
+                .block_on(get_balance::call_get_balance(
+                    NamedChain::BaseSepolia,
+                    BASE_SEPOLIA_RPC_URL,
+                    BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+                ))
+                .unwrap_or(error_val);
 
-            let base_locked_balance = rt.block_on(get_balance::call_get_locked_balance(
-                NamedChain::BaseSepolia,
-                BASE_SEPOLIA_RPC_URL,
-                BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ));
+            let base_locked_balance = rt
+                .block_on(get_balance::call_get_locked_balance(
+                    NamedChain::BaseSepolia,
+                    BASE_SEPOLIA_RPC_URL,
+                    BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+                ))
+                .unwrap_or(error_val);
 
             let balance_table = get_balance::get_balance_table(
-                op_wallet_balance.unwrap_or(Uint::from(9999)),
-                op_available_balance.unwrap_or(Uint::from(9999)),
-                op_locked_balance.unwrap_or(Uint::from(9999)),
-                base_wallet_balance.unwrap_or(Uint::from(9999)),
-                base_available_balance.unwrap_or(Uint::from(9999)),
-                base_locked_balance.unwrap_or(Uint::from(9999)),
+                op_wallet_balance,
+                op_available_balance,
+                op_locked_balance,
+                base_wallet_balance,
+                base_available_balance,
+                base_locked_balance,
             );
+            if op_wallet_balance.eq(&error_val)
+                | op_available_balance.eq(&error_val)
+                | op_locked_balance.eq(&error_val)
+                | base_wallet_balance.eq(&error_val)
+                | base_available_balance.eq(&error_val)
+                | base_locked_balance.eq(&error_val)
+            {
+                println!("** A '99999' value represents an error in fetching the actual value");
+            }
+
             println!("{balance_table}");
         }
         CliTraderCommand::GetOrderbook { market_id } => {

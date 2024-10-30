@@ -13,6 +13,12 @@ anyhow = "1.0.91"
 clap = { version = "4.5.20", features = ["derive"] }
 clap-repl = "0.3.0"
 comfy-table = "7.1.1"
+hex = "0.4.3"
+prost = "0.13.3"
 serde_json = "1.0.132"
 tokio = { version = "1.41.0", features = ["rt-multi-thread"] }
+tonic = { version = "0.12.3", default-features = false, features = ["codegen", "prost", "transport"] }
 url = "2.5.2"
+
+[build-dependencies]
+tonic-build = "0.12.3"

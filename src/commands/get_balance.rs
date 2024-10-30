@@ -7,7 +7,7 @@ use anyhow::Result;
 use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
 use url::Url;
 
-use super::{IERC20, Midrib};
+use super::{Midrib, IERC20};
 
 pub(crate) async fn call_get_balance(
     chain: NamedChain,
@@ -87,8 +87,6 @@ pub(crate) async fn call_get_locked_balance(
 
     Ok(result)
 }
-
-
 
 pub(crate) async fn call_get_erc20_balance(
     chain: NamedChain,
