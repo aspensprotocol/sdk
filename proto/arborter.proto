@@ -1,0 +1,147 @@
+syntax = "proto3";
+
+package xyz.aspens.arborter;
+
+option optimize_for = SPEED;
+
+service ArborterService {
+  rpc SendOrder(Order) returns (SendOrderReply) {}
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderReply) {}
+  rpc DeployContract(Empty) returns (DeployContractReply) {}
+  rpc StreamOrderbook (OrderbookRequest) returns (stream OrderbookEntry);
+}
+
+message Empty {}
+
+/* rpc: SendOrder */
+message Order {
+  // 'BID' or 'ASK'
+  Side side = 1;
+  // Order size
+  uint64 quantity = 2;
+  // Optional. including is a LIMIT order. excluding is a MARKET order.
+  optional uint64 price = 3;
+  // The handle for this market. eg. 'm1'
+  string market_name = 4;
+  // BASE_SYMBOL:QUOTE_SYMBOL. eg. 'WTI:USD'
+  string trade_symbol = 5;
+  // sha256(concat("chain_id::token_address::chain_id::token_address"))
+  string market_hash = 6;
+  // User's pubkey (address)on the Base chain
+  string base_account_address = 7;
+  // User's pubkey (address)on the Quote chain
+  string quote_account_address = 8;
+  // 'DIRECT' (default) or 'DISCRETIONARY'
+  ExecutionType execution_type = 9;
+  // When execution_type == 'discretionary', include order_id to match with.
+  optional string matching_order_id = 10;
+  // Valid EIP-712 signature hash of this order
+  bytes signature_hash = 11;
+}
+
+enum Side {
+  NOT_SET = 0;
+  BID = 1;
+  ASK = 2;
+}
+
+enum ExecutionType {
+  // Default 
+  DIRECT = 0;
+  // For future dealroom use. Currently unused.
+  DISCRETIONARY = 1;
+}
+
+enum OrderStatus {
+  // When new order is added to the book
+  ADDED = 0;
+  // When an existing order is updated
+  UPDATED = 1;
+  // When an existing order is filled completely or cancellled
+  REMOVED = 2;
+}
+
+message Trade {
+  // When the engine registers this executed trade
+  uint64 timestamp = 1;
+  // The setttled price net of fees
+  uint64 price = 2;
+  // How much or many of the quote token
+  uint64 qty = 3;
+  // Maker's engine Id. Safely ignore.
+  string maker = 4;
+  // Taker's engine Id. Safely ignore.
+  string taker = 5;
+  // The maker's base chain wallet address
+  string maker_base_address = 6;
+  // The maker's quote chain wallet address
+  string maker_quote_address = 7;
+  // Buyer's engine Id. Safely ignore.
+  string buyer = 8;
+  // Seller's engine Id. Safely ignore.
+  string seller = 9;
+  // Internal order Id. Safely ignore.
+  uint64 order_hit = 10;
+}
+
+/* rpc: SendOrder */
+message SendOrderReply {
+  // Whether the order has unmatched volume and has been added to the book.
+  bool order_in_book = 1;
+  // If the order lands in the book, what remains unfilled from the order.
+  optional Order order = 2;
+  // Which other orders, if any, this order was matched with.
+  repeated Trade trades = 3;
+}
+
+/* rpc: CancelOrder */
+message CancelOrderRequest {
+  // sha256(concat("chain_id::token_address::chain_id::token_address"))
+  string market_hash = 1;
+  // 'BID = 1' or 'ASK = 2'
+  Side side = 2;
+  // Internal numeric id of the order to cancel
+  uint64 order_id = 3;
+  // Valid EIP-712 signature hash of this cancellation request
+  bytes signature_hash = 4;
+}
+
+/* rpc: CancelOrder */
+message CancelOrderReply {
+  // Whether the order was found and cancelled
+  bool order_cancelled = 1;
+}
+
+/* rpc: DeployContract */
+message DeployContractReply {
+  // The address that the contract is deployed to on the base chain.
+  string base_address = 1;
+  // The address that the contract is deployed to on the quote chain.
+  string quote_address = 2;
+}
+
+/* rpc: StreamOrderbook */
+message OrderbookRequest {
+  // Used to keep the client alive
+  bool continue_stream = 1;
+}
+
+/* rpc: StreamOrderbook */
+message OrderbookEntry {
+  // when the order first landed in The Orderbook
+  uint64 timestamp = 1;
+  // internal id of the order
+  uint64 order_id = 2;
+  // price of the order - in non-decimal form
+  uint64 price = 3;
+  // quantity of the order - in non-decimal form
+  uint64 quantity = 4;
+  // 'BID = 1' or 'ASK = 2'
+  Side side = 5;
+  // The maker's base chain wallet address
+  string maker_base_address = 6;
+  // The maker's quote chain wallet address
+  string maker_quote_address = 7;
+  // 'ADDED = 0', 'UPDATED = 1', 'REMOVED = 2'
+  OrderStatus status = 8;
+}
