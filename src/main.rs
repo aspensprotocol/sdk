@@ -7,20 +7,25 @@ use clap_repl::reedline::{
     DefaultPrompt, DefaultPromptSegment, FileBackedHistory, Reedline, Signal,
 };
 use clap_repl::ClapEditor;
+use dotenv::dotenv;
 use url::Url;
 
-use crate::commands::{deposit, get_balance, send_order, withdraw};
+use crate::commands::{balance, deposit, send_order, withdraw};
 
-const OP_SEPOLIA_RPC_URL: &str = "https://sepolia.optimism.io";
-const OP_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "5fd84259d66Cd46123540766Be93DFE6D43130D7";
-
-const BASE_SEPOLIA_RPC_URL: &str = "https://sepolia.base.org";
+//const BASE_SEPOLIA_RPC_URL: &str = "https://sepolia.base.org";
+//const BASE_SEPOLIA_RPC_URL: &str = "https://base-sepolia-rpc.publicnode.com";
+const BASE_SEPOLIA_RPC_URL: &str = "http://localhost:8545";
 const BASE_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "036CbD53842c5426634e7929541eC2318f3dCF7e";
+
+//const OP_SEPOLIA_RPC_URL: &str = "https://sepolia.optimism.io";
+//const OP_SEPOLIA_RPC_URL: &str = "https://optimism-sepolia-rpc.publicnode.com";
+const OP_SEPOLIA_RPC_URL: &str = "http://localhost:8546";
+const OP_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "5fd84259d66Cd46123540766Be93DFE6D43130D7";
 
 #[derive(Debug, Parser)]
 #[command(name = "")]
-enum CliTraderCommand {
-    /// Initialize a new trading session
+enum CliCommand {
+    /// Initialize a new trading session by (optionally) defining the arborter gRPC URL endpoint
     Initialize {
         /// The URL of the arborter server
         #[arg(short, long, default_value_t = Url::parse("http://localhost:50051").unwrap())]
@@ -39,15 +44,25 @@ enum CliTraderCommand {
         token: String,
         amount: u64,
     },
-    /// Send an order
-    SendOrder {
-        //#[arg(short, long, value_enum)]
-        side: Side,
+    /// Send a BUY order
+    Buy {
         //#[arg(short, long)]
         amount: u64,
         #[arg(short, long)]
         limit_price: Option<u64>,
+        #[arg(short, long)]
+        order_ids: Option<u64>,
     },
+    /// Send a SELL order
+    Sell {
+        //#[arg(short, long)]
+        amount: u64,
+        #[arg(short, long)]
+        limit_price: Option<u64>,
+        #[arg(short, long)]
+        order_ids: Option<u64>,
+    },
+    /// Get a list of all active orders
     GetOrders,
     /// Cancel an order
     CancelOrder {
@@ -62,6 +77,8 @@ enum CliTraderCommand {
         #[arg(short, long)]
         market_id: Option<String>,
     },
+    MarketHash,
+    /// Close the session and quit
     Quit,
 }
 
@@ -77,38 +94,39 @@ enum SupportedChain {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Side {
-    /// go long: buy the base token by selling the quote token
+    /// buy the base token by selling the quote token
     BUY,
-    /// go short: sell the quote token by buying the base token
+    /// sell the quote token by buying the base token
     SELL,
 }
 
 fn main() {
+    dotenv().ok();
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
 
     let prompt = DefaultPrompt {
-        left_prompt: DefaultPromptSegment::Basic("cli-trader".to_owned()),
+        left_prompt: DefaultPromptSegment::Basic("aspens".to_owned()),
         ..DefaultPrompt::default()
     };
 
-    let rl = ClapEditor::<CliTraderCommand>::builder()
+    let rl = ClapEditor::<CliCommand>::builder()
         .with_prompt(Box::new(prompt))
         .with_editor_hook(|reed| {
-            // Do custom things with `Reedline` instance here
             reed.with_history(Box::new(
-                FileBackedHistory::with_file(10000, "/tmp/cli-trader-history".into()).unwrap(),
+                FileBackedHistory::with_file(10000, "/tmp/aspens-cli-history".into()).unwrap(),
             ))
         })
         .build();
 
     rl.repl(|command| match command {
-        CliTraderCommand::Initialize { url } => {
+        CliCommand::Initialize { url } => {
             println!("Initialized with {url:?}");
         }
-        CliTraderCommand::Deposit {
+        CliCommand::Deposit {
             chain,
             token,
             amount,
@@ -137,7 +155,7 @@ fn main() {
             ));
             println!("Deposit result: {call_deposit_result:?}");
         }
-        CliTraderCommand::Withdraw {
+        CliCommand::Withdraw {
             chain,
             token,
             amount,
@@ -166,16 +184,11 @@ fn main() {
             ));
             println!("Withdraw result: {call_withdraw_result:?}");
         }
-        CliTraderCommand::SendOrder {
-            side,
+        CliCommand::Buy {
             amount,
             limit_price,
+            matching_order_ids,
         } => {
-            let side = match side {
-                Side::BUY => 1,
-                Side::SELL => 2,
-            };
-
             let mut rl = Reedline::create();
             //let buy_or_sell = read_input(&mut rl, "Do you wish to BUY or SELL? ");
             let limit_price = limit_price.unwrap_or_else(|| {
@@ -184,23 +197,42 @@ fn main() {
                 limit
             });
 
-            println!("Sending order to {side:?} {amount:?} at limit price {limit_price:?}");
+            println!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
 
-            let result = rt.block_on(send_order::call_send_order(side, amount, Some(limit_price)));
+            let result = rt.block_on(send_order::call_send_order(1, amount, Some(limit_price)));
+
             println!("SendOrder result: {result:?}");
-
             println!("Order sent");
         }
-        CliTraderCommand::GetOrders => {
+        CliCommand::Sell {
+            amount,
+            limit_price,
+        } => {
+            let mut rl = Reedline::create();
+            //let buy_or_sell = read_input(&mut rl, "Do you wish to BUY or SELL? ");
+            let limit_price = limit_price.unwrap_or_else(|| {
+                let price = read_input(&mut rl, "At what price? ");
+                let limit: u64 = price.parse::<u64>().unwrap();
+                limit
+            });
+
+            println!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
+
+            let result = rt.block_on(send_order::call_send_order(2, amount, Some(limit_price)));
+
+            println!("SendOrder result: {result:?}");
+            println!("Order sent");
+        }
+        CliCommand::GetOrders => {
             println!("Getting orders...");
         }
-        CliTraderCommand::CancelOrder { order_id } => {
+        CliCommand::CancelOrder { order_id } => {
             println!("Order canceled: {order_id:?}");
         }
-        CliTraderCommand::GetBalance => {
+        CliCommand::GetBalance => {
             let error_val = Uint::from(99999);
             let op_wallet_balance = rt
-                .block_on(get_balance::call_get_erc20_balance(
+                .block_on(balance::call_get_erc20_balance(
                     NamedChain::OptimismSepolia,
                     OP_SEPOLIA_RPC_URL,
                     OP_SEPOLIA_USDC_TOKEN_ADDRESS,
@@ -208,7 +240,7 @@ fn main() {
                 .unwrap_or(error_val);
 
             let op_available_balance = rt
-                .block_on(get_balance::call_get_balance(
+                .block_on(balance::call_get_balance(
                     NamedChain::OptimismSepolia,
                     OP_SEPOLIA_RPC_URL,
                     OP_SEPOLIA_USDC_TOKEN_ADDRESS,
@@ -216,7 +248,7 @@ fn main() {
                 .unwrap_or(error_val);
 
             let op_locked_balance = rt
-                .block_on(get_balance::call_get_locked_balance(
+                .block_on(balance::call_get_locked_balance(
                     NamedChain::OptimismSepolia,
                     OP_SEPOLIA_RPC_URL,
                     OP_SEPOLIA_USDC_TOKEN_ADDRESS,
@@ -224,7 +256,7 @@ fn main() {
                 .unwrap_or(error_val);
 
             let base_wallet_balance = rt
-                .block_on(get_balance::call_get_erc20_balance(
+                .block_on(balance::call_get_erc20_balance(
                     NamedChain::BaseSepolia,
                     BASE_SEPOLIA_RPC_URL,
                     BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
@@ -232,7 +264,7 @@ fn main() {
                 .unwrap_or(error_val);
 
             let base_available_balance = rt
-                .block_on(get_balance::call_get_balance(
+                .block_on(balance::call_get_balance(
                     NamedChain::BaseSepolia,
                     BASE_SEPOLIA_RPC_URL,
                     BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
@@ -240,20 +272,21 @@ fn main() {
                 .unwrap_or(error_val);
 
             let base_locked_balance = rt
-                .block_on(get_balance::call_get_locked_balance(
+                .block_on(balance::call_get_locked_balance(
                     NamedChain::BaseSepolia,
                     BASE_SEPOLIA_RPC_URL,
                     BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
                 ))
                 .unwrap_or(error_val);
 
-            let balance_table = get_balance::get_balance_table(
-                op_wallet_balance,
-                op_available_balance,
-                op_locked_balance,
+            let balance_table = balance::balance_table(
+                vec!["USDC", "Base Sepolia", "Optimism Sepolia"],
                 base_wallet_balance,
                 base_available_balance,
                 base_locked_balance,
+                op_wallet_balance,
+                op_available_balance,
+                op_locked_balance,
             );
             if op_wallet_balance.eq(&error_val)
                 | op_available_balance.eq(&error_val)
@@ -267,10 +300,10 @@ fn main() {
 
             println!("{balance_table}");
         }
-        CliTraderCommand::GetOrderbook { market_id } => {
+        CliCommand::GetOrderbook { market_id } => {
             println!("Getting orderbook: {market_id:?}");
         }
-        CliTraderCommand::Quit => {
+        CliCommand::Quit => {
             println!("goodbye");
             std::process::exit(0)
         }
