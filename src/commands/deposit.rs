@@ -36,7 +36,6 @@ pub(crate) async fn call_deposit(
     // Set up the provider
     let provider = ProviderBuilder::new()
         .with_chain(chain)
-        .with_recommended_fillers()
         .wallet(wallet)
         .on_http(rpc_url);
 

@@ -51,7 +51,7 @@ enum CliCommand {
         #[arg(short, long)]
         limit_price: Option<u64>,
         #[arg(short, long)]
-        order_ids: Option<u64>,
+        matching_order_ids: Option<u64>,
     },
     /// Send a SELL order
     Sell {
@@ -60,7 +60,7 @@ enum CliCommand {
         #[arg(short, long)]
         limit_price: Option<u64>,
         #[arg(short, long)]
-        order_ids: Option<u64>,
+        matching_order_ids: Option<u64>,
     },
     /// Get a list of all active orders
     GetOrders,
@@ -77,7 +77,6 @@ enum CliCommand {
         #[arg(short, long)]
         market_id: Option<String>,
     },
-    MarketHash,
     /// Close the session and quit
     Quit,
 }
@@ -95,9 +94,9 @@ enum SupportedChain {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Side {
     /// buy the base token by selling the quote token
-    BUY,
+    Buy,
     /// sell the quote token by buying the base token
-    SELL,
+    Sell,
 }
 
 fn main() {
@@ -207,6 +206,7 @@ fn main() {
         CliCommand::Sell {
             amount,
             limit_price,
+            matching_order_ids,
         } => {
             let mut rl = Reedline::create();
             //let buy_or_sell = read_input(&mut rl, "Do you wish to BUY or SELL? ");
@@ -225,9 +225,11 @@ fn main() {
         }
         CliCommand::GetOrders => {
             println!("Getting orders...");
+            println!("TODO: Implement this");
         }
         CliCommand::CancelOrder { order_id } => {
             println!("Order canceled: {order_id:?}");
+            println!("TODO: Implement this");
         }
         CliCommand::GetBalance => {
             let error_val = Uint::from(99999);
@@ -302,6 +304,7 @@ fn main() {
         }
         CliCommand::GetOrderbook { market_id } => {
             println!("Getting orderbook: {market_id:?}");
+            println!("TODO: Implement this");
         }
         CliCommand::Quit => {
             println!("goodbye");

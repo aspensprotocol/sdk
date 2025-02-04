@@ -19,9 +19,9 @@ pub struct Order {
     /// BASE_SYMBOL:QUOTE_SYMBOL. eg. 'WTI:USD'
     #[prost(string, tag = "5")]
     pub trade_symbol: ::prost::alloc::string::String,
-    /// sha256(concat("chain_id::token_address::chain_id::token_address"))
+    /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
     #[prost(string, tag = "6")]
-    pub market_hash: ::prost::alloc::string::String,
+    pub market_id: ::prost::alloc::string::String,
     /// User's pubkey (address)on the Base chain
     #[prost(string, tag = "7")]
     pub base_account_address: ::prost::alloc::string::String,
@@ -61,10 +61,10 @@ pub struct Trade {
     /// The maker's quote chain wallet address
     #[prost(string, tag = "7")]
     pub maker_quote_address: ::prost::alloc::string::String,
-    /// Buyer's internal trader id.
+    /// Buyer's internal trader id. Safely ignore.
     #[prost(string, tag = "8")]
     pub buyer: ::prost::alloc::string::String,
-    /// Seller's internal trader id.
+    /// Seller's internal trader id. Safely ignore.
     #[prost(string, tag = "9")]
     pub seller: ::prost::alloc::string::String,
     /// The order_id that created this trade.
@@ -87,14 +87,17 @@ pub struct SendOrderReply {
 /// rpc: CancelOrder
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OrderToCancel {
-    /// sha256(concat("chain_id::token_address::chain_id::token_address"))
+    /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
     #[prost(string, tag = "1")]
-    pub market_hash: ::prost::alloc::string::String,
+    pub market_id: ::prost::alloc::string::String,
     /// 'BID' or 'ASK'
     #[prost(enumeration = "Side", tag = "2")]
     pub side: i32,
+    /// the token address
+    #[prost(string, tag = "3")]
+    pub token_address: ::prost::alloc::string::String,
     /// Internal order Id.
-    #[prost(uint64, tag = "3")]
+    #[prost(uint64, tag = "4")]
     pub order_id: u64,
 }
 /// rpc: CancelOrder
@@ -111,16 +114,6 @@ pub struct CancelOrderReply {
     /// Whether the order was found and canceled
     #[prost(bool, tag = "1")]
     pub order_canceled: bool,
-}
-/// rpc: DeployContract
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DeployContractReply {
-    /// The address that the contract is deployed to on the base chain.
-    #[prost(string, tag = "1")]
-    pub base_address: ::prost::alloc::string::String,
-    /// The address that the contract is deployed to on the quote chain.
-    #[prost(string, tag = "2")]
-    pub quote_address: ::prost::alloc::string::String,
 }
 /// rpc: StreamOrderbook
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -386,35 +379,6 @@ pub mod arborter_service_client {
             req.extensions_mut()
                 .insert(
                     GrpcMethod::new("xyz.aspens.arborter.ArborterService", "CancelOrder"),
-                );
-            self.inner.unary(req, path, codec).await
-        }
-        pub async fn deploy_contract(
-            &mut self,
-            request: impl tonic::IntoRequest<super::Empty>,
-        ) -> std::result::Result<
-            tonic::Response<super::DeployContractReply>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/xyz.aspens.arborter.ArborterService/DeployContract",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new(
-                        "xyz.aspens.arborter.ArborterService",
-                        "DeployContract",
-                    ),
                 );
             self.inner.unary(req, path, codec).await
         }

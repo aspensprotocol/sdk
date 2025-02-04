@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-alloy = { version = "0.8.1", default-features = false, features = ["contract", "network", "providers", "reqwest", "signer-local", "signers"] }
+alloy = { version = "0.11", default-features = false, features = ["contract", "network", "providers", "reqwest", "signer-local", "signers"] }
 alloy-chains = "0.1.44"
-alloy-contract = "0.8.0"
-alloy-signer-local = "0.8.1"
+alloy-contract = "0.11"
+alloy-signer-local = "0.11"
 alloy-sol-types = { version = "0.8.10", features = ["json"] }
 anyhow = "1.0.91"
 clap = { version = "4.5.20", features = ["derive"] }
-clap-repl = "0.3.0"
+clap-repl = "0.3.1"
 comfy-table = "7.1.1"
 dotenv = "0.15.0"
 hex = "0.4.3"

@@ -27,10 +27,7 @@ pub(crate) async fn call_get_balance(
 
     let rpc_url = Url::parse(rpc_url)?;
     // Set up the provider
-    let provider = ProviderBuilder::new()
-        .with_chain(chain)
-        .with_recommended_fillers()
-        .on_http(rpc_url);
+    let provider = ProviderBuilder::new().with_chain(chain).on_http(rpc_url);
 
     // Get an instance of the contract
     let contract = Midrib::new(contract_addr, &provider);
@@ -63,10 +60,7 @@ pub(crate) async fn call_get_locked_balance(
 
     let rpc_url = Url::parse(rpc_url)?;
     // Set up the provider
-    let provider = ProviderBuilder::new()
-        .with_chain(chain)
-        .with_recommended_fillers()
-        .on_http(rpc_url);
+    let provider = ProviderBuilder::new().with_chain(chain).on_http(rpc_url);
 
     // Get an instance of the contract
     let contract = Midrib::new(contract_addr, &provider);
@@ -96,7 +90,6 @@ pub(crate) async fn call_get_erc20_balance(
     // Set up the provider
     let provider = ProviderBuilder::new()
         .with_chain(chain)
-        .with_recommended_fillers()
         //.wallet(wallet)
         .on_http(rpc_url);
 
