@@ -1,3 +1,5 @@
+use std::env;
+
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::ProviderBuilder;
@@ -25,7 +27,8 @@ pub(crate) async fn call_deposit(
     let contract_address: Address = Address::parse_checksummed(contract_address, None)?;
     let token_addr: Address = token_address.parse()?;
 
-    let signer = std::env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
+    let signer = env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
+    dbg!(&signer);
     let signer_address = signer.address();
     let wallet = EthereumWallet::new(signer);
     let rpc_url = Url::parse(rpc_url)?;
@@ -33,7 +36,6 @@ pub(crate) async fn call_deposit(
     // Set up the provider
     let provider = ProviderBuilder::new()
         .with_chain(chain)
-        .with_recommended_fillers()
         .wallet(wallet)
         .on_http(rpc_url);
 

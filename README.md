@@ -1,11 +1,29 @@
-# CLI Trader
+# Apsens CLI
+ 
+a REPL style CLI to interact with an Aspens Market Stack
 
-A command-line-interface (CLI) REPL-style Trader
+## Getting Started
 
+Prerequisite: Ensure [rust](https://rustup.rs/) is installed on your system.
+
+```bash
+# copy the .env sample 
+cp .env.sample .env
+
+# after changing the values in your .env
+source .env
+```
 
 ## Usage
 
 ```bash
-export EVM_TESTNET_PRIVKEY=yoursupersecretkey
-cargo run
+$ EVM_TESTNET_PUBKEY=$EVM_TESTNET_PUBKEY_ACCOUNT_1 \
+  EVM_TESTNET_PRIVKEY=$EVM_TESTNET_PRIVKEY_ACCOUNT_1 \
+  cargo run
+
+# to see all available commands
+cli-trader> --help 
+
+# to end the session
+cli-trader> quit
 ```

@@ -18,11 +18,10 @@ sol! {
     }
 }
 
+const BASE_SEPOLIA_CONTRACT_ADDRESS: &str = "0x1F18C30358761eb1B4e2d088327e0fA7D2ea3303";
 const OP_SEPOLIA_CONTRACT_ADDRESS: &str = "0x59305e29A1d409494937FB6EaED32187e143fac1";
-//const BASE_SEPOLIA_CONTRACT_ADDRESS: &str = "0x2D8d92AD00609f2fC5Cc7B10cEC9013bD3A4f9F2";
-const BASE_SEPOLIA_CONTRACT_ADDRESS: &str = "0x8B9A3a5e445a6810a0F7CfF01B26e79dc62841e1";
 
 pub(crate) mod deposit;
-pub(crate) mod get_balance;
+pub(crate) mod balance;
 pub(crate) mod send_order;
 pub(crate) mod withdraw;

@@ -19,9 +19,9 @@ pub struct Order {
     /// BASE_SYMBOL:QUOTE_SYMBOL. eg. 'WTI:USD'
     #[prost(string, tag = "5")]
     pub trade_symbol: ::prost::alloc::string::String,
-    /// sha256(concat("chain_id::token_address::chain_id::token_address"))
+    /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
     #[prost(string, tag = "6")]
-    pub market_hash: ::prost::alloc::string::String,
+    pub market_id: ::prost::alloc::string::String,
     /// User's pubkey (address)on the Base chain
     #[prost(string, tag = "7")]
     pub base_account_address: ::prost::alloc::string::String,
@@ -31,9 +31,9 @@ pub struct Order {
     /// 'DIRECT' (default) or 'DISCRETIONARY'
     #[prost(enumeration = "ExecutionType", tag = "9")]
     pub execution_type: i32,
-    /// When execution_type == 'discretionary', include order_id to match with.
-    #[prost(string, optional, tag = "10")]
-    pub matching_order_id: ::core::option::Option<::prost::alloc::string::String>,
+    /// When execution_type == 'discretionary', include order_ids to match with.
+    #[prost(uint64, repeated, tag = "10")]
+    pub matching_order_ids: ::prost::alloc::vec::Vec<u64>,
     /// Valid EIP-712 signature hash of this order
     #[prost(bytes = "vec", tag = "11")]
     pub signature_hash: ::prost::alloc::vec::Vec<u8>,
@@ -49,10 +49,10 @@ pub struct Trade {
     /// How much or many of the quote token
     #[prost(uint64, tag = "3")]
     pub qty: u64,
-    /// Maker's engine Id. Safely ignore.
+    /// Maker's internal trader id. Safely ignore.
     #[prost(string, tag = "4")]
     pub maker: ::prost::alloc::string::String,
-    /// Taker's engine Id. Safely ignore.
+    /// Taker's internal trader id. Safely ignore.
     #[prost(string, tag = "5")]
     pub taker: ::prost::alloc::string::String,
     /// The maker's base chain wallet address
@@ -61,13 +61,13 @@ pub struct Trade {
     /// The maker's quote chain wallet address
     #[prost(string, tag = "7")]
     pub maker_quote_address: ::prost::alloc::string::String,
-    /// Buyer's engine Id. Safely ignore.
+    /// Buyer's internal trader id. Safely ignore.
     #[prost(string, tag = "8")]
     pub buyer: ::prost::alloc::string::String,
-    /// Seller's engine Id. Safely ignore.
+    /// Seller's internal trader id. Safely ignore.
     #[prost(string, tag = "9")]
     pub seller: ::prost::alloc::string::String,
-    /// Internal order Id. Safely ignore.
+    /// The order_id that created this trade.
     #[prost(uint64, tag = "10")]
     pub order_hit: u64,
 }
@@ -86,36 +86,34 @@ pub struct SendOrderReply {
 }
 /// rpc: CancelOrder
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CancelOrderRequest {
-    /// sha256(concat("chain_id::token_address::chain_id::token_address"))
+pub struct OrderToCancel {
+    /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
     #[prost(string, tag = "1")]
-    pub market_hash: ::prost::alloc::string::String,
-    /// 'BID = 1' or 'ASK = 2'
+    pub market_id: ::prost::alloc::string::String,
+    /// 'BID' or 'ASK'
     #[prost(enumeration = "Side", tag = "2")]
     pub side: i32,
-    /// Internal numeric id of the order to cancel
-    #[prost(uint64, tag = "3")]
+    /// the token address
+    #[prost(string, tag = "3")]
+    pub token_address: ::prost::alloc::string::String,
+    /// Internal order Id.
+    #[prost(uint64, tag = "4")]
     pub order_id: u64,
-    /// Valid EIP-712 signature hash of this cancellation request
-    #[prost(bytes = "vec", tag = "4")]
+}
+/// rpc: CancelOrder
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CancelOrderRequest {
+    #[prost(message, optional, tag = "1")]
+    pub order: ::core::option::Option<OrderToCancel>,
+    #[prost(bytes = "vec", tag = "2")]
     pub signature_hash: ::prost::alloc::vec::Vec<u8>,
 }
 /// rpc: CancelOrder
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CancelOrderReply {
-    /// Whether the order was found and cancelled
+    /// Whether the order was found and canceled
     #[prost(bool, tag = "1")]
-    pub order_cancelled: bool,
-}
-/// rpc: DeployContract
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DeployContractReply {
-    /// The address that the contract is deployed to on the base chain.
-    #[prost(string, tag = "1")]
-    pub base_address: ::prost::alloc::string::String,
-    /// The address that the contract is deployed to on the quote chain.
-    #[prost(string, tag = "2")]
-    pub quote_address: ::prost::alloc::string::String,
+    pub order_canceled: bool,
 }
 /// rpc: StreamOrderbook
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -148,7 +146,7 @@ pub struct OrderbookEntry {
     /// The maker's quote chain wallet address
     #[prost(string, tag = "7")]
     pub maker_quote_address: ::prost::alloc::string::String,
-    /// 'ADDED = 0', 'UPDATED = 1', 'REMOVED = 2'
+    /// 'ADDED = 1', 'UPDATED = 2', 'REMOVED = 3'
     #[prost(enumeration = "OrderStatus", tag = "8")]
     pub status: i32,
 }
@@ -166,7 +164,7 @@ impl Side {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            Self::NotSet => "NOT_SET",
+            Self::NotSet => "SIDE_NOT_SET",
             Self::Bid => "BID",
             Self::Ask => "ASK",
         }
@@ -174,7 +172,7 @@ impl Side {
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
-            "NOT_SET" => Some(Self::NotSet),
+            "SIDE_NOT_SET" => Some(Self::NotSet),
             "BID" => Some(Self::Bid),
             "ASK" => Some(Self::Ask),
             _ => None,
@@ -186,7 +184,7 @@ impl Side {
 pub enum ExecutionType {
     /// Default
     Direct = 0,
-    /// For future dealroom use. Currently unused.
+    /// For dealroom use.
     Discretionary = 1,
 }
 impl ExecutionType {
@@ -212,12 +210,13 @@ impl ExecutionType {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum OrderStatus {
+    NotSet = 0,
     /// When new order is added to the book
-    Added = 0,
+    Added = 1,
     /// When an existing order is updated
-    Updated = 1,
-    /// When an existing order is filled completely or cancellled
-    Removed = 2,
+    Updated = 2,
+    /// When an existing order is filled completely or canceled
+    Removed = 3,
 }
 impl OrderStatus {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -226,6 +225,7 @@ impl OrderStatus {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
+            Self::NotSet => "ORDER_STATUS_NOT_SET",
             Self::Added => "ADDED",
             Self::Updated => "UPDATED",
             Self::Removed => "REMOVED",
@@ -234,6 +234,7 @@ impl OrderStatus {
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
+            "ORDER_STATUS_NOT_SET" => Some(Self::NotSet),
             "ADDED" => Some(Self::Added),
             "UPDATED" => Some(Self::Updated),
             "REMOVED" => Some(Self::Removed),
@@ -378,35 +379,6 @@ pub mod arborter_service_client {
             req.extensions_mut()
                 .insert(
                     GrpcMethod::new("xyz.aspens.arborter.ArborterService", "CancelOrder"),
-                );
-            self.inner.unary(req, path, codec).await
-        }
-        pub async fn deploy_contract(
-            &mut self,
-            request: impl tonic::IntoRequest<super::Empty>,
-        ) -> std::result::Result<
-            tonic::Response<super::DeployContractReply>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/xyz.aspens.arborter.ArborterService/DeployContract",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new(
-                        "xyz.aspens.arborter.ArborterService",
-                        "DeployContract",
-                    ),
                 );
             self.inner.unary(req, path, codec).await
         }

@@ -1,4 +1,3 @@
-use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, Uint};
 use alloy::providers::ProviderBuilder;
 use alloy_chains::NamedChain;
@@ -26,15 +25,9 @@ pub(crate) async fn call_get_balance(
     let signer = std::env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
     let depositer_address: Address = signer.address();
 
-    let wallet = EthereumWallet::new(signer);
-
     let rpc_url = Url::parse(rpc_url)?;
     // Set up the provider
-    let provider = ProviderBuilder::new()
-        .with_chain(chain)
-        .with_recommended_fillers()
-        .wallet(wallet)
-        .on_http(rpc_url);
+    let provider = ProviderBuilder::new().with_chain(chain).on_http(rpc_url);
 
     // Get an instance of the contract
     let contract = Midrib::new(contract_addr, &provider);
@@ -65,15 +58,9 @@ pub(crate) async fn call_get_locked_balance(
     let signer = std::env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
     let depositer_address: Address = signer.address();
 
-    let wallet = EthereumWallet::new(signer);
-
     let rpc_url = Url::parse(rpc_url)?;
     // Set up the provider
-    let provider = ProviderBuilder::new()
-        .with_chain(chain)
-        .with_recommended_fillers()
-        .wallet(wallet)
-        .on_http(rpc_url);
+    let provider = ProviderBuilder::new().with_chain(chain).on_http(rpc_url);
 
     // Get an instance of the contract
     let contract = Midrib::new(contract_addr, &provider);
@@ -97,14 +84,13 @@ pub(crate) async fn call_get_erc20_balance(
     let signer = std::env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
     let depositer_address: Address = signer.address();
 
-    let wallet = EthereumWallet::new(signer);
+    //let wallet = EthereumWallet::new(signer);
 
     let rpc_url = Url::parse(rpc_url)?;
     // Set up the provider
     let provider = ProviderBuilder::new()
         .with_chain(chain)
-        .with_recommended_fillers()
-        .wallet(wallet)
+        //.wallet(wallet)
         .on_http(rpc_url);
 
     // Get an instance of the contract
@@ -114,7 +100,8 @@ pub(crate) async fn call_get_erc20_balance(
     Ok(result)
 }
 
-pub(crate) fn get_balance_table(
+pub(crate) fn balance_table(
+    header: Vec<&str>,
     base_wallet_bal: Uint<256, 4>,
     base_available_bal: Uint<256, 4>,
     base_locked_bal: Uint<256, 4>,
@@ -126,7 +113,7 @@ pub(crate) fn get_balance_table(
 
     table
         .load_preset(UTF8_BORDERS_ONLY)
-        .set_header(vec!["USDC", "Base Chain", "Quote Chain"])
+        .set_header(header)
         .add_row(vec![
             "Wallet Balance",
             &format!("{base_wallet_bal}"),
