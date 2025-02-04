@@ -2,10 +2,16 @@ pub mod arborter_pb {
     include!("../../proto/generated/xyz.aspens.arborter.rs");
 }
 
+use std::env;
 use std::fmt;
 
+use alloy::primitives::PrimitiveSignature;
+use alloy::signers::Signer;
+use alloy_signer_local::PrivateKeySigner;
+use anyhow::Result;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{Order, SendOrderReply};
+use prost::Message;
 
 impl fmt::Display for Order {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -45,11 +51,7 @@ impl fmt::Display for SendOrderReply {
     }
 }
 
-pub(crate) async fn call_send_order(
-    side: i32,
-    quantity: u64,
-    price: Option<u64>,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn call_send_order(side: i32, quantity: u64, price: Option<u64>) -> Result<()> {
     // Create a channel to connect to the gRPC server
     let channel = tonic::transport::Channel::from_static("http://localhost:50051")
         .connect()
@@ -58,22 +60,31 @@ pub(crate) async fn call_send_order(
     // Instantiate the client
     let mut client = ArborterServiceClient::new(channel);
 
-    let market_id = std::env::var("MARKET_ID")?;
-
-    // Create a request object
-    let request = tonic::Request::new(Order {
+    // Craft the order
+    let mut order = Order {
         side,
         quantity,
         price,
-        market_name: "m1-irrelevant".to_owned(),
-        trade_symbol: "irrelevant".to_owned(),
-        market_id,
-        base_account_address: "<replace-me>".to_owned(),
-        quote_account_address: "<replace-me>".to_owned(),
+        market_name: "not-considered".to_owned(),
+        trade_symbol: "not-considered".to_owned(),
+        market_id: env::var("MARKET_ID")?,
+        base_account_address: env::var("EVM_TESTNET_PUBKEY")?,
+        quote_account_address: env::var("EVM_TESTNET_PUBKEY")?,
         execution_type: 0,
         matching_order_ids: vec![],
-        signature_hash: [1, 2, 3].to_vec(),
-    });
+        signature_hash: vec![],
+    };
+
+    // Serialize the order to a byte vector
+    let mut buffer = Vec::new();
+    order.encode(&mut buffer)?;
+
+    // Sign the order
+    let signature = sign_transaction(&buffer).await?;
+    order.signature_hash = signature.as_bytes().to_vec();
+
+    // Create a request object
+    let request = tonic::Request::new(order);
 
     // Call the send_order endpoint
     let response = client.send_order(request).await?;
@@ -82,4 +93,10 @@ pub(crate) async fn call_send_order(
     println!("Response received: {}", response.into_inner());
 
     Ok(())
+}
+
+async fn sign_transaction(msg_bytes: &[u8]) -> Result<PrimitiveSignature> {
+    let signer = env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
+    let signature = signer.sign_message(msg_bytes).await?;
+    Ok(signature)
 }

@@ -17,7 +17,9 @@ source .env
 ## Usage
 
 ```bash
-$ cargo run
+$ EVM_TESTNET_PUBKEY=$EVM_TESTNET_PUBKEY_ACCOUNT_1 \
+  EVM_TESTNET_PRIVKEY=$EVM_TESTNET_PRIVKEY_ACCOUNT_1 \
+  cargo run
 
 # to see all available commands
 cli-trader> --help 
