@@ -7,18 +7,18 @@ a REPL style CLI to interact with an Aspens Market Stack
 Prerequisite: Ensure [rust](https://rustup.rs/) is installed on your system.
 
 ```bash
-# copy the .env 
+# copy the .env sample 
 cp .env.sample .env
 
-# after changing the values in .env
+# after changing the values in your .env
 source .env
-
-cargo run
 ```
 
 ## Usage
 
 ```bash
+$ cargo run
+
 # to see all available commands
 cli-trader> --help 
 

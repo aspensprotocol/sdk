@@ -11,17 +11,17 @@ impl fmt::Display for Order {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Order {{\n  side: {},\n  quantity: {},\n  price: {},\n  market_name: {},\n  trade_symbol: {},\n  market_hash: {},\n  base_account_address: {},\n  quote_account_address: {},\n  execution_type: {},\n  matching_order_id: {},\n  signature_hash: {}\n}}",
+            "Order {{\n  side: {},\n  quantity: {},\n  price: {},\n  market_name: {},\n  trade_symbol: {},\n  market_id: {},\n  base_account_address: {},\n  quote_account_address: {},\n  execution_type: {},\n  matching_order_ids: {:?},\n  signature_hash: {}\n}}",
             self.side,
             self.quantity,
             self.price.map_or("None".to_string(), |p| p.to_string()),
             self.market_name,
             self.trade_symbol,
-            self.market_hash,
+            self.market_id,
             self.base_account_address,
             self.quote_account_address,
             self.execution_type,
-            self.matching_order_id.as_deref().unwrap_or("None"),
+            self.matching_order_ids,
             hex::encode(&self.signature_hash)
         )
     }
@@ -58,6 +58,8 @@ pub(crate) async fn call_send_order(
     // Instantiate the client
     let mut client = ArborterServiceClient::new(channel);
 
+    let market_id = std::env::var("MARKET_ID")?;
+
     // Create a request object
     let request = tonic::Request::new(Order {
         side,
@@ -65,11 +67,11 @@ pub(crate) async fn call_send_order(
         price,
         market_name: "m1-irrelevant".to_owned(),
         trade_symbol: "irrelevant".to_owned(),
-        market_hash: "1c4fd355c7cfbe92dbdb2dcc1f24dd83456c9b3c362949a92d15f915de9666af".to_owned(),
+        market_id,
         base_account_address: "<replace-me>".to_owned(),
         quote_account_address: "<replace-me>".to_owned(),
         execution_type: 0,
-        matching_order_id: None,
+        matching_order_ids: vec![],
         signature_hash: [1, 2, 3].to_vec(),
     });
 
