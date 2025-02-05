@@ -186,7 +186,7 @@ fn main() {
         CliCommand::Buy {
             amount,
             limit_price,
-            matching_order_ids,
+            matching_order_ids: _,
         } => {
             let mut rl = Reedline::create();
             //let buy_or_sell = read_input(&mut rl, "Do you wish to BUY or SELL? ");
@@ -206,7 +206,7 @@ fn main() {
         CliCommand::Sell {
             amount,
             limit_price,
-            matching_order_ids,
+            matching_order_ids: _,
         } => {
             let mut rl = Reedline::create();
             //let buy_or_sell = read_input(&mut rl, "Do you wish to BUY or SELL? ");
