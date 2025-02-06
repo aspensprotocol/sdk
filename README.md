@@ -1,6 +1,6 @@
 # Apsens CLI
  
-a REPL style CLI to interact with an Aspens Market Stack
+a REPL style CLI to interact with an Aspens Markets Stack
 
 ## Getting Started
 
@@ -22,8 +22,8 @@ $ EVM_TESTNET_PUBKEY=$EVM_TESTNET_PUBKEY_ACCOUNT_1 \
   cargo run
 
 # to see all available commands
-cli-trader> --help 
+aspens-cli> help 
 
 # to end the session
-cli-trader> quit
+aspens-cli> quit
 ```
