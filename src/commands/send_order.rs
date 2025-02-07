@@ -51,9 +51,14 @@ impl fmt::Display for SendOrderReply {
     }
 }
 
-pub(crate) async fn call_send_order(side: i32, quantity: u64, price: Option<u64>) -> Result<()> {
+pub(crate) async fn call_send_order(
+    url: String,
+    side: i32,
+    quantity: u64,
+    price: Option<u64>,
+) -> Result<()> {
     // Create a channel to connect to the gRPC server
-    let channel = tonic::transport::Channel::from_static("http://localhost:50051")
+    let channel = tonic::transport::Channel::from_shared(url)
         .connect()
         .await?;
 
