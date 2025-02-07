@@ -58,7 +58,7 @@ pub(crate) async fn call_send_order(
     price: Option<u64>,
 ) -> Result<()> {
     // Create a channel to connect to the gRPC server
-    let channel = tonic::transport::Channel::from_shared(url)
+    let channel = tonic::transport::Channel::from_shared(url)?
         .connect()
         .await?;
 
