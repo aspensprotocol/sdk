@@ -8,6 +8,7 @@ use clap_repl::reedline::{
 };
 use clap_repl::ClapEditor;
 use dotenv::dotenv;
+use std::sync::{Arc, Mutex};
 use url::Url;
 
 use crate::commands::{balance, deposit, send_order, withdraw};
@@ -21,6 +22,23 @@ const BASE_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "036CbD53842c5426634e7929541eC2318
 //const OP_SEPOLIA_RPC_URL: &str = "https://optimism-sepolia-rpc.publicnode.com";
 const OP_SEPOLIA_RPC_URL: &str = "http://localhost:8546";
 const OP_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "5fd84259d66Cd46123540766Be93DFE6D43130D7";
+
+struct AppState {
+    url: Arc<Mutex<Url>>,
+}
+
+impl AppState {
+    fn new() -> Self {
+        Self {
+            url: Arc::new(Mutex::new(Url::parse("http://localhost:50051").unwrap())),
+        }
+    }
+
+    fn with_url(&mut self, url: Url) {
+        let mut guard = self.url.lock().unwrap();
+        *guard = url;
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "")]
@@ -102,6 +120,8 @@ enum Side {
 fn main() {
     dotenv().ok();
 
+    let mut app_state = AppState::new();
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -123,6 +143,8 @@ fn main() {
 
     rl.repl(|command| match command {
         CliCommand::Initialize { url } => {
+            app_state.with_url(url.clone());
+
             println!("Initialized with {url:?}");
         }
         CliCommand::Deposit {
@@ -198,7 +220,13 @@ fn main() {
 
             println!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
 
-            let result = rt.block_on(send_order::call_send_order(1, amount, Some(limit_price)));
+            let url = app_state.url.lock().unwrap().clone().to_string();
+            let result = rt.block_on(send_order::call_send_order(
+                url,
+                1,
+                amount,
+                Some(limit_price),
+            ));
 
             println!("SendOrder result: {result:?}");
             println!("Order sent");
@@ -218,7 +246,13 @@ fn main() {
 
             println!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
 
-            let result = rt.block_on(send_order::call_send_order(2, amount, Some(limit_price)));
+            let url = app_state.url.lock().unwrap().clone().to_string();
+            let result = rt.block_on(send_order::call_send_order(
+                url,
+                2,
+                amount,
+                Some(limit_price),
+            ));
 
             println!("SendOrder result: {result:?}");
             println!("Order sent");
