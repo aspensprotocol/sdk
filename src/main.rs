@@ -11,7 +11,7 @@ use dotenv::dotenv;
 use std::sync::{Arc, Mutex};
 use url::Url;
 
-use crate::commands::config::{add_market, add_token, get_config};
+use crate::commands::config::{add_market, add_token, deploy_contract, get_config};
 use crate::commands::trading::{balance, deposit, send_order, withdraw};
 
 //const BASE_SEPOLIA_RPC_URL: &str = "https://sepolia.base.org";
@@ -62,12 +62,16 @@ enum CliCommand {
     /// Config: Add a new token to the arborter service. Requires a valid signature
     AddToken {
         /// The chain network to add the token to
-        #[arg(short, long, value_enum)]
-        chain_network: String,
+        chain_network: SupportedChain,
+    },
+    /// Deploy the trade contract onto the given chain
+    DeployContract {
+        /// The chain network to deploy the contract to
+        chain_network: SupportedChain,
+        base_or_quote: BaseOrQuote,
     },
     /// Deposit token(s) to make them available for trading
     Deposit {
-        //#[arg(short, long, value_enum)]
         chain: SupportedChain,
         token: String,
         amount: u64,
@@ -125,11 +129,35 @@ enum SupportedChain {
     OptimismSepolia,
 }
 
+impl std::fmt::Display for SupportedChain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SupportedChain::BaseSepolia => write!(f, "base-sepolia"),
+            SupportedChain::OptimismSepolia => write!(f, "optimism-sepolia"),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum BaseOrQuote {
+    Base,
+    Quote,
+}
+
+impl std::fmt::Display for BaseOrQuote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BaseOrQuote::Base => write!(f, "base"),
+            BaseOrQuote::Quote => write!(f, "quote"),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Side {
-    /// buy the base token by selling the quote token
+    /// (bid to) buy the base token by selling the quote token
     Buy,
-    /// sell the quote token by buying the base token
+    /// (offer to) sell the quote token by buying the base token
     Sell,
 }
 
@@ -178,8 +206,21 @@ fn main() {
         CliCommand::AddToken { chain_network } => {
             println!("Adding token ___ on {chain_network:?}");
             let url = app_state.url();
-            let result = rt.block_on(add_token::call_add_token(url, &chain_network));
+            let result = rt.block_on(add_token::call_add_token(url, &chain_network.to_string()));
             println!("AddToken result: {result:?}");
+        }
+        CliCommand::DeployContract {
+            chain_network,
+            base_or_quote,
+        } => {
+            println!("Deploying contract on {chain_network:?}");
+            let url = app_state.url();
+            let result = rt.block_on(deploy_contract::call_deploy_contract(
+                url,
+                &chain_network.to_string(),
+                &base_or_quote.to_string(),
+            ));
+            println!("DeployContract result: {result:?}");
         }
         CliCommand::Deposit {
             chain,

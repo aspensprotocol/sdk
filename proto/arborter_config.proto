@@ -42,8 +42,8 @@ message Chain {
   // The architecture of the chain (e.g., EVM, Hedera)
   string architecture = 1;
   // The canonical name of the chain (e.g., 'Ethereum Mainnet' | 'Hedera Testnet')
-  string name = 2;
-  // The network name (e.g., op-mainnet, hedera-testnet)
+  string canonical_name = 2;
+  // The chain network (e.g., op-mainnet, hedera-testnet)
   string network = 3;
   // The chain ID (e.g., Ethereum = 1)
   int32 chain_id = 4;
@@ -76,8 +76,8 @@ message Market {
 }
 
 message DeployContractRequest { 
-  // The network of the chain to deploy the contract on. e.g. base-sepolia
-  string network = 1;
+  // The name of the chain to deploy the contract on. e.g. base-sepolia
+  string chain_network = 1;
   // designate whether to deploy the contract on the base or quote chain
   string base_or_quote = 2;
 }
@@ -113,7 +113,7 @@ message Token {
 }
 
 message AddTokenRequest {
-  // The network of the chain to add the token to. e.g. base-sepolia
+  // The name of the chain to add the token to. e.g. base-sepolia
   string chain_network = 1;
   // The token to ad
   Token token = 2;

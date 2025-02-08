@@ -32,8 +32,8 @@ pub struct Chain {
     pub architecture: ::prost::alloc::string::String,
     /// The canonical name of the chain (e.g., 'Ethereum Mainnet' | 'Hedera Testnet')
     #[prost(string, tag = "2")]
-    pub name: ::prost::alloc::string::String,
-    /// The network name (e.g., op-mainnet, hedera-testnet)
+    pub canonical_name: ::prost::alloc::string::String,
+    /// The chain network (e.g., op-mainnet, hedera-testnet)
     #[prost(string, tag = "3")]
     pub network: ::prost::alloc::string::String,
     /// The chain ID (e.g., Ethereum = 1)
@@ -79,9 +79,9 @@ pub struct Market {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeployContractRequest {
-    /// The network of the chain to deploy the contract on. e.g. base-sepolia
+    /// The name of the chain to deploy the contract on. e.g. base-sepolia
     #[prost(string, tag = "1")]
-    pub network: ::prost::alloc::string::String,
+    pub chain_network: ::prost::alloc::string::String,
     /// designate whether to deploy the contract on the base or quote chain
     #[prost(string, tag = "2")]
     pub base_or_quote: ::prost::alloc::string::String,
@@ -127,7 +127,7 @@ pub struct Token {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AddTokenRequest {
-    /// The network of the chain to add the token to. e.g. base-sepolia
+    /// The name of the chain to add the token to. e.g. base-sepolia
     #[prost(string, tag = "1")]
     pub chain_network: ::prost::alloc::string::String,
     /// The token to ad
