@@ -11,7 +11,7 @@ use dotenv::dotenv;
 use std::sync::{Arc, Mutex};
 use url::Url;
 
-use crate::commands::config::get_config;
+use crate::commands::config::{add_market, add_token, get_config};
 use crate::commands::trading::{balance, deposit, send_order, withdraw};
 
 //const BASE_SEPOLIA_RPC_URL: &str = "https://sepolia.base.org";
@@ -55,8 +55,16 @@ enum CliCommand {
         #[arg(short, long, default_value_t = Url::parse("http://localhost:50051").unwrap())]
         url: Url,
     },
-    /// Fetch the current configuration from the arborter server
+    /// Config: Fetch the current configuration from the arborter server
     GetConfig,
+    /// Config: Add a new market to the arborter service. Requires a valid signature
+    AddMarket,
+    /// Config: Add a new token to the arborter service. Requires a valid signature
+    AddToken {
+        /// The chain network to add the token to
+        #[arg(short, long, value_enum)]
+        chain_network: String,
+    },
     /// Deposit token(s) to make them available for trading
     Deposit {
         //#[arg(short, long, value_enum)]
@@ -156,11 +164,22 @@ fn main() {
             println!("Available config for {url:?} is <TODO!!>");
         }
         CliCommand::GetConfig => {
-            println!("Fetching config... ");
-
+            println!("Fetching config...");
             let url = app_state.url();
             let result = rt.block_on(get_config::call_get_config(url));
-            println!("Config result: {result:?}");
+            println!("GetConfig result: {result:?}");
+        }
+        CliCommand::AddMarket => {
+            println!("Adding market...");
+            let url = app_state.url();
+            let result = rt.block_on(add_market::call_add_market(url));
+            println!("AddMarket result: {result:?}");
+        }
+        CliCommand::AddToken { chain_network } => {
+            println!("Adding token ___ on {chain_network:?}");
+            let url = app_state.url();
+            let result = rt.block_on(add_token::call_add_token(url, &chain_network));
+            println!("AddToken result: {result:?}");
         }
         CliCommand::Deposit {
             chain,
