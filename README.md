@@ -21,8 +21,8 @@ $ EVM_TESTNET_PUBKEY=$EVM_TESTNET_PUBKEY_ACCOUNT_1 \
   EVM_TESTNET_PRIVKEY=$EVM_TESTNET_PRIVKEY_ACCOUNT_1 \
   cargo run
 
-# by default, connects to arborter running on localhost:50051. otherwise, 
-# connect to a remote arborter instance running at <arborter-url>
+# by default, connects to arborter running on localhost:50051. instead, 
+# connect to a remote aspens stack at <arborter-url>
 aspens> initialize https://<arborter-url>
 
 # to see all commands
