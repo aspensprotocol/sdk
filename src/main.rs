@@ -11,7 +11,8 @@ use dotenv::dotenv;
 use std::sync::{Arc, Mutex};
 use url::Url;
 
-use crate::commands::{balance, deposit, send_order, withdraw};
+use crate::commands::config::{add_market, add_token, deploy_contract, get_config};
+use crate::commands::trading::{balance, deposit, send_order, withdraw};
 
 //const BASE_SEPOLIA_RPC_URL: &str = "https://sepolia.base.org";
 //const BASE_SEPOLIA_RPC_URL: &str = "https://base-sepolia-rpc.publicnode.com";
@@ -30,13 +31,18 @@ struct AppState {
 impl AppState {
     fn new() -> Self {
         Self {
-            url: Arc::new(Mutex::new(Url::parse("http://localhost:50051").unwrap())),
+            url: Arc::new(Mutex::new(Url::parse("http://0.0.0.0:50051").unwrap())),
         }
     }
 
     fn with_url(&mut self, url: Url) {
         let mut guard = self.url.lock().unwrap();
         *guard = url;
+    }
+
+    fn url(&self) -> String {
+        let guard = self.url.lock().unwrap();
+        guard.to_string()
     }
 }
 
@@ -49,9 +55,23 @@ enum CliCommand {
         #[arg(short, long, default_value_t = Url::parse("http://localhost:50051").unwrap())]
         url: Url,
     },
+    /// Config: Fetch the current configuration from the arborter server
+    GetConfig,
+    /// Config: Add a new market to the arborter service. Requires a valid signature
+    AddMarket,
+    /// Config: Add a new token to the arborter service. Requires a valid signature
+    AddToken {
+        /// The chain network to add the token to
+        chain_network: SupportedChain,
+    },
+    /// Deploy the trade contract onto the given chain
+    DeployContract {
+        /// The chain network to deploy the contract to
+        chain_network: SupportedChain,
+        base_or_quote: BaseOrQuote,
+    },
     /// Deposit token(s) to make them available for trading
     Deposit {
-        //#[arg(short, long, value_enum)]
         chain: SupportedChain,
         token: String,
         amount: u64,
@@ -109,11 +129,35 @@ enum SupportedChain {
     OptimismSepolia,
 }
 
+impl std::fmt::Display for SupportedChain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SupportedChain::BaseSepolia => write!(f, "base-sepolia"),
+            SupportedChain::OptimismSepolia => write!(f, "optimism-sepolia"),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum BaseOrQuote {
+    Base,
+    Quote,
+}
+
+impl std::fmt::Display for BaseOrQuote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BaseOrQuote::Base => write!(f, "base"),
+            BaseOrQuote::Quote => write!(f, "quote"),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Side {
-    /// buy the base token by selling the quote token
+    /// (bid to) buy the base token by selling the quote token
     Buy,
-    /// sell the quote token by buying the base token
+    /// (offer to) sell the quote token by buying the base token
     Sell,
 }
 
@@ -144,8 +188,39 @@ fn main() {
     rl.repl(|command| match command {
         CliCommand::Initialize { url } => {
             app_state.with_url(url.clone());
-
-            println!("Initialized with {url:?}");
+            println!("Initialized session at {url:?}");
+            println!("Available config for {url:?} is <TODO!!>");
+        }
+        CliCommand::GetConfig => {
+            println!("Fetching config...");
+            let url = app_state.url();
+            let result = rt.block_on(get_config::call_get_config(url));
+            println!("GetConfig result: {result:?}");
+        }
+        CliCommand::AddMarket => {
+            println!("Adding market...");
+            let url = app_state.url();
+            let result = rt.block_on(add_market::call_add_market(url));
+            println!("AddMarket result: {result:?}");
+        }
+        CliCommand::AddToken { chain_network } => {
+            println!("Adding token ___ on {chain_network:?}");
+            let url = app_state.url();
+            let result = rt.block_on(add_token::call_add_token(url, &chain_network.to_string()));
+            println!("AddToken result: {result:?}");
+        }
+        CliCommand::DeployContract {
+            chain_network,
+            base_or_quote,
+        } => {
+            println!("Deploying contract on {chain_network:?}");
+            let url = app_state.url();
+            let result = rt.block_on(deploy_contract::call_deploy_contract(
+                url,
+                &chain_network.to_string(),
+                &base_or_quote.to_string(),
+            ));
+            println!("DeployContract result: {result:?}");
         }
         CliCommand::Deposit {
             chain,
@@ -168,13 +243,13 @@ fn main() {
                 SupportedChain::BaseSepolia => BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
             };
 
-            let call_deposit_result = rt.block_on(deposit::call_deposit(
+            let result = rt.block_on(deposit::call_deposit(
                 named_chain,
                 rpc_url,
                 token_address,
                 amount,
             ));
-            println!("Deposit result: {call_deposit_result:?}");
+            println!("Deposit result: {result:?}");
         }
         CliCommand::Withdraw {
             chain,
@@ -197,13 +272,13 @@ fn main() {
                 SupportedChain::BaseSepolia => BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
             };
 
-            let call_withdraw_result = rt.block_on(withdraw::call_withdraw(
+            let result = rt.block_on(withdraw::call_withdraw(
                 named_chain,
                 rpc_url,
                 token_address,
                 amount,
             ));
-            println!("Withdraw result: {call_withdraw_result:?}");
+            println!("Withdraw result: {result:?}");
         }
         CliCommand::Buy {
             amount,
@@ -220,7 +295,7 @@ fn main() {
 
             println!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
 
-            let url = app_state.url.lock().unwrap().clone().to_string();
+            let url = app_state.url();
             let result = rt.block_on(send_order::call_send_order(
                 url,
                 1,
@@ -246,7 +321,7 @@ fn main() {
 
             println!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
 
-            let url = app_state.url.lock().unwrap().clone().to_string();
+            let url = app_state.url();
             let result = rt.block_on(send_order::call_send_order(
                 url,
                 2,

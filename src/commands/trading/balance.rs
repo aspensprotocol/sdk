@@ -1,7 +1,7 @@
 use alloy::primitives::{Address, Uint};
 use alloy::providers::ProviderBuilder;
+use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
-use alloy_signer_local::PrivateKeySigner;
 use anyhow::Result;
 use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
 use url::Url;

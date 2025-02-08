@@ -9,7 +9,10 @@ fn build_protos() -> Result<(), Box<dyn std::error::Error>> {
         .build_server(false)
         .build_client(true)
         .out_dir("proto/generated")
-        .compile_protos(&["proto/arborter.proto"], &["proto"])?;
+        .compile_protos(
+            &["proto/arborter.proto", "proto/arborter_config.proto"],
+            &["proto"],
+        )?;
 
     Ok(())
 }

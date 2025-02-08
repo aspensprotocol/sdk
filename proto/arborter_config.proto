@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package xyz.aspens.arborter_config;
+
+option optimize_for = SPEED;
+
+// The Configuration service definition
+service ConfigService {
+  // rpc service to deploy a contract on the base and quote chains
+  rpc DeployContract(DeployContractRequest) returns (DeployContractReply) {}
+  // rpc service to add a new market to trade
+  rpc AddToken(AddTokenRequest) returns (Configuration);
+  // rpc service to add a new market to trade
+  rpc AddMarket(Market) returns (AddMarketReply);
+  // rpc service to get the configuration
+  rpc GetConfig (ConfigRequest) returns (Configuration);
+}
+
+// The top-level response containing chains and markets
+message Configuration {
+  // List of supported chains
+  repeated Chain chains = 1;
+  // List of supported markets
+  repeated Market markets = 2;
+}
+
+// Request message for the service
+message ConfigRequest {
+  // Add optional filters in the future (e.g., chain or market name)
+}
+
+// Represents the trade contract details
+message TradeContract {
+  // Optional: For non-EVM chains like Hedera
+  string contract_id = 1; 
+  // The chain address of the trade contract
+  string address = 2;
+}
+
+// Represents a single blockchain network
+message Chain {
+  // The architecture of the chain (e.g., EVM, Hedera)
+  string architecture = 1;
+  // The canonical name of the chain (e.g., 'Ethereum Mainnet' | 'Hedera Testnet')
+  string canonical_name = 2;
+  // The chain network (e.g., op-mainnet, hedera-testnet)
+  string network = 3;
+  // The chain ID (e.g., Ethereum = 1)
+  int32 chain_id = 4;
+  // Optional: URL to the chain explorer
+  optional string explorer_url = 5;
+  // The RPC URL for the chain
+  string rpc_url = 6;
+  // The trade contract details
+  TradeContract trade_contract = 7;
+  // Mapping of token symbols to token details
+  map<string, Token> tokens = 8; 
+}
+
+// Represents a market with a base- and quote- chain token pair
+message Market {
+  // The market slug, e.g. 'base-sepolia-usdc--op-sepolia-usdc'
+  string slug = 1;
+  // The market name, e.g. 'Base Sepolia USDC - OP Sepolia USDC'
+  string name = 2;
+  // The base chain, e.g. 'base-sepolia'
+  string base_chain_network = 3;
+  // The quote chain, e.g. 'op-sepolia'
+  string quote_chain_network = 4;
+  /// The token symbol for the base chain
+  string base_chain_token_symbol = 5;
+  /// The token symbol for the quote chain
+  string quote_chain_token_symbol = 6;
+  // Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
+  optional string market_id = 7;
+}
+
+message DeployContractRequest { 
+  // The name of the chain to deploy the contract on. e.g. base-sepolia
+  string chain_network = 1;
+  // designate whether to deploy the contract on the base or quote chain
+  string base_or_quote = 2;
+}
+
+/* rpc: DeployContract */
+message DeployContractReply {
+  // The address that the contract is deployed to on the base chain.
+  string base_address = 1;
+  // The address that the contract is deployed to on the quote chain.
+  string quote_address = 2;
+}
+
+// Define the message structure for AddMarketReply
+message AddMarketReply {
+  // Indicates if the market was added successfully
+  bool success = 1;       
+  // Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
+  string market_id = 2;     
+}
+
+// Represents a single token
+message Token {
+  // The name of the token
+  string name = 1;
+  // The symbol of the token
+  string symbol = 2;
+  // The chain address of the token contract
+  string address = 3;
+  // Optional: for networks that use IDs (e.g., Hedera)
+  optional string token_id = 4; 
+  // The number of decimal places the token use's
+  int32 decimals = 5;
+}
+
+message AddTokenRequest {
+  // The name of the chain to add the token to. e.g. base-sepolia
+  string chain_network = 1;
+  // The token to ad
+  Token token = 2;
+}

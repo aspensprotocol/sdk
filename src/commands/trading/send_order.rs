@@ -1,13 +1,13 @@
 pub mod arborter_pb {
-    include!("../../proto/generated/xyz.aspens.arborter.rs");
+    include!("../../../proto/generated/xyz.aspens.arborter.rs");
 }
 
 use std::env;
 use std::fmt;
 
 use alloy::primitives::PrimitiveSignature;
-use alloy::signers::Signer;
-use alloy_signer_local::PrivateKeySigner;
+use alloy::signers::{local::PrivateKeySigner, Signer};
+//use alloy_signer_local::PrivateKeySigner;
 use anyhow::Result;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{Order, SendOrderReply};
