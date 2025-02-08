@@ -11,7 +11,8 @@ use dotenv::dotenv;
 use std::sync::{Arc, Mutex};
 use url::Url;
 
-use crate::commands::{balance, deposit, send_order, withdraw};
+use crate::commands::config::get_config;
+use crate::commands::trading::{balance, deposit, send_order, withdraw};
 
 //const BASE_SEPOLIA_RPC_URL: &str = "https://sepolia.base.org";
 //const BASE_SEPOLIA_RPC_URL: &str = "https://base-sepolia-rpc.publicnode.com";
@@ -30,13 +31,18 @@ struct AppState {
 impl AppState {
     fn new() -> Self {
         Self {
-            url: Arc::new(Mutex::new(Url::parse("http://localhost:50051").unwrap())),
+            url: Arc::new(Mutex::new(Url::parse("http://0.0.0.0:50051").unwrap())),
         }
     }
 
     fn with_url(&mut self, url: Url) {
         let mut guard = self.url.lock().unwrap();
         *guard = url;
+    }
+
+    fn url(&self) -> String {
+        let guard = self.url.lock().unwrap();
+        guard.to_string()
     }
 }
 
@@ -49,6 +55,8 @@ enum CliCommand {
         #[arg(short, long, default_value_t = Url::parse("http://localhost:50051").unwrap())]
         url: Url,
     },
+    /// Fetch the current configuration from the arborter server
+    GetConfig,
     /// Deposit token(s) to make them available for trading
     Deposit {
         //#[arg(short, long, value_enum)]
@@ -144,8 +152,15 @@ fn main() {
     rl.repl(|command| match command {
         CliCommand::Initialize { url } => {
             app_state.with_url(url.clone());
+            println!("Initialized session at {url:?}");
+            println!("Available config for {url:?} is <TODO!!>");
+        }
+        CliCommand::GetConfig => {
+            println!("Fetching config... ");
 
-            println!("Initialized with {url:?}");
+            let url = app_state.url();
+            let result = rt.block_on(get_config::call_get_config(url));
+            println!("Config result: {result:?}");
         }
         CliCommand::Deposit {
             chain,
@@ -168,13 +183,13 @@ fn main() {
                 SupportedChain::BaseSepolia => BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
             };
 
-            let call_deposit_result = rt.block_on(deposit::call_deposit(
+            let result = rt.block_on(deposit::call_deposit(
                 named_chain,
                 rpc_url,
                 token_address,
                 amount,
             ));
-            println!("Deposit result: {call_deposit_result:?}");
+            println!("Deposit result: {result:?}");
         }
         CliCommand::Withdraw {
             chain,
@@ -197,13 +212,13 @@ fn main() {
                 SupportedChain::BaseSepolia => BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
             };
 
-            let call_withdraw_result = rt.block_on(withdraw::call_withdraw(
+            let result = rt.block_on(withdraw::call_withdraw(
                 named_chain,
                 rpc_url,
                 token_address,
                 amount,
             ));
-            println!("Withdraw result: {call_withdraw_result:?}");
+            println!("Withdraw result: {result:?}");
         }
         CliCommand::Buy {
             amount,
@@ -220,7 +235,7 @@ fn main() {
 
             println!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
 
-            let url = app_state.url.lock().unwrap().clone().to_string();
+            let url = app_state.url();
             let result = rt.block_on(send_order::call_send_order(
                 url,
                 1,
@@ -246,7 +261,7 @@ fn main() {
 
             println!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
 
-            let url = app_state.url.lock().unwrap().clone().to_string();
+            let url = app_state.url();
             let result = rt.block_on(send_order::call_send_order(
                 url,
                 2,

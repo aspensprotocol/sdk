@@ -776,7 +776,6 @@ dependencies = [
  "alloy",
  "alloy-chains",
  "alloy-contract",
- "alloy-signer-local",
  "alloy-sol-types",
  "anyhow",
  "clap",

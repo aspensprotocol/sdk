@@ -21,9 +21,12 @@ $ EVM_TESTNET_PUBKEY=$EVM_TESTNET_PUBKEY_ACCOUNT_1 \
   EVM_TESTNET_PRIVKEY=$EVM_TESTNET_PRIVKEY_ACCOUNT_1 \
   cargo run
 
-# to see all available commands
-aspens-cli> help 
+# connect to a remote arborter instance
+aspens> initialize https://<remote-ip>
+
+# to see all other available commands
+aspens> help 
 
 # to end the session
-aspens-cli> quit
+aspens> quit
 ```

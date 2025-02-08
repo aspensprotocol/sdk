@@ -3,8 +3,8 @@ use std::env;
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::ProviderBuilder;
+use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
-use alloy_signer_local::PrivateKeySigner;
 use anyhow::Result;
 use url::Url;
 
