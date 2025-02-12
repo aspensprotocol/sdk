@@ -115,14 +115,14 @@ pub struct CancelOrderReply {
     #[prost(bool, tag = "1")]
     pub order_canceled: bool,
 }
-/// rpc: StreamOrderbook
+/// rpc: Orderbook
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct OrderbookRequest {
     /// Used to keep the client alive
     #[prost(bool, tag = "1")]
     pub continue_stream: bool,
 }
-/// rpc: StreamOrderbook
+/// rpc: Orderbook
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OrderbookEntry {
     /// when the order first landed in The Orderbook
@@ -382,7 +382,36 @@ pub mod arborter_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        pub async fn stream_orderbook(
+        pub async fn get_recent_trades(
+            &mut self,
+            request: impl tonic::IntoRequest<super::Empty>,
+        ) -> std::result::Result<
+            tonic::Response<tonic::codec::Streaming<super::Trade>>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter.ArborterService/GetRecentTrades",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter.ArborterService",
+                        "GetRecentTrades",
+                    ),
+                );
+            self.inner.server_streaming(req, path, codec).await
+        }
+        pub async fn orderbook(
             &mut self,
             request: impl tonic::IntoRequest<super::OrderbookRequest>,
         ) -> std::result::Result<
@@ -399,15 +428,12 @@ pub mod arborter_service_client {
                 })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/xyz.aspens.arborter.ArborterService/StreamOrderbook",
+                "/xyz.aspens.arborter.ArborterService/Orderbook",
             );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(
-                    GrpcMethod::new(
-                        "xyz.aspens.arborter.ArborterService",
-                        "StreamOrderbook",
-                    ),
+                    GrpcMethod::new("xyz.aspens.arborter.ArborterService", "Orderbook"),
                 );
             self.inner.server_streaming(req, path, codec).await
         }

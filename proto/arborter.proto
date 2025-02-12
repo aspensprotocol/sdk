@@ -7,7 +7,8 @@ option optimize_for = SPEED;
 service ArborterService {
   rpc SendOrder(Order) returns (SendOrderReply) {}
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderReply) {}
-  rpc StreamOrderbook (OrderbookRequest) returns (stream OrderbookEntry);
+  rpc GetRecentTrades(Empty) returns (stream Trade) {}
+  rpc Orderbook (OrderbookRequest) returns (stream OrderbookEntry);
 }
 
 message Empty {}
@@ -119,13 +120,13 @@ message CancelOrderReply {
 }
 
 
-/* rpc: StreamOrderbook */
+/* rpc: Orderbook */
 message OrderbookRequest {
   // Used to keep the client alive
   bool continue_stream = 1;
 }
 
-/* rpc: StreamOrderbook */
+/* rpc: Orderbook */
 message OrderbookEntry {
   // when the order first landed in The Orderbook
   uint64 timestamp = 1;

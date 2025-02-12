@@ -19,9 +19,9 @@ service ConfigService {
 // The top-level response containing chains and markets
 message Configuration {
   // List of supported chains
-  repeated Chain chains = 1;
+  repeated Chain chains = 3;
   // List of supported markets
-  repeated Market markets = 2;
+  repeated Market markets = 4;
 }
 
 // Request message for the service
@@ -47,14 +47,16 @@ message Chain {
   string network = 3;
   // The chain ID (e.g., Ethereum = 1)
   int32 chain_id = 4;
+  // Pubkey address of the owner of the deployed trade contract
+  string contract_owner_address = 5;
   // Optional: URL to the chain explorer
-  optional string explorer_url = 5;
+  optional string explorer_url = 6;
   // The RPC URL for the chain
-  string rpc_url = 6;
+  string rpc_url = 7;
   // The trade contract details
-  TradeContract trade_contract = 7;
+  TradeContract trade_contract = 8;
   // Mapping of token symbols to token details
-  map<string, Token> tokens = 8; 
+  map<string, Token> tokens = 9; 
 }
 
 // Represents a market with a base- and quote- chain token pair

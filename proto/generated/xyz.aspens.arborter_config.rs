@@ -3,10 +3,10 @@
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Configuration {
     /// List of supported chains
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag = "3")]
     pub chains: ::prost::alloc::vec::Vec<Chain>,
     /// List of supported markets
-    #[prost(message, repeated, tag = "2")]
+    #[prost(message, repeated, tag = "4")]
     pub markets: ::prost::alloc::vec::Vec<Market>,
 }
 /// Request message for the service
@@ -39,17 +39,20 @@ pub struct Chain {
     /// The chain ID (e.g., Ethereum = 1)
     #[prost(int32, tag = "4")]
     pub chain_id: i32,
+    /// Pubkey address of the owner of the deployed trade contract
+    #[prost(string, tag = "5")]
+    pub contract_owner_address: ::prost::alloc::string::String,
     /// Optional: URL to the chain explorer
-    #[prost(string, optional, tag = "5")]
+    #[prost(string, optional, tag = "6")]
     pub explorer_url: ::core::option::Option<::prost::alloc::string::String>,
     /// The RPC URL for the chain
-    #[prost(string, tag = "6")]
+    #[prost(string, tag = "7")]
     pub rpc_url: ::prost::alloc::string::String,
     /// The trade contract details
-    #[prost(message, optional, tag = "7")]
+    #[prost(message, optional, tag = "8")]
     pub trade_contract: ::core::option::Option<TradeContract>,
     /// Mapping of token symbols to token details
-    #[prost(map = "string, message", tag = "8")]
+    #[prost(map = "string, message", tag = "9")]
     pub tokens: ::std::collections::HashMap<::prost::alloc::string::String, Token>,
 }
 /// Represents a market with a base- and quote- chain token pair
