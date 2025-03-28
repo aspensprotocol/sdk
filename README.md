@@ -67,10 +67,10 @@ You can create custom ERC20 tokens for testing using the `create-token` command:
 
 ```bash
 # Create a token with default 18 decimals
-just create-token symbol=BTC
+just create-token BTC
 
 # Create a token with custom decimals (e.g., 8 decimals like BTC)
-just create-token symbol=BTC decimals=8
+just create-token BTC 8
 ```
 
 The command will:

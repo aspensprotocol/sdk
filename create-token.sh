@@ -31,20 +31,20 @@ if [ ! -d "lib/openzeppelin-contracts" ]; then
 fi
 
 # Create a copy of the template and update it with the token details
-cp contracts/TempToken.sol contracts/TempToken.sol.tmp
-sed -i '' "s/TOKEN_NAME/$name/" contracts/TempToken.sol.tmp
-sed -i '' "s/TOKEN_SYMBOL/$symbol/" contracts/TempToken.sol.tmp
-sed -i '' "s/TOKEN_DECIMALS/$TOKEN_DECIMALS/" contracts/TempToken.sol.tmp
+cp contracts/Token.sol.template contracts/$symbol.sol
+sed -i '' "s/TOKEN_NAME/$name/" contracts/$symbol.sol
+sed -i '' "s/TOKEN_SYMBOL/$symbol/" contracts/$symbol.sol
+sed -i '' "s/TOKEN_DECIMALS/$TOKEN_DECIMALS/" contracts/$symbol.sol
 
 # Compile the contract
 forge build
 
 # Deploy the contract to Anvil
 echo "Deploying $symbol token..."
-ADDRESS=$(cast send --private-key $EVM_TESTNET_PRIVKEY_ACCOUNT_1 --create $(cat artifacts/TempToken.sol/TempToken.json | jq -r .bytecode.object) --value 0 --rpc-url http://localhost:8545 | grep "contractAddress" | awk '{print $2}')
+ADDRESS=$(cast send --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 --rpc-url http://localhost:8545 --value 0 --create $(cat artifacts/$symbol.sol/Token.json | jq -r .bytecode.object) | grep "contractAddress" | awk '{print $2}')
 
 # Clean up temporary contract
-rm contracts/TempToken.sol.tmp
+rm contracts/$symbol.sol
 
 echo "Token deployed successfully!"
 echo "Name: $name"
