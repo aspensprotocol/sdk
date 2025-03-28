@@ -48,11 +48,14 @@ pub struct Chain {
     /// The RPC URL for the chain
     #[prost(string, tag = "7")]
     pub rpc_url: ::prost::alloc::string::String,
+    /// The address of the factory service contract on this chain. This is the address to call to deploy a new trade contract
+    #[prost(string, tag = "8")]
+    pub service_address: ::prost::alloc::string::String,
     /// The trade contract details
-    #[prost(message, optional, tag = "8")]
+    #[prost(message, optional, tag = "9")]
     pub trade_contract: ::core::option::Option<TradeContract>,
     /// Mapping of token symbols to token details
-    #[prost(map = "string, message", tag = "9")]
+    #[prost(map = "string, message", tag = "10")]
     pub tokens: ::std::collections::HashMap<::prost::alloc::string::String, Token>,
 }
 /// Represents a market with a base- and quote- chain token pair

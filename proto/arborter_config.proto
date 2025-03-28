@@ -53,10 +53,12 @@ message Chain {
   optional string explorer_url = 6;
   // The RPC URL for the chain
   string rpc_url = 7;
+  // The address of the factory service contract on this chain. This is the address to call to deploy a new trade contract
+  string service_address = 8;
   // The trade contract details
-  TradeContract trade_contract = 8;
+  TradeContract trade_contract = 9;
   // Mapping of token symbols to token details
-  map<string, Token> tokens = 9; 
+  map<string, Token> tokens = 10; 
 }
 
 // Represents a market with a base- and quote- chain token pair
