@@ -1,3 +1,6 @@
 app/target
 .env
 lib/
+anvil1.log
+anvil2.log
+cache/*

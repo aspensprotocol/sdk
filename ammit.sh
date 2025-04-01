@@ -5,7 +5,7 @@
 # deploying test tokens, and testing AMM operations including deposits, orders, and withdrawals.
 
 # Exit on error
-set -e
+set -ex pipefail
 
 # Colors for output
 GREEN='\033[0;32m'

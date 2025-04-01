@@ -15,7 +15,7 @@ TOKEN_DECIMALS=${2:-18}
 
 # Convert symbol to lowercase for consistency
 symbol=$(echo "$TOKEN_SYMBOL" | tr '[:upper:]' '[:lower:]')
-name="${symbol^} Token"
+name="${symbol} Token"
 
 # Check if forge is installed
 if ! command -v forge &> /dev/null; then
