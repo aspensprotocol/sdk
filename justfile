@@ -15,6 +15,9 @@ setup:
 build:
     cd app && cargo build
 
+release:
+    cd app && cargo build --release
+
 # Run tests
 test:
     cd app && cargo test

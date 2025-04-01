@@ -1,8 +1,8 @@
+use alloy::primitives::Uint;
+use alloy_chains::NamedChain;
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use tracing::info;
-use alloy::primitives::Uint;
-use alloy_chains::NamedChain;
 use url::Url;
 
 use aspens::commands::config::{add_market, add_token, deploy_contract, get_config};
@@ -131,35 +131,44 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Initialize => {
-            println!("Initialized session at {}", cli.url);
-            println!("Available config for {} is <TODO!!>", cli.url);
+            info!("Initialized session at {}", cli.url);
+            info!("Available config for {} is <TODO!!>", cli.url);
         }
         Commands::GetConfig => {
-            println!("Fetching config...");
+            info!("Fetching config...");
             let result = get_config::call_get_config(cli.url.to_string()).await?;
-            println!("GetConfig result: {result:?}");
+            info!("GetConfig result: {result:?}");
         }
         Commands::AddMarket => {
-            println!("Adding market...");
+            info!("Adding market...");
             let result = add_market::call_add_market(cli.url.to_string()).await?;
-            println!("AddMarket result: {result:?}");
+            info!("AddMarket result: {result:?}");
         }
         Commands::AddToken { chain_network } => {
-            println!("Adding token ___ on {chain_network:?}");
-            let result = add_token::call_add_token(cli.url.to_string(), &chain_network.to_string()).await?;
-            println!("AddToken result: {result:?}");
+            info!("Adding token ___ on {chain_network:?}");
+            let result =
+                add_token::call_add_token(cli.url.to_string(), &chain_network.to_string()).await?;
+            info!("AddToken result: {result:?}");
         }
-        Commands::DeployContract { chain_network, base_or_quote } => {
-            println!("Deploying contract on {chain_network:?}");
+        Commands::DeployContract {
+            chain_network,
+            base_or_quote,
+        } => {
+            info!("Deploying contract on {chain_network:?}");
             let result = deploy_contract::call_deploy_contract(
                 cli.url.to_string(),
                 &chain_network.to_string(),
                 &base_or_quote.to_string(),
-            ).await?;
-            println!("DeployContract result: {result:?}");
+            )
+            .await?;
+            info!("DeployContract result: {result:?}");
         }
-        Commands::Deposit { chain, token, amount } => {
-            println!("Depositing {amount:?} {token:?} on {chain:?}");
+        Commands::Deposit {
+            chain,
+            token,
+            amount,
+        } => {
+            info!("Depositing {amount:?} {token:?} on {chain:?}");
             let named_chain = match chain {
                 SupportedChain::OptimismSepolia => NamedChain::OptimismSepolia,
                 SupportedChain::BaseSepolia => NamedChain::BaseSepolia,
@@ -176,10 +185,14 @@ async fn main() -> Result<()> {
             };
 
             let result = deposit::call_deposit(named_chain, rpc_url, token_address, amount).await?;
-            println!("Deposit result: {result:?}");
+            info!("Deposit result: {result:?}");
         }
-        Commands::Withdraw { chain, token, amount } => {
-            println!("Withdrawing {amount:?} {token:?} on {chain:?}");
+        Commands::Withdraw {
+            chain,
+            token,
+            amount,
+        } => {
+            info!("Withdrawing {amount:?} {token:?} on {chain:?}");
             let named_chain = match chain {
                 SupportedChain::OptimismSepolia => NamedChain::OptimismSepolia,
                 SupportedChain::BaseSepolia => NamedChain::BaseSepolia,
@@ -195,28 +208,39 @@ async fn main() -> Result<()> {
                 SupportedChain::BaseSepolia => BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
             };
 
-            let result = withdraw::call_withdraw(named_chain, rpc_url, token_address, amount).await?;
-            println!("Withdraw result: {result:?}");
+            let result =
+                withdraw::call_withdraw(named_chain, rpc_url, token_address, amount).await?;
+            info!("Withdraw result: {result:?}");
         }
-        Commands::Buy { amount, limit_price } => {
-            println!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
-            let result = send_order::call_send_order(cli.url.to_string(), 1, amount, Some(limit_price)).await?;
-            println!("SendOrder result: {result:?}");
-            println!("Order sent");
+        Commands::Buy {
+            amount,
+            limit_price,
+        } => {
+            info!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
+            let result =
+                send_order::call_send_order(cli.url.to_string(), 1, amount, Some(limit_price))
+                    .await?;
+            info!("SendOrder result: {result:?}");
+            info!("Order sent");
         }
-        Commands::Sell { amount, limit_price } => {
-            println!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
-            let result = send_order::call_send_order(cli.url.to_string(), 2, amount, Some(limit_price)).await?;
-            println!("SendOrder result: {result:?}");
-            println!("Order sent");
+        Commands::Sell {
+            amount,
+            limit_price,
+        } => {
+            info!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
+            let result =
+                send_order::call_send_order(cli.url.to_string(), 2, amount, Some(limit_price))
+                    .await?;
+            info!("SendOrder result: {result:?}");
+            info!("Order sent");
         }
         Commands::GetOrders => {
-            println!("Getting orders...");
-            println!("TODO: Implement this");
+            info!("Getting orders...");
+            info!("TODO: Implement this");
         }
         Commands::CancelOrder { order_id } => {
-            println!("Order canceled: {order_id:?}");
-            println!("TODO: Implement this");
+            info!("Order canceled: {order_id:?}");
+            info!("TODO: Implement this");
         }
         Commands::GetBalance => {
             let error_val = Uint::from(99999);
@@ -224,37 +248,49 @@ async fn main() -> Result<()> {
                 NamedChain::OptimismSepolia,
                 OP_SEPOLIA_RPC_URL,
                 OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ).await.unwrap_or(error_val);
+            )
+            .await
+            .unwrap_or(error_val);
 
             let op_available_balance = balance::call_get_balance(
                 NamedChain::OptimismSepolia,
                 OP_SEPOLIA_RPC_URL,
                 OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ).await.unwrap_or(error_val);
+            )
+            .await
+            .unwrap_or(error_val);
 
             let op_locked_balance = balance::call_get_locked_balance(
                 NamedChain::OptimismSepolia,
                 OP_SEPOLIA_RPC_URL,
                 OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ).await.unwrap_or(error_val);
+            )
+            .await
+            .unwrap_or(error_val);
 
             let base_wallet_balance = balance::call_get_erc20_balance(
                 NamedChain::BaseSepolia,
                 BASE_SEPOLIA_RPC_URL,
                 BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ).await.unwrap_or(error_val);
+            )
+            .await
+            .unwrap_or(error_val);
 
             let base_available_balance = balance::call_get_balance(
                 NamedChain::BaseSepolia,
                 BASE_SEPOLIA_RPC_URL,
                 BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ).await.unwrap_or(error_val);
+            )
+            .await
+            .unwrap_or(error_val);
 
             let base_locked_balance = balance::call_get_locked_balance(
                 NamedChain::BaseSepolia,
                 BASE_SEPOLIA_RPC_URL,
                 BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
-            ).await.unwrap_or(error_val);
+            )
+            .await
+            .unwrap_or(error_val);
 
             let balance_table = balance::balance_table(
                 vec!["USDC", "Base Sepolia", "Optimism Sepolia"],
@@ -272,14 +308,14 @@ async fn main() -> Result<()> {
                 | base_available_balance.eq(&error_val)
                 | base_locked_balance.eq(&error_val)
             {
-                println!("** A '99999' value represents an error in fetching the actual value");
+                info!("** A '99999' value represents an error in fetching the actual value");
             }
 
-            println!("{balance_table}");
+            info!("{balance_table}");
         }
         Commands::GetOrderbook { market_id } => {
-            println!("Getting orderbook: {market_id:?}");
-            println!("TODO: Implement this");
+            info!("Getting orderbook: {market_id:?}");
+            info!("TODO: Implement this");
         }
     }
 

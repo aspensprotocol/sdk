@@ -1,11 +1,8 @@
-use aspens::commands::trading::{
-    balance, deposit, send_order, withdraw,
-};
-use aspens::commands::config::{add_market, add_token, deploy_contract, get_config};
 use alloy::primitives::Uint;
 use alloy_chains::NamedChain;
-use anyhow::Result;
-use clap::{Parser, ValueEnum, Subcommand};
+use aspens::commands::config::{add_market, add_token, deploy_contract, get_config};
+use aspens::commands::trading::{balance, deposit, send_order, withdraw};
+use clap::{Parser, ValueEnum};
 use clap_repl::reedline::{
     DefaultPrompt, DefaultPromptSegment, FileBackedHistory, Reedline, Signal,
 };
@@ -14,7 +11,6 @@ use dotenv::dotenv;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 use url::Url;
-
 
 //const BASE_SEPOLIA_RPC_URL: &str = "https://sepolia.base.org";
 //const BASE_SEPOLIA_RPC_URL: &str = "https://base-sepolia-rpc.publicnode.com";
@@ -191,46 +187,46 @@ fn main() {
     rl.repl(|command| match command {
         CliCommand::Initialize { url } => {
             app_state.with_url(url.clone());
-            println!("Initialized session at {url:?}");
-            println!("Available config for {url:?} is <TODO!!>");
+            info!("Initialized session at {url:?}");
+            info!("Available config for {url:?} is <TODO!!>");
         }
         CliCommand::GetConfig => {
-            println!("Fetching config...");
+            info!("Fetching config...");
             let url = app_state.url();
             let result = rt.block_on(get_config::call_get_config(url));
-            println!("GetConfig result: {result:?}");
+            info!("GetConfig result: {result:?}");
         }
         CliCommand::AddMarket => {
-            println!("Adding market...");
+            info!("Adding market...");
             let url = app_state.url();
             let result = rt.block_on(add_market::call_add_market(url));
-            println!("AddMarket result: {result:?}");
+            info!("AddMarket result: {result:?}");
         }
         CliCommand::AddToken { chain_network } => {
-            println!("Adding token ___ on {chain_network:?}");
+            info!("Adding token ___ on {chain_network:?}");
             let url = app_state.url();
             let result = rt.block_on(add_token::call_add_token(url, &chain_network.to_string()));
-            println!("AddToken result: {result:?}");
+            info!("AddToken result: {result:?}");
         }
         CliCommand::DeployContract {
             chain_network,
             base_or_quote,
         } => {
-            println!("Deploying contract on {chain_network:?}");
+            info!("Deploying contract on {chain_network:?}");
             let url = app_state.url();
             let result = rt.block_on(deploy_contract::call_deploy_contract(
                 url,
                 &chain_network.to_string(),
                 &base_or_quote.to_string(),
             ));
-            println!("DeployContract result: {result:?}");
+            info!("DeployContract result: {result:?}");
         }
         CliCommand::Deposit {
             chain,
             token,
             amount,
         } => {
-            println!("Depositing {amount:?} {token:?} on {chain:?}");
+            info!("Depositing {amount:?} {token:?} on {chain:?}");
             let named_chain = match chain {
                 SupportedChain::OptimismSepolia => NamedChain::OptimismSepolia,
                 SupportedChain::BaseSepolia => NamedChain::BaseSepolia,
@@ -252,14 +248,14 @@ fn main() {
                 token_address,
                 amount,
             ));
-            println!("Deposit result: {result:?}");
+            info!("Deposit result: {result:?}");
         }
         CliCommand::Withdraw {
             chain,
             token,
             amount,
         } => {
-            println!("Withdrawing {amount:?} {token:?} on {chain:?}");
+            info!("Withdrawing {amount:?} {token:?} on {chain:?}");
             let named_chain = match chain {
                 SupportedChain::OptimismSepolia => NamedChain::OptimismSepolia,
                 SupportedChain::BaseSepolia => NamedChain::BaseSepolia,
@@ -281,7 +277,7 @@ fn main() {
                 token_address,
                 amount,
             ));
-            println!("Withdraw result: {result:?}");
+            info!("Withdraw result: {result:?}");
         }
         CliCommand::Buy {
             amount,
@@ -296,7 +292,7 @@ fn main() {
                 limit
             });
 
-            println!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
+            info!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
 
             let url = app_state.url();
             let result = rt.block_on(send_order::call_send_order(
@@ -306,8 +302,8 @@ fn main() {
                 Some(limit_price),
             ));
 
-            println!("SendOrder result: {result:?}");
-            println!("Order sent");
+            info!("SendOrder result: {result:?}");
+            info!("Order sent");
         }
         CliCommand::Sell {
             amount,
@@ -322,7 +318,7 @@ fn main() {
                 limit
             });
 
-            println!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
+            info!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
 
             let url = app_state.url();
             let result = rt.block_on(send_order::call_send_order(
@@ -332,16 +328,16 @@ fn main() {
                 Some(limit_price),
             ));
 
-            println!("SendOrder result: {result:?}");
-            println!("Order sent");
+            info!("SendOrder result: {result:?}");
+            info!("Order sent");
         }
         CliCommand::GetOrders => {
-            println!("Getting orders...");
-            println!("TODO: Implement this");
+            info!("Getting orders...");
+            info!("TODO: Implement this");
         }
         CliCommand::CancelOrder { order_id } => {
-            println!("Order canceled: {order_id:?}");
-            println!("TODO: Implement this");
+            info!("Order canceled: {order_id:?}");
+            info!("TODO: Implement this");
         }
         CliCommand::GetBalance => {
             let error_val = Uint::from(99999);
@@ -409,17 +405,17 @@ fn main() {
                 | base_available_balance.eq(&error_val)
                 | base_locked_balance.eq(&error_val)
             {
-                println!("** A '99999' value represents an error in fetching the actual value");
+                info!("** A '99999' value represents an error in fetching the actual value");
             }
 
-            println!("{balance_table}");
+            info!("{balance_table}");
         }
         CliCommand::GetOrderbook { market_id } => {
-            println!("Getting orderbook: {market_id:?}");
-            println!("TODO: Implement this");
+            info!("Getting orderbook: {market_id:?}");
+            info!("TODO: Implement this");
         }
         CliCommand::Quit => {
-            println!("goodbye");
+            info!("goodbye");
             std::process::exit(0)
         }
     });
