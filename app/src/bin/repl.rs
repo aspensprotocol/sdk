@@ -1,18 +1,20 @@
-mod commands;
-
+use aspens::commands::trading::{
+    balance, deposit, send_order, withdraw,
+};
+use aspens::commands::config::{add_market, add_token, deploy_contract, get_config};
 use alloy::primitives::Uint;
 use alloy_chains::NamedChain;
-use clap::{Parser, ValueEnum};
+use anyhow::Result;
+use clap::{Parser, ValueEnum, Subcommand};
 use clap_repl::reedline::{
     DefaultPrompt, DefaultPromptSegment, FileBackedHistory, Reedline, Signal,
 };
 use clap_repl::ClapEditor;
 use dotenv::dotenv;
 use std::sync::{Arc, Mutex};
+use tracing::info;
 use url::Url;
 
-use crate::commands::config::{add_market, add_token, deploy_contract, get_config};
-use crate::commands::trading::{balance, deposit, send_order, withdraw};
 
 //const BASE_SEPOLIA_RPC_URL: &str = "https://sepolia.base.org";
 //const BASE_SEPOLIA_RPC_URL: &str = "https://base-sepolia-rpc.publicnode.com";
@@ -48,6 +50,7 @@ impl AppState {
 
 #[derive(Debug, Parser)]
 #[command(name = "")]
+#[command(name = "", author, version, about, long_about = None)]
 enum CliCommand {
     /// Initialize a new trading session by (optionally) defining the arborter gRPC URL endpoint
     Initialize {

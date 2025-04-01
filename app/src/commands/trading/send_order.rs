@@ -51,7 +51,7 @@ impl fmt::Display for SendOrderReply {
     }
 }
 
-pub(crate) async fn call_send_order(
+pub async fn call_send_order(
     url: String,
     side: i32,
     quantity: u64,

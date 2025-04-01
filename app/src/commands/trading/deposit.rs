@@ -10,7 +10,7 @@ use url::Url;
 
 use super::{Midrib, IERC20};
 
-pub(crate) async fn call_deposit(
+pub async fn call_deposit(
     chain: NamedChain,
     rpc_url: &str,
     token_address: &str,
@@ -75,3 +75,4 @@ pub(crate) async fn call_deposit(
 
     Ok(())
 }
+

@@ -5,11 +5,7 @@ pub mod config_pb {
 use anyhow::Result;
 use config_pb::config_service_client::ConfigServiceClient;
 
-pub(crate) async fn call_deploy_contract(
-    url: String,
-    chain_network: &str,
-    base_or_quote: &str,
-) -> Result<()> {
+pub async fn call_add_token(url: String, network: &str) -> Result<()> {
     // Create a channel to connect to the gRPC server
     let channel = tonic::transport::Channel::from_shared(url)?
         .connect()
@@ -18,14 +14,22 @@ pub(crate) async fn call_deploy_contract(
     // Instantiate the client
     let mut client = ConfigServiceClient::new(channel);
 
+    let token = config_pb::Token {
+        decimals: 6,
+        token_id: None,
+        name: "USDC".to_string(),
+        symbol: "USDC".to_string(),
+        address: "0x".to_string(),
+    };
+
     // Create a request object
-    let request = tonic::Request::new(config_pb::DeployContractRequest {
-        chain_network: chain_network.into(),
-        base_or_quote: base_or_quote.into(),
+    let request = tonic::Request::new(config_pb::AddTokenRequest {
+        chain_network: network.into(),
+        token: Some(token),
     });
 
     // Call the add_market rpc endpoint
-    let response = client.deploy_contract(request).await?;
+    let response = client.add_token(request).await?;
 
     // Print the response from the server
     println!("{:#?}", response.into_inner());

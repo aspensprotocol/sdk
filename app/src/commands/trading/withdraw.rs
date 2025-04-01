@@ -8,7 +8,7 @@ use url::Url;
 
 use super::Midrib;
 
-pub(crate) async fn call_withdraw(
+pub async fn call_withdraw(
     chain: NamedChain,
     rpc_url: &str,
     token_address: &str,
@@ -50,3 +50,4 @@ pub(crate) async fn call_withdraw(
 
     Ok(())
 }
+

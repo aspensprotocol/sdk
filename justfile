@@ -1,151 +1,76 @@
 #!/usr/bin/env just --justfile
 
-# Default recipe to run when just is called without arguments
+# List all available commands
 default:
     @just --list
 
 # Set up the development environment
 setup:
     #!/usr/bin/env bash
-    cp .env.sample .env
-    echo "Please edit .env with your configuration values"
-    echo "Then run: source .env"
+    cp app/.env.sample app/.env
+    echo "Please edit app/.env with your configuration values"
+    echo "Then run: source app/.env"
 
 # Build the project
 build:
-    cargo build
-
-# Run the CLI
-run:
-    #!/usr/bin/env bash
-    if [ -z "$EVM_TESTNET_PUBKEY" ] || [ -z "$EVM_TESTNET_PRIVKEY" ]; then
-        echo "Error: EVM_TESTNET_PUBKEY and EVM_TESTNET_PRIVKEY must be set"
-        echo "Please source your .env file first"
-        exit 1
-    fi
-    cargo run
+    cd app && cargo build
 
 # Run tests
 test:
-    cargo test
+    cd app && cargo test
 
 # Clean build artifacts
 clean:
-    cargo clean
-    rm -rf target/
+    #!/usr/bin/env bash
+    cd app && cargo clean
+    rm -rf app/target
+    rm -rf app/out
+    rm -rf app/anvil*.log
     rm -rf artifacts/
 
 # Format code
 fmt:
-    cargo fmt
+    cd app && cargo fmt
 
 # Check code style
 check:
-    cargo check
+    cd app && cargo check
 
 # Run linter
 lint:
-    cargo clippy
+    cd app && cargo clippy
 
-# Set up Anvil environment
-setup-anvil:
+# Set up Anvil and deploy test tokens
+setup-anvil-full:
     #!/usr/bin/env bash
-    if ! command -v anvil &> /dev/null; then
-        echo "Error: anvil is not installed. Please install foundry first:"
-        echo "curl -L https://foundry.paradigm.xyz | bash"
-        echo "foundryup"
-        exit 1
-    fi
-    cp .env.anvil.local .env
-    echo "Anvil environment set up. Run 'just start-anvil' to start the local chain"
-
-# Start Anvil in the background
-start-anvil:
-    #!/usr/bin/env bash
-    if pgrep -f "anvil.*8545" > /dev/null; then
-        echo "Anvil instance on port 8545 is already running"
-    else
-        anvil --port 8545 &
-        echo "Anvil started on http://localhost:8545"
-    fi
-
-    if pgrep -f "anvil.*8546" > /dev/null; then
-        echo "Anvil instance on port 8546 is already running"
-    else
-        anvil --port 8546 &
-        echo "Anvil started on http://localhost:8546"
-    fi
-
-    echo "Waiting for chains to be ready..."
+    # Start two Anvil instances
+    anvil --port 8545 --chain-id 84531 --mnemonic "test test test test test test test test test test test junk" > anvil1.log 2>&1 &
+    anvil --port 8546 --chain-id 84532 --mnemonic "test test test test test test test test test test test junk" > anvil2.log 2>&1 &
+    # Wait for Anvil to start
     sleep 2
+    # Deploy USDC and WBTC on the first chain
+    forge create --rpc-url http://localhost:8545 --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 contracts/USDC.sol:USDC
+    forge create --rpc-url http://localhost:8545 --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 contracts/WBTC.sol:WBTC
+    # Deploy USDT on the second chain
+    forge create --rpc-url http://localhost:8546 --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 contracts/USDT.sol:USDT
+    # Mint initial tokens to test accounts
+    cast send --rpc-url http://localhost:8545 --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 0x1234567890123456789012345678901234567890 "mint(address,uint256)" 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 1000000000000000000000000
+    cast send --rpc-url http://localhost:8545 --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 0x1234567890123456789012345678901234567890 "mint(address,uint256)" 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 1000000000000000000000000
+    cast send --rpc-url http://localhost:8546 --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 0x1234567890123456789012345678901234567890 "mint(address,uint256)" 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 1000000000000000000000000
 
-# Stop Anvil
+# Stop Anvil instances
 stop-anvil:
     #!/usr/bin/env bash
-    pkill -f "anvil.*8545"
-    pkill -f "anvil.*8546"
-    echo "Both Anvil instances stopped"
+    pkill -f anvil
 
-# Create and setup ERC20 tokens
-setup-tokens:
-    #!/usr/bin/env bash
-    if ! command -v cast &> /dev/null; then
-        echo "Error: cast is not installed. Please install foundry first:"
-        echo "curl -L https://foundry.paradigm.xyz | bash"
-        echo "foundryup"
-        exit 1
-    fi
-
-    # Deploy USDC token on first Anvil instance (port 8545)
-    echo "Deploying USDC token on first chain..."
-    USDC_ADDRESS=$(cast send --private-key $EVM_TESTNET_PRIVKEY_ACCOUNT_1 --create "0x36372b07" --value 0 --rpc-url http://localhost:8545 | grep "contractAddress" | awk '{print $2}')
-    echo "USDC deployed at: $USDC_ADDRESS"
-
-    # Deploy WBTC token on first Anvil instance (port 8545)
-    echo "Deploying WBTC token on first chain..."
-    WBTC_ADDRESS=$(cast send --private-key $EVM_TESTNET_PRIVKEY_ACCOUNT_1 --create "0x36372b07" --value 0 --rpc-url http://localhost:8545 | grep "contractAddress" | awk '{print $2}')
-    echo "WBTC deployed at: $WBTC_ADDRESS"
-
-    # Deploy USDT token on second Anvil instance (port 8546)
-    echo "Deploying USDT token on second chain..."
-    USDT_ADDRESS=$(cast send --private-key $EVM_TESTNET_PRIVKEY_ACCOUNT_2 --create "0x36372b07" --value 0 --rpc-url http://localhost:8546 | grep "contractAddress" | awk '{print $2}')
-    echo "USDT deployed at: $USDT_ADDRESS"
-
-    # Mint USDC to first account on first chain
-    echo "Minting USDC to first account on first chain..."
-    cast send --private-key $EVM_TESTNET_PRIVKEY_ACCOUNT_1 --rpc-url http://localhost:8545 $USDC_ADDRESS "mint(address,uint256)" $EVM_TESTNET_PUBKEY_ACCOUNT_1 1000000000000
-
-    # Mint WBTC to first account on first chain (100 WBTC with 8 decimals)
-    echo "Minting WBTC to first account on first chain..."
-    cast send --private-key $EVM_TESTNET_PRIVKEY_ACCOUNT_1 --rpc-url http://localhost:8545 $WBTC_ADDRESS "mint(address,uint256)" $EVM_TESTNET_PUBKEY_ACCOUNT_1 10000000000
-
-    # Mint USDT to second account on second chain
-    echo "Minting USDT to second account on second chain..."
-    cast send --private-key $EVM_TESTNET_PRIVKEY_ACCOUNT_2 --rpc-url http://localhost:8546 $USDT_ADDRESS "mint(address,uint256)" $EVM_TESTNET_PUBKEY_ACCOUNT_2 1000000000000
-
-    # Update market IDs in .env.anvil.local with actual token addresses
-    echo "Updating market IDs in .env.anvil.local..."
-    sed -i '' "s/<WBTC_ADDRESS>/$WBTC_ADDRESS/" .env.anvil.local
-    sed -i '' "s/<USDC_ADDRESS>/$USDC_ADDRESS/" .env.anvil.local
-    sed -i '' "s/<USDT_ADDRESS>/$USDT_ADDRESS/" .env.anvil.local
-
-    echo "Tokens deployed and minted successfully!"
-    echo "USDC on chain 1 (port 8545): $USDC_ADDRESS"
-    echo "WBTC on chain 1 (port 8545): $WBTC_ADDRESS"
-    echo "USDT on chain 2 (port 8546): $USDT_ADDRESS"
-    echo "First account has:"
-    echo "  - 1,000,000 USDC on chain 1"
-    echo "  - 100 WBTC on chain 1"
-    echo "Second account has:"
-    echo "  - 1,000,000 USDT on chain 2"
-    echo "Market IDs have been updated in .env.anvil.local"
-
-# Full Anvil setup with tokens
-setup-anvil-full:
-    just setup-anvil
-    just start-anvil
-    just setup-tokens
-
-# Create and deploy a new ERC20 token
+# Create a new ERC20 token
 create-token symbol decimals:
     ./create-token.sh {{symbol}} {{decimals}}
+
+# Run the CLI in interactive mode
+cli:
+    cd app && cargo run
+
+# Run the CLI in scripted mode with arguments
+run *args:
+    cd app && cargo run {{args}}

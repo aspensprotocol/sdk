@@ -1,9 +1,11 @@
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+fn main() -> Result<()> {
     build_protos()?;
     Ok(())
 }
 
-fn build_protos() -> Result<(), Box<dyn std::error::Error>> {
+fn build_protos() -> Result<()> {
     tonic_build::configure()
         .protoc_arg("--experimental_allow_proto3_optional")
         .build_server(false)

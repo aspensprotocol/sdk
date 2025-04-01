@@ -5,7 +5,7 @@ pub mod config_pb {
 use anyhow::Result;
 use config_pb::config_service_client::ConfigServiceClient;
 
-pub(crate) async fn call_get_config(url: String) -> Result<()> {
+pub async fn call_get_config(url: String) -> Result<()> {
     // Create a channel to connect to the gRPC server
     let channel = tonic::transport::Channel::from_shared(url)?
         .connect()

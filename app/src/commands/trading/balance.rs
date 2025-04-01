@@ -4,11 +4,87 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
 use anyhow::Result;
 use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
+use tracing::info;
 use url::Url;
 
 use super::{Midrib, IERC20};
 
-pub(crate) async fn call_get_balance(
+pub async fn balance(_args: &[String]) -> Result<()> {
+    let error_val = Uint::from(99999);
+
+    let op_wallet_balance = call_get_erc20_balance(
+        NamedChain::OptimismSepolia,
+        super::OP_SEPOLIA_RPC_URL,
+        super::OP_SEPOLIA_USDC_TOKEN_ADDRESS,
+    )
+    .await
+    .unwrap_or(error_val);
+
+    let op_available_balance = call_get_balance(
+        NamedChain::OptimismSepolia,
+        super::OP_SEPOLIA_RPC_URL,
+        super::OP_SEPOLIA_USDC_TOKEN_ADDRESS,
+    )
+    .await
+    .unwrap_or(error_val);
+
+    let op_locked_balance = call_get_locked_balance(
+        NamedChain::OptimismSepolia,
+        super::OP_SEPOLIA_RPC_URL,
+        super::OP_SEPOLIA_USDC_TOKEN_ADDRESS,
+    )
+    .await
+    .unwrap_or(error_val);
+
+    let base_wallet_balance = call_get_erc20_balance(
+        NamedChain::BaseSepolia,
+        super::BASE_SEPOLIA_RPC_URL,
+        super::BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+    )
+    .await
+    .unwrap_or(error_val);
+
+    let base_available_balance = call_get_balance(
+        NamedChain::BaseSepolia,
+        super::BASE_SEPOLIA_RPC_URL,
+        super::BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+    )
+    .await
+    .unwrap_or(error_val);
+
+    let base_locked_balance = call_get_locked_balance(
+        NamedChain::BaseSepolia,
+        super::BASE_SEPOLIA_RPC_URL,
+        super::BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+    )
+    .await
+    .unwrap_or(error_val);
+
+    let balance_table = balance_table(
+        vec!["USDC", "Base Sepolia", "Optimism Sepolia"],
+        base_wallet_balance,
+        base_available_balance,
+        base_locked_balance,
+        op_wallet_balance,
+        op_available_balance,
+        op_locked_balance,
+    );
+
+    if op_wallet_balance.eq(&error_val)
+        | op_available_balance.eq(&error_val)
+        | op_locked_balance.eq(&error_val)
+        | base_wallet_balance.eq(&error_val)
+        | base_available_balance.eq(&error_val)
+        | base_locked_balance.eq(&error_val)
+    {
+        info!("** A '99999' value represents an error in fetching the actual value");
+    }
+
+    info!("{}", balance_table);
+    Ok(())
+}
+
+pub async fn call_get_balance(
     chain: NamedChain,
     rpc_url: &str,
     token_address: &str,
@@ -42,7 +118,7 @@ pub(crate) async fn call_get_balance(
     Ok(result)
 }
 
-pub(crate) async fn call_get_locked_balance(
+pub async fn call_get_locked_balance(
     chain: NamedChain,
     rpc_url: &str,
     token_address: &str,
@@ -75,7 +151,7 @@ pub(crate) async fn call_get_locked_balance(
     Ok(result)
 }
 
-pub(crate) async fn call_get_erc20_balance(
+pub async fn call_get_erc20_balance(
     chain: NamedChain,
     rpc_url: &str,
     token_address: &str,
@@ -84,13 +160,10 @@ pub(crate) async fn call_get_erc20_balance(
     let signer = std::env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
     let depositer_address: Address = signer.address();
 
-    //let wallet = EthereumWallet::new(signer);
-
     let rpc_url = Url::parse(rpc_url)?;
     // Set up the provider
     let provider = ProviderBuilder::new()
         .with_chain(chain)
-        //.wallet(wallet)
         .on_http(rpc_url);
 
     // Get an instance of the contract
@@ -100,7 +173,7 @@ pub(crate) async fn call_get_erc20_balance(
     Ok(result)
 }
 
-pub(crate) fn balance_table(
+pub fn balance_table(
     header: Vec<&str>,
     base_wallet_bal: Uint<256, 4>,
     base_available_bal: Uint<256, 4>,

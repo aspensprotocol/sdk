@@ -20,28 +20,82 @@ foundryup
 3. Set up environment variables:
 ```bash
 # Copy the .env sample 
-cp .env.sample .env
+cp app/.env.sample app/.env
 
 # After changing the values in your .env
-source .env
+source app/.env
 ```
 
 ## Usage
 
+The CLI can be used in two modes: interactive and scripted.
+
+### Interactive Mode
+
+Interactive mode provides a REPL (Read-Eval-Print Loop) interface where you can execute commands one at a time:
+
 ```bash
-$ EVM_TESTNET_PUBKEY=$EVM_TESTNET_PUBKEY_ACCOUNT_1 \
-  EVM_TESTNET_PRIVKEY=$EVM_TESTNET_PRIVKEY_ACCOUNT_1 \
-  cargo run
+$ just cli
 
-# by default, connects to arborter running on localhost:50051. instead, 
-# connect to a remote aspens stack at <arborter-url>
-aspens> initialize https://<arborter-url>
+aspens> help
+Available commands:
+  balance - Check your token balances
+  deposit - Deposit tokens for trading
+  send-order - Send an order to the market
+  withdraw - Withdraw tokens to your wallet
 
-# to see all commands
-aspens> help 
+aspens> send-order buy 100 50
+Response received: SendOrderReply {
+  order_in_book: true,
+  order: Order {
+    side: 1,
+    quantity: 100,
+    price: 50,
+    ...
+  },
+  trades: []
+}
 
-# to end the session
+aspens> balance
+Token Balances:
+  USDC:
+    Base Sepolia: 1000 (Available: 900, Locked: 100)
+    Optimism Sepolia: 2000 (Available: 1800, Locked: 200)
+
 aspens> quit
+```
+
+### Scripted Mode
+
+Scripted mode allows you to execute commands directly from the command line, which is useful for automation and scripting:
+
+```bash
+# Send a buy order
+$ just run send-order buy 100 50
+
+# Check balances
+$ just run balance
+
+# Deposit tokens
+$ just run deposit base-sepolia USDC 1000
+
+# Withdraw tokens
+$ just run withdraw optimism-sepolia USDC 500
+```
+
+### Available Commands
+
+- `balance` - Check your token balances across all chains
+- `deposit <chain> <token> <amount>` - Deposit tokens for trading
+- `send-order <side> <quantity> [price]` - Send an order to the market
+  - `side`: buy or sell
+  - `quantity`: amount to trade
+  - `price`: optional limit price
+- `withdraw <chain> <token> <amount>` - Withdraw tokens to your wallet
+
+For more details about a specific command, use:
+```bash
+aspens> help <command>
 ```
 
 ## Local Development with Anvil
@@ -86,7 +140,7 @@ After creating tokens, you can use them with the CLI:
 
 ```bash
 # Start the CLI
-cargo run
+just cli
 
 # Initialize with local Anvil
 aspens> initialize http://localhost:50051
@@ -102,6 +156,8 @@ aspens> send-order --market-id <chain_id>::<token1>::<chain_id>::<token2> --side
 
 When you're done testing:
 ```bash
+aspens> quit
+
 # Stop Anvil instances
 just stop-anvil
 
