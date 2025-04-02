@@ -12,6 +12,7 @@ fi
 # Get arguments
 TOKEN_SYMBOL=$1
 TOKEN_DECIMALS=${2:-18}
+RPC_URL=${3:-http://localhost:8545}
 
 # Convert symbol to lowercase for consistency
 symbol=$(echo "$TOKEN_SYMBOL" | tr '[:upper:]' '[:lower:]')
@@ -40,8 +41,9 @@ sed -i '' "s/TOKEN_DECIMALS/$TOKEN_DECIMALS/" contracts/$symbol.sol
 forge build
 
 # Deploy the contract to Anvil
+ANVIL_PRIVKEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 echo "Deploying $symbol token..."
-ADDRESS=$(cast send --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 --rpc-url http://localhost:8545 --value 0 --create $(cat artifacts/$symbol.sol/Token.json | jq -r .bytecode.object) | grep "contractAddress" | awk '{print $2}')
+ADDRESS=$(cast send --private-key $ANVIL_PRIVKEY --rpc-url $RPC_URL --value 0 --create $(cat artifacts/$symbol.sol/Token.json | jq -r .bytecode.object) | grep "contractAddress" | awk '{print $2}')
 
 # Clean up temporary contract
 rm contracts/$symbol.sol
@@ -51,4 +53,7 @@ echo "Name: $name"
 echo "Symbol: $symbol"
 echo "Decimals: $TOKEN_DECIMALS"
 echo "Address: $ADDRESS"
-echo "Initial supply: 1,000,000 $symbol" 
+echo "Initial supply: 1,000,000 $symbol"
+
+# Return the address for use in other scripts
+echo "$ADDRESS" 
