@@ -103,6 +103,10 @@ setup-anvil-full:
     echo "    - 1,000,000 WBTC (8 decimals)"
     echo "    - 1,000,000 USDT (6 decimals)"
 
+    echo -e "\nMarket IDs for trading pairs:"
+    echo "  USDC/USDT: 84531::${USDC_TOKEN_ADDRESS}::84532::${USDT_TOKEN_ADDRESS}"
+    echo "  WBTC/USDT: 84531::${WBTC_TOKEN_ADDRESS}::84532::${USDT_TOKEN_ADDRESS}"
+
 # Stop Anvil instances
 stop-anvil:
     pkill -f anvil

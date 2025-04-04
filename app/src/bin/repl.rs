@@ -9,18 +9,9 @@ use clap_repl::reedline::{
 use clap_repl::ClapEditor;
 use dotenv::dotenv;
 use std::sync::{Arc, Mutex};
-use tracing::info;
+use tracing::{info, Level};
+use tracing_subscriber::FmtSubscriber;
 use url::Url;
-
-//const BASE_SEPOLIA_RPC_URL: &str = "https://sepolia.base.org";
-//const BASE_SEPOLIA_RPC_URL: &str = "https://base-sepolia-rpc.publicnode.com";
-const BASE_SEPOLIA_RPC_URL: &str = "http://localhost:8545";
-const BASE_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "036CbD53842c5426634e7929541eC2318f3dCF7e";
-
-//const OP_SEPOLIA_RPC_URL: &str = "https://sepolia.optimism.io";
-//const OP_SEPOLIA_RPC_URL: &str = "https://optimism-sepolia-rpc.publicnode.com";
-const OP_SEPOLIA_RPC_URL: &str = "http://localhost:8546";
-const OP_SEPOLIA_USDC_TOKEN_ADDRESS: &str = "5fd84259d66Cd46123540766Be93DFE6D43130D7";
 
 struct AppState {
     url: Arc<Mutex<Url>>,
@@ -45,13 +36,12 @@ impl AppState {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "")]
 #[command(name = "", author, version, about, long_about = None)]
-enum CliCommand {
-    /// Initialize a new trading session by (optionally) defining the arborter gRPC URL endpoint
+enum ReplCommand {
+    /// Initialize a new trading session by (optionally) defining the arborter URL
     Initialize {
         /// The URL of the arborter server
-        #[arg(short, long, default_value_t = Url::parse("http://localhost:50051").unwrap())]
+        #[arg(short, long, default_value_t = Url::parse("http://0.0.0.0:50051").unwrap())]
         url: Url,
     },
     /// Config: Fetch the current configuration from the arborter server
@@ -61,23 +51,23 @@ enum CliCommand {
     /// Config: Add a new token to the arborter service. Requires a valid signature
     AddToken {
         /// The chain network to add the token to
-        chain_network: SupportedChain,
+        chain_network: NamedChain,
     },
     /// Deploy the trade contract onto the given chain
     DeployContract {
         /// The chain network to deploy the contract to
-        chain_network: SupportedChain,
+        chain_network: NamedChain,
         base_or_quote: BaseOrQuote,
     },
     /// Deposit token(s) to make them available for trading
     Deposit {
-        chain: SupportedChain,
+        chain: NamedChain,
         token: String,
         amount: u64,
     },
     /// Withdraw token(s) to a local wallet
     Withdraw {
-        chain: SupportedChain,
+        chain: NamedChain,
         token: String,
         amount: u64,
     },
@@ -120,19 +110,11 @@ enum CliCommand {
 
 //enum State {}
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-enum SupportedChain {
-    /// Base Sepolia (testnet)
-    BaseSepolia,
-    /// Optimism Sepolia (testnet)
-    OptimismSepolia,
-}
-
-impl std::fmt::Display for SupportedChain {
+impl std::fmt::Display for NamedChain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SupportedChain::BaseSepolia => write!(f, "base-sepolia"),
-            SupportedChain::OptimismSepolia => write!(f, "optimism-sepolia"),
+            NamedChain::BaseSepolia => write!(f, "base-sepolia"),
+            NamedChain::BaseGoerli => write!(f, "optimism-sepolia"),
         }
     }
 }
@@ -163,6 +145,11 @@ enum Side {
 fn main() {
     dotenv().ok();
 
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
+
     let mut app_state = AppState::new();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -175,7 +162,7 @@ fn main() {
         ..DefaultPrompt::default()
     };
 
-    let rl = ClapEditor::<CliCommand>::builder()
+    let rl = ClapEditor::<ReplCommand>::builder()
         .with_prompt(Box::new(prompt))
         .with_editor_hook(|reed| {
             reed.with_history(Box::new(
@@ -185,30 +172,30 @@ fn main() {
         .build();
 
     rl.repl(|command| match command {
-        CliCommand::Initialize { url } => {
+        ReplCommand::Initialize { url } => {
             app_state.with_url(url.clone());
             info!("Initialized session at {url:?}");
             info!("Available config for {url:?} is <TODO!!>");
         }
-        CliCommand::GetConfig => {
+        ReplCommand::GetConfig => {
             info!("Fetching config...");
             let url = app_state.url();
             let result = rt.block_on(get_config::call_get_config(url));
             info!("GetConfig result: {result:?}");
         }
-        CliCommand::AddMarket => {
+        ReplCommand::AddMarket => {
             info!("Adding market...");
             let url = app_state.url();
             let result = rt.block_on(add_market::call_add_market(url));
             info!("AddMarket result: {result:?}");
         }
-        CliCommand::AddToken { chain_network } => {
+        ReplCommand::AddToken { chain_network } => {
             info!("Adding token ___ on {chain_network:?}");
             let url = app_state.url();
             let result = rt.block_on(add_token::call_add_token(url, &chain_network.to_string()));
             info!("AddToken result: {result:?}");
         }
-        CliCommand::DeployContract {
+        ReplCommand::DeployContract {
             chain_network,
             base_or_quote,
         } => {
@@ -221,65 +208,73 @@ fn main() {
             ));
             info!("DeployContract result: {result:?}");
         }
-        CliCommand::Deposit {
+        ReplCommand::Deposit {
             chain,
             token,
             amount,
         } => {
             info!("Depositing {amount:?} {token:?} on {chain:?}");
-            let named_chain = match chain {
-                SupportedChain::OptimismSepolia => NamedChain::OptimismSepolia,
-                SupportedChain::BaseSepolia => NamedChain::BaseSepolia,
-            };
+            let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
+            let base_chain_usdc_token_address =
+                std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
+            let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL").unwrap();
+            let quote_chain_usdc_token_address =
+                std::env::var("QUOTE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
 
             let rpc_url = match chain {
-                SupportedChain::OptimismSepolia => OP_SEPOLIA_RPC_URL,
-                SupportedChain::BaseSepolia => BASE_SEPOLIA_RPC_URL,
+                NamedChain::BaseGoerli => base_chain_rpc_url,
+                NamedChain::BaseSepolia => quote_chain_rpc_url,
+                _ => unreachable!(),
             };
 
             let token_address = match chain {
-                SupportedChain::OptimismSepolia => OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-                SupportedChain::BaseSepolia => BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+                NamedChain::BaseGoerli => base_chain_usdc_token_address,
+                NamedChain::BaseSepolia => quote_chain_usdc_token_address,
+                _ => unreachable!(),
             };
 
             let result = rt.block_on(deposit::call_deposit(
-                named_chain,
-                rpc_url,
-                token_address,
+                chain,
+                &rpc_url,
+                &token_address,
                 amount,
             ));
             info!("Deposit result: {result:?}");
         }
-        CliCommand::Withdraw {
+        ReplCommand::Withdraw {
             chain,
             token,
             amount,
         } => {
             info!("Withdrawing {amount:?} {token:?} on {chain:?}");
-            let named_chain = match chain {
-                SupportedChain::OptimismSepolia => NamedChain::OptimismSepolia,
-                SupportedChain::BaseSepolia => NamedChain::BaseSepolia,
-            };
+            let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
+            let base_chain_usdc_token_address =
+                std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
+            let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL").unwrap();
+            let quote_chain_usdc_token_address =
+                std::env::var("QUOTE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
 
             let rpc_url = match chain {
-                SupportedChain::OptimismSepolia => OP_SEPOLIA_RPC_URL,
-                SupportedChain::BaseSepolia => BASE_SEPOLIA_RPC_URL,
+                NamedChain::BaseGoerli => base_chain_rpc_url,
+                NamedChain::BaseSepolia => quote_chain_rpc_url,
+                _ => unreachable!(),
             };
 
             let token_address = match chain {
-                SupportedChain::OptimismSepolia => OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-                SupportedChain::BaseSepolia => BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+                NamedChain::BaseGoerli => base_chain_usdc_token_address,
+                NamedChain::BaseSepolia => quote_chain_usdc_token_address,
+                _ => unreachable!(),
             };
 
             let result = rt.block_on(withdraw::call_withdraw(
-                named_chain,
-                rpc_url,
-                token_address,
+                chain,
+                &rpc_url,
+                &token_address,
                 amount,
             ));
             info!("Withdraw result: {result:?}");
         }
-        CliCommand::Buy {
+        ReplCommand::Buy {
             amount,
             limit_price,
             matching_order_ids: _,
@@ -305,7 +300,7 @@ fn main() {
             info!("SendOrder result: {result:?}");
             info!("Order sent");
         }
-        CliCommand::Sell {
+        ReplCommand::Sell {
             amount,
             limit_price,
             matching_order_ids: _,
@@ -331,19 +326,20 @@ fn main() {
             info!("SendOrder result: {result:?}");
             info!("Order sent");
         }
-        CliCommand::GetOrders => {
+        ReplCommand::GetOrders => {
             info!("Getting orders...");
             info!("TODO: Implement this");
         }
-        CliCommand::CancelOrder { order_id } => {
+        ReplCommand::CancelOrder { order_id } => {
             info!("Order canceled: {order_id:?}");
             info!("TODO: Implement this");
         }
-        CliCommand::GetBalance => {
+        ReplCommand::GetBalance => {
+            info!("Getting balance");
             let error_val = Uint::from(99999);
             let op_wallet_balance = rt
                 .block_on(balance::call_get_erc20_balance(
-                    NamedChain::OptimismSepolia,
+                    NamedChain::BaseGoerli,
                     OP_SEPOLIA_RPC_URL,
                     OP_SEPOLIA_USDC_TOKEN_ADDRESS,
                 ))
@@ -351,7 +347,7 @@ fn main() {
 
             let op_available_balance = rt
                 .block_on(balance::call_get_balance(
-                    NamedChain::OptimismSepolia,
+                    NamedChain::BaseGoerli,
                     OP_SEPOLIA_RPC_URL,
                     OP_SEPOLIA_USDC_TOKEN_ADDRESS,
                 ))
@@ -359,7 +355,7 @@ fn main() {
 
             let op_locked_balance = rt
                 .block_on(balance::call_get_locked_balance(
-                    NamedChain::OptimismSepolia,
+                    NamedChain::BaseGoerli,
                     OP_SEPOLIA_RPC_URL,
                     OP_SEPOLIA_USDC_TOKEN_ADDRESS,
                 ))
@@ -405,16 +401,18 @@ fn main() {
                 | base_available_balance.eq(&error_val)
                 | base_locked_balance.eq(&error_val)
             {
-                info!("** A '99999' value represents an error in fetching the actual value");
+                tracing::error!(
+                    "** A '99999' value represents an error in fetching the actual value"
+                );
             }
 
-            info!("{balance_table}");
+            info!("\n{balance_table}");
         }
-        CliCommand::GetOrderbook { market_id } => {
+        ReplCommand::GetOrderbook { market_id } => {
             info!("Getting orderbook: {market_id:?}");
             info!("TODO: Implement this");
         }
-        CliCommand::Quit => {
+        ReplCommand::Quit => {
             info!("goodbye");
             std::process::exit(0)
         }

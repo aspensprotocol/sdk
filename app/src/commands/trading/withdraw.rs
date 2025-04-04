@@ -15,12 +15,14 @@ pub async fn call_withdraw(
     amount: u64,
 ) -> Result<()> {
     let withdrawal_amount = U256::from(amount);
-
+    let base_chain_contract_address = std::env::var("BASE_CHAIN_CONTRACT_ADDRESS")?;
+    let quote_chain_contract_address = std::env::var("QUOTE_CHAIN_CONTRACT_ADDRESS")?;
     let contract_address = match chain {
-        NamedChain::BaseSepolia => super::BASE_SEPOLIA_CONTRACT_ADDRESS,
-        NamedChain::OptimismSepolia => super::OP_SEPOLIA_CONTRACT_ADDRESS,
+        NamedChain::BaseGoerli => base_chain_contract_address,
+        NamedChain::BaseSepolia => quote_chain_contract_address,
         _ => unreachable!(),
     };
+
     let contract_address: Address = Address::parse_checksummed(contract_address, None)?;
     let token_addr: Address = token_address.parse()?;
 
@@ -46,8 +48,7 @@ pub async fn call_withdraw(
         .watch()
         .await?;
 
-    println!("Withdraw result: {result:?}");
+    tracing::info!("Withdraw result: {result:?}");
 
     Ok(())
 }
-

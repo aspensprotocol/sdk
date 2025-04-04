@@ -32,7 +32,7 @@ pub async fn call_add_market(url: String) -> Result<()> {
     let response = client.add_market(request).await?;
 
     // Print the response from the server
-    println!("{:#?}", response.into_inner());
+    tracing::info!("{:#?}", response.into_inner());
 
     Ok(())
 }

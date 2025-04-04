@@ -12,72 +12,77 @@ use super::{Midrib, IERC20};
 pub async fn balance(_args: &[String]) -> Result<()> {
     let error_val = Uint::from(99999);
 
-    let op_wallet_balance = call_get_erc20_balance(
-        NamedChain::OptimismSepolia,
-        super::OP_SEPOLIA_RPC_URL,
-        super::OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-    )
-    .await
-    .unwrap_or(error_val);
-
-    let op_available_balance = call_get_balance(
-        NamedChain::OptimismSepolia,
-        super::OP_SEPOLIA_RPC_URL,
-        super::OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-    )
-    .await
-    .unwrap_or(error_val);
-
-    let op_locked_balance = call_get_locked_balance(
-        NamedChain::OptimismSepolia,
-        super::OP_SEPOLIA_RPC_URL,
-        super::OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-    )
-    .await
-    .unwrap_or(error_val);
+    let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL")?;
+    let base_chain_usdc_token_address = std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS")?;
+    let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL")?;
+    let quote_chain_usdc_token_address = std::env::var("QUOTE_CHAIN_USDC_TOKEN_ADDRESS")?;
 
     let base_wallet_balance = call_get_erc20_balance(
-        NamedChain::BaseSepolia,
-        super::BASE_SEPOLIA_RPC_URL,
-        super::BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+        NamedChain::BaseGoerli,
+        base_chain_rpc_url.as_str(),
+        base_chain_usdc_token_address.as_str(),
     )
     .await
     .unwrap_or(error_val);
 
     let base_available_balance = call_get_balance(
-        NamedChain::BaseSepolia,
-        super::BASE_SEPOLIA_RPC_URL,
-        super::BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+        NamedChain::BaseGoerli,
+        base_chain_rpc_url.as_str(),
+        base_chain_usdc_token_address.as_str(),
     )
     .await
     .unwrap_or(error_val);
 
     let base_locked_balance = call_get_locked_balance(
+        NamedChain::BaseGoerli,
+        base_chain_rpc_url.as_str(),
+        base_chain_usdc_token_address.as_str(),
+    )
+    .await
+    .unwrap_or(error_val);
+
+    let quote_wallet_balance = call_get_erc20_balance(
         NamedChain::BaseSepolia,
-        super::BASE_SEPOLIA_RPC_URL,
-        super::BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+        base_chain_rpc_url.as_str(),
+        quote_chain_usdc_token_address.as_str(),
+    )
+    .await
+    .unwrap_or(error_val);
+
+    let quote_available_balance = call_get_balance(
+        NamedChain::BaseSepolia,
+        quote_chain_rpc_url.as_str(),
+        quote_chain_usdc_token_address.as_str(),
+    )
+    .await
+    .unwrap_or(error_val);
+
+    let quote_locked_balance = call_get_locked_balance(
+        NamedChain::BaseSepolia,
+        quote_chain_rpc_url.as_str(),
+        quote_chain_usdc_token_address.as_str(),
     )
     .await
     .unwrap_or(error_val);
 
     let balance_table = balance_table(
-        vec!["USDC", "Base Sepolia", "Optimism Sepolia"],
+        vec!["USDC", "Base Chain", "Quote Chain"],
         base_wallet_balance,
         base_available_balance,
         base_locked_balance,
-        op_wallet_balance,
-        op_available_balance,
-        op_locked_balance,
+        quote_wallet_balance,
+        quote_available_balance,
+        quote_locked_balance,
     );
 
-    if op_wallet_balance.eq(&error_val)
-        | op_available_balance.eq(&error_val)
-        | op_locked_balance.eq(&error_val)
+    if quote_wallet_balance.eq(&error_val)
+        | quote_available_balance.eq(&error_val)
+        | quote_locked_balance.eq(&error_val)
         | base_wallet_balance.eq(&error_val)
         | base_available_balance.eq(&error_val)
         | base_locked_balance.eq(&error_val)
     {
-        info!("** A '99999' value represents an error in fetching the actual value");
+        tracing::error!("** A '99999' value represents an error in fetching the actual value");
     }
 
     info!("{}", balance_table);
@@ -89,9 +94,11 @@ pub async fn call_get_balance(
     rpc_url: &str,
     token_address: &str,
 ) -> Result<Uint<256, 4>> {
+    let base_chain_contract_address = std::env::var("BASE_CHAIN_CONTRACT_ADDRESS")?;
+    let quote_chain_contract_address = std::env::var("QUOTE_CHAIN_CONTRACT_ADDRESS")?;
     let contract_address = match chain {
-        NamedChain::BaseSepolia => super::BASE_SEPOLIA_CONTRACT_ADDRESS,
-        NamedChain::OptimismSepolia => super::OP_SEPOLIA_CONTRACT_ADDRESS,
+        NamedChain::BaseGoerli => base_chain_contract_address,
+        NamedChain::BaseSepolia => quote_chain_contract_address,
         _ => unreachable!(),
     };
 
@@ -123,11 +130,14 @@ pub async fn call_get_locked_balance(
     rpc_url: &str,
     token_address: &str,
 ) -> Result<Uint<256, 4>> {
+    let base_chain_contract_address = std::env::var("BASE_CHAIN_CONTRACT_ADDRESS")?;
+    let quote_chain_contract_address = std::env::var("QUOTE_CHAIN_CONTRACT_ADDRESS")?;
     let contract_address = match chain {
-        NamedChain::BaseSepolia => super::BASE_SEPOLIA_CONTRACT_ADDRESS,
-        NamedChain::OptimismSepolia => super::OP_SEPOLIA_CONTRACT_ADDRESS,
+        NamedChain::BaseGoerli => base_chain_contract_address,
+        NamedChain::BaseSepolia => quote_chain_contract_address,
         _ => unreachable!(),
     };
+
     let contract_addr: Address = Address::parse_checksummed(contract_address, None)?;
     let token_addr: Address = token_address.parse()?;
 
@@ -136,7 +146,7 @@ pub async fn call_get_locked_balance(
 
     let rpc_url = Url::parse(rpc_url)?;
     // Set up the provider
-    let provider = ProviderBuilder::new().with_chain(chain).on_http(rpc_url);
+    let provider = ProviderBuilder::new().on_http(rpc_url);
 
     // Get an instance of the contract
     let contract = Midrib::new(contract_addr, &provider);
@@ -162,9 +172,7 @@ pub async fn call_get_erc20_balance(
 
     let rpc_url = Url::parse(rpc_url)?;
     // Set up the provider
-    let provider = ProviderBuilder::new()
-        .with_chain(chain)
-        .on_http(rpc_url);
+    let provider = ProviderBuilder::new().with_chain(chain).on_http(rpc_url);
 
     // Get an instance of the contract
     let contract = IERC20::new(token_addr, &provider);

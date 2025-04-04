@@ -28,7 +28,7 @@ pub async fn call_deploy_contract(
     let response = client.deploy_contract(request).await?;
 
     // Print the response from the server
-    println!("{:#?}", response.into_inner());
+    tracing::info!("{:#?}", response.into_inner());
 
     Ok(())
 }

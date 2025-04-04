@@ -21,7 +21,7 @@ pub async fn call_get_config(url: String) -> Result<()> {
     let response = client.get_config(request).await?;
 
     // Print the response from the server
-    println!("{:#?}", response.into_inner());
+    tracing::info!("{:#?}", response.into_inner());
 
     Ok(())
 }

@@ -807,6 +807,7 @@ dependencies = [
  "anyhow",
  "clap",
  "clap-repl",
+ "clap-verbosity",
  "comfy-table",
  "dotenv",
  "hex",
@@ -1059,6 +1060,17 @@ dependencies = [
  "nu-ansi-term 0.50.1",
  "reedline",
  "shlex",
+]
+
+[[package]]
+name = "clap-verbosity"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d7bf75a8e0407a558bd7e8e7919baa352e21fb0c1c7702a63c853f2277c4c63"
+dependencies = [
+ "clap",
+ "log",
+ "serde",
 ]
 
 [[package]]

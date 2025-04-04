@@ -95,7 +95,7 @@ pub async fn call_send_order(
     let response = client.send_order(request).await?;
 
     // Print the response from the server
-    println!("Response received: {}", response.into_inner());
+    tracing::info!("Response received: {}", response.into_inner());
 
     Ok(())
 }

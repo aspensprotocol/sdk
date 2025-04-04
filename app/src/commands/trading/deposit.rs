@@ -18,17 +18,19 @@ pub async fn call_deposit(
 ) -> Result<()> {
     let allowance_amount = U256::from(amount.saturating_add(1000));
     let deposit_amount = U256::from(amount);
-
+    let base_chain_contract_address = std::env::var("BASE_CHAIN_CONTRACT_ADDRESS")?;
+    let quote_chain_contract_address = std::env::var("QUOTE_CHAIN_CONTRACT_ADDRESS")?;
     let contract_address = match chain {
-        NamedChain::BaseSepolia => super::BASE_SEPOLIA_CONTRACT_ADDRESS,
-        NamedChain::OptimismSepolia => super::OP_SEPOLIA_CONTRACT_ADDRESS,
+        NamedChain::BaseGoerli => base_chain_contract_address,
+        NamedChain::BaseSepolia => quote_chain_contract_address,
         _ => unreachable!(),
     };
+
     let contract_address: Address = Address::parse_checksummed(contract_address, None)?;
     let token_addr: Address = token_address.parse()?;
 
     let signer = env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
-    dbg!(&signer);
+    tracing::debug!("{:?}", &signer);
     let signer_address = signer.address();
     let wallet = EthereumWallet::new(signer);
     let rpc_url = Url::parse(rpc_url)?;
@@ -50,7 +52,7 @@ pub async fn call_deposit(
         .await?
         ._0;
 
-    println!("Get allowance result: {allowance_result:?}");
+    tracing::info!("Get allowance result: {allowance_result:?}");
 
     // Set the allowance
     let approve_result = erc20
@@ -60,7 +62,7 @@ pub async fn call_deposit(
         .watch()
         .await?;
 
-    println!("Set allowance result: {approve_result:?}");
+    tracing::info!("Set allowance result: {approve_result:?}");
 
     // Call the contract function
     let result = contract
@@ -71,8 +73,7 @@ pub async fn call_deposit(
         .watch()
         .await?;
 
-    println!("Deposit result: {result:?}");
+    tracing::info!("Deposit result: {result:?}");
 
     Ok(())
 }
-
