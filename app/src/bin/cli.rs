@@ -2,7 +2,7 @@ use alloy::primitives::Uint;
 use alloy_chains::NamedChain;
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use tracing::{info, Level};
+use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 use url::Url;
 
@@ -232,53 +232,89 @@ async fn main() -> Result<()> {
                 std::env::var("QUOTE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
 
             let error_val = Uint::from(99999);
-            let base_wallet_balance = balance::call_get_erc20_balance(
+            let base_wallet_balance = match balance::call_get_erc20_balance(
                 NamedChain::BaseGoerli,
                 &base_chain_rpc_url,
                 &base_chain_usdc_token_address,
             )
             .await
-            .unwrap_or(error_val);
+            {
+                Ok(balance) => balance,
+                Err(e) => {
+                    error!("Failed to get balance for {base_chain_usdc_token_address}: {e}");
+                    error_val
+                }
+            };
 
-            let base_available_balance = balance::call_get_balance(
+            let base_available_balance = match balance::call_get_balance(
                 NamedChain::BaseGoerli,
                 &base_chain_rpc_url,
                 &base_chain_usdc_token_address,
             )
             .await
-            .unwrap_or(error_val);
+            {
+                Ok(balance) => balance,
+                Err(e) => {
+                    error!("Failed to get available balance for {base_chain_usdc_token_address}: {e}");
+                    error_val
+                }
+            };
 
-            let base_locked_balance = balance::call_get_locked_balance(
+            let base_locked_balance = match balance::call_get_locked_balance(
                 NamedChain::BaseGoerli,
                 &base_chain_rpc_url,
                 &base_chain_usdc_token_address,
             )
             .await
-            .unwrap_or(error_val);
+            {
+                Ok(balance) => balance,
+                Err(e) => {
+                    error!("Failed to get locked balance for {base_chain_usdc_token_address}: {e}");
+                    error_val
+                }
+            };
 
-            let quote_wallet_balance = balance::call_get_erc20_balance(
+            let quote_wallet_balance = match balance::call_get_erc20_balance(
                 NamedChain::BaseSepolia,
                 &quote_chain_rpc_url,
                 &quote_chain_usdc_token_address,
             )
             .await
-            .unwrap_or(error_val);
+            {
+                Ok(balance) => balance,
+                Err(e) => {
+                    error!("Failed to get balance for {quote_chain_usdc_token_address}: {e}");
+                    error_val
+                }
+            };
 
-            let quote_available_balance = balance::call_get_balance(
+            let quote_available_balance = match balance::call_get_balance(
                 NamedChain::BaseSepolia,
                 &quote_chain_rpc_url,
                 &quote_chain_usdc_token_address,
             )
             .await
-            .unwrap_or(error_val);
+            {
+                Ok(balance) => balance,
+                Err(e) => {
+                    error!("Failed to get available balance for {quote_chain_usdc_token_address}: {e}");
+                    error_val
+                }
+            };
 
-            let quote_locked_balance = balance::call_get_locked_balance(
+            let quote_locked_balance = match balance::call_get_locked_balance(
                 NamedChain::BaseSepolia,
                 &quote_chain_rpc_url,
                 &quote_chain_usdc_token_address,
             )
             .await
-            .unwrap_or(error_val);
+            {
+                Ok(balance) => balance,
+                Err(e) => {
+                    error!("Failed to get locked balance for {quote_chain_usdc_token_address}: {e}");
+                    error_val
+                }
+            };
 
             let balance_table = balance::balance_table(
                 vec!["USDC", "Base Chain", "Quote Chain"],
