@@ -73,7 +73,6 @@ enum ReplCommand {
     },
     /// Send a BUY order
     Buy {
-        //#[arg(short, long)]
         amount: u64,
         #[arg(short, long)]
         limit_price: Option<u64>,
@@ -82,7 +81,6 @@ enum ReplCommand {
     },
     /// Send a SELL order
     Sell {
-        //#[arg(short, long)]
         amount: u64,
         #[arg(short, long)]
         limit_price: Option<u64>,
@@ -98,7 +96,7 @@ enum ReplCommand {
         order_id: Option<u64>,
     },
     /// Fetch the balances
-    GetBalance,
+    Balance,
     /// Fetch the latest top of book
     GetOrderbook {
         #[arg(short, long)]
@@ -106,17 +104,6 @@ enum ReplCommand {
     },
     /// Close the session and quit
     Quit,
-}
-
-//enum State {}
-
-impl std::fmt::Display for NamedChain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            NamedChain::BaseSepolia => write!(f, "base-sepolia"),
-            NamedChain::BaseGoerli => write!(f, "optimism-sepolia"),
-        }
-    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -334,76 +321,81 @@ fn main() {
             info!("Order canceled: {order_id:?}");
             info!("TODO: Implement this");
         }
-        ReplCommand::GetBalance => {
+        ReplCommand::Balance => {
             info!("Getting balance");
             let error_val = Uint::from(99999);
-            let op_wallet_balance = rt
-                .block_on(balance::call_get_erc20_balance(
-                    NamedChain::BaseGoerli,
-                    OP_SEPOLIA_RPC_URL,
-                    OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-                ))
-                .unwrap_or(error_val);
-
-            let op_available_balance = rt
-                .block_on(balance::call_get_balance(
-                    NamedChain::BaseGoerli,
-                    OP_SEPOLIA_RPC_URL,
-                    OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-                ))
-                .unwrap_or(error_val);
-
-            let op_locked_balance = rt
-                .block_on(balance::call_get_locked_balance(
-                    NamedChain::BaseGoerli,
-                    OP_SEPOLIA_RPC_URL,
-                    OP_SEPOLIA_USDC_TOKEN_ADDRESS,
-                ))
-                .unwrap_or(error_val);
+            let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
+            let base_chain_usdc_token_address =
+                std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
+            let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL").unwrap();
+            let quote_chain_usdc_token_address =
+                std::env::var("QUOTE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
 
             let base_wallet_balance = rt
                 .block_on(balance::call_get_erc20_balance(
-                    NamedChain::BaseSepolia,
-                    BASE_SEPOLIA_RPC_URL,
-                    BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+                    NamedChain::BaseGoerli,
+                    &base_chain_rpc_url,
+                    &base_chain_usdc_token_address,
                 ))
                 .unwrap_or(error_val);
 
             let base_available_balance = rt
                 .block_on(balance::call_get_balance(
-                    NamedChain::BaseSepolia,
-                    BASE_SEPOLIA_RPC_URL,
-                    BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+                    NamedChain::BaseGoerli,
+                    &base_chain_rpc_url,
+                    &base_chain_usdc_token_address,
                 ))
                 .unwrap_or(error_val);
 
             let base_locked_balance = rt
                 .block_on(balance::call_get_locked_balance(
+                    NamedChain::BaseGoerli,
+                    &base_chain_rpc_url,
+                    &base_chain_usdc_token_address,
+                ))
+                .unwrap_or(error_val);
+
+            let quote_wallet_balance = rt
+                .block_on(balance::call_get_erc20_balance(
                     NamedChain::BaseSepolia,
-                    BASE_SEPOLIA_RPC_URL,
-                    BASE_SEPOLIA_USDC_TOKEN_ADDRESS,
+                    &quote_chain_rpc_url,
+                    &quote_chain_usdc_token_address,
+                ))
+                .unwrap_or(error_val);
+
+            let quote_available_balance = rt
+                .block_on(balance::call_get_balance(
+                    NamedChain::BaseSepolia,
+                    &quote_chain_rpc_url,
+                    &quote_chain_usdc_token_address,
+                ))
+                .unwrap_or(error_val);
+
+            let quote_locked_balance = rt
+                .block_on(balance::call_get_locked_balance(
+                    NamedChain::BaseSepolia,
+                    &quote_chain_rpc_url,
+                    &quote_chain_usdc_token_address,
                 ))
                 .unwrap_or(error_val);
 
             let balance_table = balance::balance_table(
-                vec!["USDC", "Base Sepolia", "Optimism Sepolia"],
+                vec!["USDC", "Base Chain", "Quote Chain"],
                 base_wallet_balance,
                 base_available_balance,
                 base_locked_balance,
-                op_wallet_balance,
-                op_available_balance,
-                op_locked_balance,
+                quote_wallet_balance,
+                quote_available_balance,
+                quote_locked_balance,
             );
-            if op_wallet_balance.eq(&error_val)
-                | op_available_balance.eq(&error_val)
-                | op_locked_balance.eq(&error_val)
-                | base_wallet_balance.eq(&error_val)
+            if base_wallet_balance.eq(&error_val)
                 | base_available_balance.eq(&error_val)
                 | base_locked_balance.eq(&error_val)
+                | quote_wallet_balance.eq(&error_val)
+                | quote_available_balance.eq(&error_val)
+                | quote_locked_balance.eq(&error_val)
             {
-                tracing::error!(
-                    "** A '99999' value represents an error in fetching the actual value"
-                );
+                info!("** A '99999' value represents an error in fetching the actual value");
             }
 
             info!("\n{balance_table}");

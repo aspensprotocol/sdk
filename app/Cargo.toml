@@ -25,8 +25,10 @@ comfy-table = "7.1.4"
 dotenv = "0.15.0"
 hex = "0.4.3"
 prost = "0.13.5"
+serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.44.1", features = ["rt-multi-thread"] }
+toml = "0.8.20"
 tonic = { version = "0.13.0", default-features = false, features = ["codegen", "prost", "transport"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

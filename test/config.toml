@@ -1,0 +1,82 @@
+# Chain configurations
+[[chains]]
+architecture = "hedera"
+canonical_name = "Hedera Testnet"
+network = "hedera-testnet"
+chain_id = 296
+contract_owner_address = "0.0.123456"
+explorer_url = "https://hashscan.io/testnet"
+rpc_url = "https://testnet.hashio.io/api"
+service_address = "0x0"
+
+[chains.trade_contract]
+contract_id = "0.0.4994857"
+address = "0x00000000000000000000000000000000004c3729"
+
+[chains.tokens.USDC]
+name = "USD Coin"
+symbol = "USDC"
+token_id = "0.0.5449"
+address = "0x0000000000000000000000000000000000001549"
+decimals = 6
+
+[[chains]]
+architecture = "evm"
+canonical_name = "Anvil 1 - 8545"
+network = "anvil-1"
+chain_id = 84531
+contract_owner_address = "0x4D0cB4D283e1b7e15DEB1fc5121CE626C6b0ae24"
+explorer_url = "https://sepolia.basescan.org"
+rpc_url = "http://localhost:8545"
+service_address = "0x8464135c8F25Da09e49BC8782676a84730C318bC"
+
+[chains.trade_contract]
+address = "0x8398bCD4f633C72939F9043dB78c574A91C99c0A"
+
+[chains.tokens.USDC]
+name = "USD Coin"
+symbol = "USDC"
+address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+decimals = 6
+
+[chains.tokens.WBTC]
+name = "Wrapped Bitcoin"
+symbol = "wBTC"
+address = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+decimals = 8
+
+[[chains]]
+architecture = "evm"
+canonical_name = "Anvil 2 - 8546"
+network = "anvil-2"
+chain_id = 84532
+contract_owner_address = "0x0"
+explorer_url = "https://sepolia-optimistic.etherscan.io"
+rpc_url = "http://localhost:8546"
+service_address = "0x8464135c8F25Da09e49BC8782676a84730C318bC"
+
+[chains.trade_contract]
+address = "0x8398bCD4f633C72939F9043dB78c574A91C99c0A"
+
+[chains.tokens.USDT]
+name = "USD Tether"
+symbol = "USDT"
+address = "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+decimals = 6
+
+# Market configurations
+[[markets]]
+slug = "A1USDC-A2USDT"
+name = "Anvil 1 USDC - Anvil 2 USDT"
+base_chain_network = "anvil-1"
+base_chain_token_symbol = "USDC"
+quote_chain_network = "anvil-2"
+quote_chain_token_symbol = "USDT"
+
+[[markets]]
+slug = "A1WBTC-A2USDT"
+name = "Anvil 1 wBTC - Anvil 2 USDT"
+base_chain_network = "anvil-1"
+base_chain_token_symbol = "WBTC"
+quote_chain_network = "anvil-2"
+quote_chain_token_symbol = "USDT" 

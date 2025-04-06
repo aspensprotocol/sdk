@@ -1,10 +1,11 @@
 use alloy::primitives::Uint;
 use alloy_chains::NamedChain;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 use url::Url;
+use std::str::FromStr;
 
 use aspens::commands::config::{add_market, add_token, deploy_contract, get_config};
 use aspens::commands::trading::{balance, deposit, send_order, withdraw};
@@ -35,23 +36,25 @@ enum Commands {
     /// Config: Add a new token to the arborter service
     AddToken {
         /// The chain network to add the token to
-        chain_network: NamedChain,
+        chain: String,
     },
     /// Deploy the trade contract onto the given chain
     DeployContract {
         /// The chain network to deploy the contract to
-        chain_network: NamedChain,
+        chain: String,
         base_or_quote: BaseOrQuote,
     },
     /// Deposit token(s) to make them available for trading
     Deposit {
-        chain: NamedChain,
+        /// The chain network to deposit to
+        chain: String,
         token: String,
         amount: u64,
     },
     /// Withdraw token(s) to a local wallet
     Withdraw {
-        chain: NamedChain,
+        /// The chain network to withdraw from
+        chain: String,
         token: String,
         amount: u64,
     },
@@ -79,7 +82,7 @@ enum Commands {
         order_id: u64,
     },
     /// Fetch the balances
-    GetBalance,
+    Balance,
     /// Fetch the latest top of book
     GetOrderbook {
         /// Market ID to fetch orderbook for
@@ -100,6 +103,12 @@ impl std::fmt::Display for BaseOrQuote {
             BaseOrQuote::Quote => write!(f, "quote"),
         }
     }
+}
+
+// Helper function to parse chain string into NamedChain
+fn parse_chain(chain_str: &str) -> Result<NamedChain> {
+    NamedChain::from_str(chain_str)
+        .with_context(|| format!("Invalid chain name: {chain_str}. Valid chains are: base-goerli or base-sepolia"))
 }
 
 #[tokio::main]
@@ -127,18 +136,20 @@ async fn main() -> Result<()> {
             info!("Adding market...");
             add_market::call_add_market(cli.url.to_string()).await?
         }
-        Commands::AddToken { chain_network } => {
-            info!("Adding token ___ on {chain_network:?}");
-            add_token::call_add_token(cli.url.to_string(), chain_network.as_ref()).await?
+        Commands::AddToken { chain } => {
+            let chain = parse_chain(&chain)?;
+            info!("Adding token ___ on {chain:?}");
+            add_token::call_add_token(cli.url.to_string(), chain.as_ref()).await?
         }
         Commands::DeployContract {
-            chain_network,
+            chain,
             base_or_quote,
         } => {
-            info!("Deploying contract on {chain_network:?}");
+            let chain = parse_chain(&chain)?;
+            info!("Deploying contract on {chain:?}");
             deploy_contract::call_deploy_contract(
                 cli.url.to_string(),
-                chain_network.as_ref(),
+                chain.as_ref(),
                 &base_or_quote.to_string(),
             )
             .await?
@@ -148,11 +159,11 @@ async fn main() -> Result<()> {
             token,
             amount,
         } => {
+            let chain = parse_chain(&chain)?;
             info!("Depositing {amount:?} {token:?} on {chain:?}");
-            info!("Depositing {amount:?} {token:?} on {chain:?}");
-            let base_chain_rpc_url = std::env::var("base_chain_rpc_url").unwrap();
+            let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
             let base_chain_usdc_token_address =
-                std::env::var("base_chain_usdc_token_address").unwrap();
+                std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
             let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL").unwrap();
             let quote_chain_usdc_token_address =
                 std::env::var("QUOTE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
@@ -176,10 +187,11 @@ async fn main() -> Result<()> {
             token,
             amount,
         } => {
+            let chain = parse_chain(&chain)?;
             info!("Withdrawing {amount:?} {token:?} on {chain:?}");
-            let base_chain_rpc_url = std::env::var("base_chain_rpc_url").unwrap();
+            let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
             let base_chain_usdc_token_address =
-                std::env::var("base_chain_usdc_token_address").unwrap();
+                std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
             let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL").unwrap();
             let quote_chain_usdc_token_address =
                 std::env::var("QUOTE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
@@ -222,7 +234,7 @@ async fn main() -> Result<()> {
             info!("Order canceled: {order_id:?}");
             info!("TODO: Implement this");
         }
-        Commands::GetBalance => {
+        Commands::Balance => {
             info!("Getting balance");
             let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
             let base_chain_usdc_token_address =
