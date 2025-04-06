@@ -35,7 +35,8 @@ The CLI can be used in two modes: interactive and scripted.
 Interactive mode provides a REPL (Read-Eval-Print Loop) interface where you can execute commands one at a time:
 
 ```bash
-$ just cli
+# Start the REPL
+cargo run --bin aspens-cli repl
 
 aspens> help
 Available commands:
@@ -71,26 +72,27 @@ Scripted mode allows you to execute commands directly from the command line, whi
 
 ```bash
 # Send a buy order
-$ just run send-order buy 100 50
+cargo run --bin aspens-cli buy --amount 100 --limit-price 50
 
 # Check balances
-$ just run balance
+cargo run --bin aspens-cli balance
 
 # Deposit tokens
-$ just run deposit base-sepolia USDC 1000
+cargo run --bin aspens-cli deposit --chain base-sepolia --token USDC --amount 1000
 
 # Withdraw tokens
-$ just run withdraw optimism-sepolia USDC 500
+cargo run --bin aspens-cli withdraw --chain optimism-sepolia --token USDC --amount 500
 ```
 
 ### Available Commands
 
 ### Configuration Commands
-- `initialize` - Initialize a new trading session by (optionally) defining the arborter URL
+- `initialize` - Initialize a new trading session
 - `get-config` - Fetch the current configuration from the arborter server
-- `add-market` - Add a new market to the arborter service (requires valid signature)
-- `add-token` - Add a new token to the arborter service (requires valid signature)
-- `deploy-contract` - Deploy the trade contract onto the given chain
+- `download-config` - Download the current configuration to a JSON file
+- `add-market` - Add a new market to the arborter service
+- `add-token` - Add a new token to the arborter service
+- `deploy-contract` - Deploy the trade contract onto a given chain
 
 ### Trading Commands
 - `deposit` - Deposit token(s) to make them available for trading
@@ -119,9 +121,27 @@ The REPL interface provides the same commands as above, but with a more interact
 - `get-orderbook` - Fetch orderbook
 - `quit` - Close the session and quit
 
-For more details about a specific command, use:
+### REPL Mode
 ```bash
-aspens> help <command>
+# Start the REPL
+cargo run --bin aspens-repl
+
+# Available commands in REPL mode:
+initialize
+get-config
+download-config --path <path>
+add-market
+add-token --chain <chain_network>
+deploy-contract --chain <chain_network> --base-or-quote <base|quote>
+deposit --chain <chain_network> --token <token_symbol> --amount <amount>
+withdraw --chain <chain_network> --token <token_symbol> --amount <amount>
+buy --amount <amount> --limit-price <price>
+sell --amount <amount> --limit-price <price>
+get-orders
+cancel-order --order-id <order_id>
+balance
+get-orderbook --market-id <market_id>
+quit
 ```
 
 ## Local Development with Anvil
@@ -166,7 +186,7 @@ After creating tokens, you can use them with the CLI:
 
 ```bash
 # Start the CLI
-just cli
+cargo run --bin aspens-cli repl
 
 # Initialize with local Anvil
 aspens> initialize http://localhost:50051
