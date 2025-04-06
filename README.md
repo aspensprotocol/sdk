@@ -85,13 +85,39 @@ $ just run withdraw optimism-sepolia USDC 500
 
 ### Available Commands
 
-- `balance` - Check your token balances across all chains
-- `deposit <chain> <token> <amount>` - Deposit tokens for trading
-- `send-order <side> <quantity> [price]` - Send an order to the market
-  - `side`: buy or sell
-  - `quantity`: amount to trade
-  - `price`: optional limit price
-- `withdraw <chain> <token> <amount>` - Withdraw tokens to your wallet
+### Configuration Commands
+- `initialize` - Initialize a new trading session by (optionally) defining the arborter URL
+- `get-config` - Fetch the current configuration from the arborter server
+- `add-market` - Add a new market to the arborter service (requires valid signature)
+- `add-token` - Add a new token to the arborter service (requires valid signature)
+- `deploy-contract` - Deploy the trade contract onto the given chain
+
+### Trading Commands
+- `deposit` - Deposit token(s) to make them available for trading
+- `withdraw` - Withdraw token(s) to a local wallet
+- `buy` - Send a BUY order
+- `sell` - Send a SELL order
+- `get-orders` - Get a list of all active orders
+- `cancel-order` - Cancel an order
+- `balance` - Fetch the balances
+- `get-orderbook` - Fetch the latest top of book
+
+### REPL Commands
+The REPL interface provides the same commands as above, but with a more interactive experience:
+- `initialize` - Initialize a new trading session
+- `get-config` - Fetch the current configuration
+- `add-market` - Add a new market
+- `add-token` - Add a new token
+- `deploy-contract` - Deploy the trade contract
+- `deposit` - Deposit tokens
+- `withdraw` - Withdraw tokens
+- `buy` - Send a BUY order
+- `sell` - Send a SELL order
+- `get-orders` - Get active orders
+- `cancel-order` - Cancel an order
+- `balance` - Fetch balances
+- `get-orderbook` - Fetch orderbook
+- `quit` - Close the session and quit
 
 For more details about a specific command, use:
 ```bash
