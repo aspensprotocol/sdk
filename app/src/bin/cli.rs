@@ -2,12 +2,14 @@ use alloy::primitives::Uint;
 use alloy_chains::NamedChain;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use tracing::{error, info, Level};
-use tracing_subscriber::FmtSubscriber;
-use url::Url;
 use std::str::FromStr;
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
+use url::Url;
 
-use aspens::commands::config::{add_market, add_token, deploy_contract, get_config};
+use aspens::commands::config::{
+    add_market, add_token, call_get_config, deploy_contract, download_config_to_file,
+};
 use aspens::commands::trading::{balance, deposit, send_order, withdraw};
 
 #[derive(Debug, Parser)]
@@ -88,6 +90,12 @@ enum Commands {
         /// Market ID to fetch orderbook for
         market_id: String,
     },
+    /// Download configuration to a file
+    DownloadConfig {
+        /// Path to save the configuration file
+        #[arg(short, long)]
+        path: String,
+    },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -107,8 +115,9 @@ impl std::fmt::Display for BaseOrQuote {
 
 // Helper function to parse chain string into NamedChain
 fn parse_chain(chain_str: &str) -> Result<NamedChain> {
-    NamedChain::from_str(chain_str)
-        .with_context(|| format!("Invalid chain name: {chain_str}. Valid chains are: base-goerli or base-sepolia"))
+    NamedChain::from_str(chain_str).with_context(|| {
+        format!("Invalid chain name: {chain_str}. Valid chains are: base-goerli or base-sepolia")
+    })
 }
 
 #[tokio::main]
@@ -116,10 +125,11 @@ async fn main() -> Result<()> {
     // Load environment variables
     dotenv::from_filename(".env.anvil.local").ok();
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stdout)
+        .init();
 
     let cli = Cli::parse();
 
@@ -130,7 +140,8 @@ async fn main() -> Result<()> {
         }
         Commands::GetConfig => {
             info!("Fetching config...");
-            get_config::call_get_config(cli.url.to_string()).await?
+            let config = call_get_config(cli.url.to_string()).await?;
+            info!("Configuration: {:#?}", config);
         }
         Commands::AddMarket => {
             info!("Adding market...");
@@ -267,7 +278,9 @@ async fn main() -> Result<()> {
             {
                 Ok(balance) => balance,
                 Err(e) => {
-                    error!("Failed to get available balance for {base_chain_usdc_token_address}: {e}");
+                    error!(
+                        "Failed to get available balance for {base_chain_usdc_token_address}: {e}"
+                    );
                     error_val
                 }
             };
@@ -309,7 +322,9 @@ async fn main() -> Result<()> {
             {
                 Ok(balance) => balance,
                 Err(e) => {
-                    error!("Failed to get available balance for {quote_chain_usdc_token_address}: {e}");
+                    error!(
+                        "Failed to get available balance for {quote_chain_usdc_token_address}: {e}"
+                    );
                     error_val
                 }
             };
@@ -323,7 +338,9 @@ async fn main() -> Result<()> {
             {
                 Ok(balance) => balance,
                 Err(e) => {
-                    error!("Failed to get locked balance for {quote_chain_usdc_token_address}: {e}");
+                    error!(
+                        "Failed to get locked balance for {quote_chain_usdc_token_address}: {e}"
+                    );
                     error_val
                 }
             };
@@ -352,6 +369,9 @@ async fn main() -> Result<()> {
         Commands::GetOrderbook { market_id } => {
             info!("Getting orderbook: {market_id:?}");
             info!("TODO: Implement this");
+        }
+        Commands::DownloadConfig { path } => {
+            download_config_to_file(path).await?;
         }
     }
 

@@ -1,6 +1,7 @@
 use alloy::primitives::Uint;
 use alloy_chains::NamedChain;
-use aspens::commands::config::{add_market, add_token, deploy_contract, get_config};
+use anyhow::{Context, Result};
+use aspens::commands::config::{self, add_market, add_token, deploy_contract};
 use aspens::commands::trading::{balance, deposit, send_order, withdraw};
 use clap::{Parser, ValueEnum};
 use clap_repl::reedline::{
@@ -8,6 +9,7 @@ use clap_repl::reedline::{
 };
 use clap_repl::ClapEditor;
 use dotenv::dotenv;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -46,33 +48,42 @@ enum ReplCommand {
     },
     /// Config: Fetch the current configuration from the arborter server
     GetConfig,
-    /// Config: Add a new market to the arborter service. Requires a valid signature
+    /// Config: Download configuration to a file
+    DownloadConfig {
+        /// Path to save the configuration file
+        #[arg(short, long)]
+        path: String,
+    },
+    /// Config: Add a new market to the arborter service
     AddMarket,
-    /// Config: Add a new token to the arborter service. Requires a valid signature
+    /// Config: Add a new token to the arborter service
     AddToken {
         /// The chain network to add the token to
-        chain_network: NamedChain,
+        chain: String,
     },
     /// Deploy the trade contract onto the given chain
     DeployContract {
         /// The chain network to deploy the contract to
-        chain_network: NamedChain,
+        chain: String,
         base_or_quote: BaseOrQuote,
     },
     /// Deposit token(s) to make them available for trading
     Deposit {
-        chain: NamedChain,
+        /// The chain network to deposit to
+        chain: String,
         token: String,
         amount: u64,
     },
     /// Withdraw token(s) to a local wallet
     Withdraw {
-        chain: NamedChain,
+        /// The chain network to withdraw from
+        chain: String,
         token: String,
         amount: u64,
     },
     /// Send a BUY order
     Buy {
+        /// Amount to buy
         amount: u64,
         #[arg(short, long)]
         limit_price: Option<u64>,
@@ -81,7 +92,9 @@ enum ReplCommand {
     },
     /// Send a SELL order
     Sell {
+        /// Amount to sell
         amount: u64,
+        /// Limit price for the order
         #[arg(short, long)]
         limit_price: Option<u64>,
         #[arg(short, long)]
@@ -91,18 +104,17 @@ enum ReplCommand {
     GetOrders,
     /// Cancel an order
     CancelOrder {
-        /// You will be prompted if you don't provide it.
-        #[arg(short, long)]
-        order_id: Option<u64>,
+        /// Order ID to cancel
+        order_id: u64,
     },
     /// Fetch the balances
     Balance,
     /// Fetch the latest top of book
     GetOrderbook {
-        #[arg(short, long)]
-        market_id: Option<String>,
+        /// Market ID to fetch orderbook for
+        market_id: String,
     },
-    /// Close the session and quit
+    /// Quit the REPL
     Quit,
 }
 
@@ -127,6 +139,13 @@ enum Side {
     Buy,
     /// (offer to) sell the quote token by buying the base token
     Sell,
+}
+
+// Helper function to parse chain string into NamedChain
+fn parse_chain(chain_str: &str) -> Result<NamedChain> {
+    NamedChain::from_str(chain_str).with_context(|| {
+        format!("Invalid chain name: {chain_str}. Valid chains are: base-goerli or base-sepolia")
+    })
 }
 
 fn main() {
@@ -167,8 +186,14 @@ fn main() {
         ReplCommand::GetConfig => {
             info!("Fetching config...");
             let url = app_state.url();
-            let result = rt.block_on(get_config::call_get_config(url));
-            info!("GetConfig result: {result:?}");
+            let result = rt.block_on(config::call_get_config(url));
+            info!("GetConfig result: {result:#?}");
+        }
+        ReplCommand::DownloadConfig { path } => {
+            info!("Downloading config to file: {path}");
+            let url = app_state.url();
+            let result = rt.block_on(config::download_config_to_file(url, path));
+            info!("DownloadConfig result: {result:?}");
         }
         ReplCommand::AddMarket => {
             info!("Adding market...");
@@ -176,21 +201,21 @@ fn main() {
             let result = rt.block_on(add_market::call_add_market(url));
             info!("AddMarket result: {result:?}");
         }
-        ReplCommand::AddToken { chain_network } => {
-            info!("Adding token ___ on {chain_network:?}");
+        ReplCommand::AddToken { chain } => {
+            info!("Adding token ___ on {chain:?}");
             let url = app_state.url();
-            let result = rt.block_on(add_token::call_add_token(url, &chain_network.to_string()));
+            let result = rt.block_on(add_token::call_add_token(url, chain.as_ref()));
             info!("AddToken result: {result:?}");
         }
         ReplCommand::DeployContract {
-            chain_network,
+            chain,
             base_or_quote,
         } => {
-            info!("Deploying contract on {chain_network:?}");
+            info!("Deploying contract on {chain:?}");
             let url = app_state.url();
             let result = rt.block_on(deploy_contract::call_deploy_contract(
                 url,
-                &chain_network.to_string(),
+                chain.as_ref(),
                 &base_or_quote.to_string(),
             ));
             info!("DeployContract result: {result:?}");
@@ -200,6 +225,7 @@ fn main() {
             token,
             amount,
         } => {
+            let chain = parse_chain(&chain).unwrap();
             info!("Depositing {amount:?} {token:?} on {chain:?}");
             let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
             let base_chain_usdc_token_address =
@@ -233,6 +259,7 @@ fn main() {
             token,
             amount,
         } => {
+            let chain = parse_chain(&chain).unwrap();
             info!("Withdrawing {amount:?} {token:?} on {chain:?}");
             let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
             let base_chain_usdc_token_address =
@@ -267,7 +294,6 @@ fn main() {
             matching_order_ids: _,
         } => {
             let mut rl = Reedline::create();
-            //let buy_or_sell = read_input(&mut rl, "Do you wish to BUY or SELL? ");
             let limit_price = limit_price.unwrap_or_else(|| {
                 let price = read_input(&mut rl, "At what price? ");
                 let limit: u64 = price.parse::<u64>().unwrap();
@@ -293,7 +319,6 @@ fn main() {
             matching_order_ids: _,
         } => {
             let mut rl = Reedline::create();
-            //let buy_or_sell = read_input(&mut rl, "Do you wish to BUY or SELL? ");
             let limit_price = limit_price.unwrap_or_else(|| {
                 let price = read_input(&mut rl, "At what price? ");
                 let limit: u64 = price.parse::<u64>().unwrap();
