@@ -21,8 +21,8 @@ pub struct ConfigRequest {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TradeContract {
     /// Optional: For non-EVM chains like Hedera
-    #[prost(string, tag = "1")]
-    pub contract_id: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "1")]
+    pub contract_id: ::core::option::Option<::prost::alloc::string::String>,
     /// The chain address of the trade contract
     #[prost(string, tag = "2")]
     pub address: ::prost::alloc::string::String,

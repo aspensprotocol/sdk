@@ -32,7 +32,7 @@ message ConfigRequest {
 // Represents the trade contract details
 message TradeContract {
   // Optional: For non-EVM chains like Hedera
-  string contract_id = 1; 
+  optional string contract_id = 1; 
   // The chain address of the trade contract
   string address = 2;
 }

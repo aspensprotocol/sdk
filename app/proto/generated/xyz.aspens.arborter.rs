@@ -13,29 +13,23 @@ pub struct Order {
     /// Optional. including is a LIMIT order. excluding is a MARKET order.
     #[prost(uint64, optional, tag = "3")]
     pub price: ::core::option::Option<u64>,
-    /// The handle for this market. eg. 'm1'
-    #[prost(string, tag = "4")]
-    pub market_name: ::prost::alloc::string::String,
-    /// BASE_SYMBOL:QUOTE_SYMBOL. eg. 'WTI:USD'
-    #[prost(string, tag = "5")]
-    pub trade_symbol: ::prost::alloc::string::String,
     /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
-    #[prost(string, tag = "6")]
+    #[prost(string, tag = "4")]
     pub market_id: ::prost::alloc::string::String,
     /// User's pubkey (address)on the Base chain
-    #[prost(string, tag = "7")]
+    #[prost(string, tag = "5")]
     pub base_account_address: ::prost::alloc::string::String,
     /// User's pubkey (address)on the Quote chain
-    #[prost(string, tag = "8")]
+    #[prost(string, tag = "6")]
     pub quote_account_address: ::prost::alloc::string::String,
     /// 'DIRECT' (default) or 'DISCRETIONARY'
-    #[prost(enumeration = "ExecutionType", tag = "9")]
+    #[prost(enumeration = "ExecutionType", tag = "7")]
     pub execution_type: i32,
     /// When execution_type == 'discretionary', include order_ids to match with.
-    #[prost(uint64, repeated, tag = "10")]
+    #[prost(uint64, repeated, tag = "8")]
     pub matching_order_ids: ::prost::alloc::vec::Vec<u64>,
     /// Valid EIP-712 signature hash of this order
-    #[prost(bytes = "vec", tag = "11")]
+    #[prost(bytes = "vec", tag = "9")]
     pub signature_hash: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

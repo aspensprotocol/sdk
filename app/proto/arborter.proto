@@ -21,22 +21,18 @@ message Order {
   uint64 quantity = 2;
   // Optional. including is a LIMIT order. excluding is a MARKET order.
   optional uint64 price = 3;
-  // The handle for this market. eg. 'm1'
-  string market_name = 4;
-  // BASE_SYMBOL:QUOTE_SYMBOL. eg. 'WTI:USD'
-  string trade_symbol = 5;
   // Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
-  string market_id = 6;
+  string market_id = 4;
   // User's pubkey (address)on the Base chain
-  string base_account_address = 7;
+  string base_account_address = 5;
   // User's pubkey (address)on the Quote chain
-  string quote_account_address = 8;
+  string quote_account_address = 6;
   // 'DIRECT' (default) or 'DISCRETIONARY'
-  ExecutionType execution_type = 9;
+  ExecutionType execution_type = 7;
   // When execution_type == 'discretionary', include order_ids to match with.
-  repeated uint64 matching_order_ids = 10;
+  repeated uint64 matching_order_ids = 8;
   // Valid EIP-712 signature hash of this order
-  bytes signature_hash = 11;
+  bytes signature_hash = 9;
 }
 
 enum Side {

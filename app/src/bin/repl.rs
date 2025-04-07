@@ -1,4 +1,3 @@
-use alloy::primitives::Uint;
 use alloy_chains::NamedChain;
 use anyhow::{Context, Result};
 use aspens::commands::config::{self, add_market, add_token, deploy_contract};
@@ -8,7 +7,6 @@ use clap_repl::reedline::{
     DefaultPrompt, DefaultPromptSegment, FileBackedHistory, Reedline, Signal,
 };
 use clap_repl::ClapEditor;
-use dotenv::dotenv;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
@@ -149,7 +147,7 @@ fn parse_chain(chain_str: &str) -> Result<NamedChain> {
 }
 
 fn main() {
-    dotenv().ok();
+    dotenv::from_filename(".env.anvil.local").ok();
 
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
@@ -348,82 +346,9 @@ fn main() {
         }
         ReplCommand::Balance => {
             info!("Getting balance");
-            let error_val = Uint::from(99999);
-            let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
-            let base_chain_usdc_token_address =
-                std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
-            let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL").unwrap();
-            let quote_chain_usdc_token_address =
-                std::env::var("QUOTE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
-
-            let base_wallet_balance = rt
-                .block_on(balance::call_get_erc20_balance(
-                    NamedChain::BaseGoerli,
-                    &base_chain_rpc_url,
-                    &base_chain_usdc_token_address,
-                ))
-                .unwrap_or(error_val);
-
-            let base_available_balance = rt
-                .block_on(balance::call_get_balance(
-                    NamedChain::BaseGoerli,
-                    &base_chain_rpc_url,
-                    &base_chain_usdc_token_address,
-                ))
-                .unwrap_or(error_val);
-
-            let base_locked_balance = rt
-                .block_on(balance::call_get_locked_balance(
-                    NamedChain::BaseGoerli,
-                    &base_chain_rpc_url,
-                    &base_chain_usdc_token_address,
-                ))
-                .unwrap_or(error_val);
-
-            let quote_wallet_balance = rt
-                .block_on(balance::call_get_erc20_balance(
-                    NamedChain::BaseSepolia,
-                    &quote_chain_rpc_url,
-                    &quote_chain_usdc_token_address,
-                ))
-                .unwrap_or(error_val);
-
-            let quote_available_balance = rt
-                .block_on(balance::call_get_balance(
-                    NamedChain::BaseSepolia,
-                    &quote_chain_rpc_url,
-                    &quote_chain_usdc_token_address,
-                ))
-                .unwrap_or(error_val);
-
-            let quote_locked_balance = rt
-                .block_on(balance::call_get_locked_balance(
-                    NamedChain::BaseSepolia,
-                    &quote_chain_rpc_url,
-                    &quote_chain_usdc_token_address,
-                ))
-                .unwrap_or(error_val);
-
-            let balance_table = balance::balance_table(
-                vec!["USDC", "Base Chain", "Quote Chain"],
-                base_wallet_balance,
-                base_available_balance,
-                base_locked_balance,
-                quote_wallet_balance,
-                quote_available_balance,
-                quote_locked_balance,
-            );
-            if base_wallet_balance.eq(&error_val)
-                | base_available_balance.eq(&error_val)
-                | base_locked_balance.eq(&error_val)
-                | quote_wallet_balance.eq(&error_val)
-                | quote_available_balance.eq(&error_val)
-                | quote_locked_balance.eq(&error_val)
-            {
-                info!("** A '99999' value represents an error in fetching the actual value");
-            }
-
-            info!("\n{balance_table}");
+            rt.block_on(balance::balance(&[])).unwrap_or_else(|_| {
+                info!("Failed to get balance");
+            });
         }
         ReplCommand::GetOrderbook { market_id } => {
             info!("Getting orderbook: {market_id:?}");

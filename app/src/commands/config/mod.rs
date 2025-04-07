@@ -7,7 +7,6 @@ pub mod add_token;
 pub mod deploy_contract;
 
 use anyhow::Result;
-use clap::Parser;
 use config_pb::{Chain, Configuration, Market, Token};
 use std::fs;
 use std::path::Path;
@@ -99,43 +98,6 @@ pub async fn download_config_to_file<P: AsRef<Path>>(url: String, path: P) -> Re
     Ok(())
 }
 
-#[derive(Parser)]
-pub struct ConfigCommand {
-    #[clap(subcommand)]
-    command: ConfigSubcommand,
-}
-
-#[derive(Parser)]
-pub enum ConfigSubcommand {
-    /// Get the current configuration
-    GetConfig,
-    /// Download configuration to a file
-    DownloadConfig {
-        /// Path to save the configuration file
-        #[clap(short, long)]
-        path: String,
-    },
-}
-
-pub async fn execute_config_command(command: ConfigCommand) -> Result<()> {
-    match command.command {
-        ConfigSubcommand::GetConfig => {
-            let url = std::env::var("ARBORTER_URL")
-                .unwrap_or_else(|_| "http://0.0.0.0:50051".to_string());
-            let config = call_get_config(url).await?;
-            tracing::info!("{:#?}", config);
-            Ok(())
-        }
-        ConfigSubcommand::DownloadConfig { path } => {
-            let url = std::env::var("ARBORTER_URL")
-                .unwrap_or_else(|_| "http://0.0.0.0:50051".to_string());
-            let config = call_get_config(url).await?;
-            std::fs::write(path, serde_json::to_string_pretty(&config)?)?;
-            Ok(())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,22 +105,25 @@ mod tests {
 
     #[test]
     fn test_json_config_parsing() {
-        let config = Configuration::from_file("test/config.json").unwrap();
+        let config = Configuration::from_file("../example/config.json").unwrap();
         verify_config(&config);
     }
 
     #[test]
     fn test_toml_config_parsing() {
-        let config = Configuration::from_file("test/config.toml").unwrap();
+        let config = Configuration::from_file("../example/config.toml").unwrap();
         verify_config(&config);
     }
 
     #[tokio::test]
     async fn test_download_config_to_file() -> Result<()> {
+        let config = Configuration::from_file("../example/config.toml").unwrap();
+
+        let anvil1 = config.get_chain("anvil-1").unwrap();
         let temp_dir = tempdir()?;
         let config_path = temp_dir.path().join("config.json");
 
-        download_config_to_file(&config_path).await?;
+        download_config_to_file(anvil1.rpc_url.clone(), &config_path).await?;
 
         // Verify file exists and contains valid JSON
         let contents = fs::read_to_string(&config_path)?;

@@ -11,7 +11,6 @@ use super::{Midrib, IERC20};
 
 pub async fn balance(_args: &[String]) -> Result<()> {
     let error_val = Uint::from(99999);
-
     let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL")?;
     let base_chain_usdc_token_address = std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS")?;
     let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL")?;
@@ -85,7 +84,7 @@ pub async fn balance(_args: &[String]) -> Result<()> {
         tracing::error!("** A '99999' value represents an error in fetching the actual value");
     }
 
-    info!("{}", balance_table);
+    info!("\n{}", balance_table);
     Ok(())
 }
 

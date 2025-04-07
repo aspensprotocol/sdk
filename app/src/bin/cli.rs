@@ -1,10 +1,9 @@
-use alloy::primitives::Uint;
 use alloy_chains::NamedChain;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use std::str::FromStr;
-use tracing::{error, info};
-use tracing_subscriber::EnvFilter;
+use tracing::{info, Level};
+use tracing_subscriber::FmtSubscriber;
 use url::Url;
 
 use aspens::commands::config::{
@@ -33,6 +32,12 @@ enum Commands {
     Initialize,
     /// Config: Fetch the current configuration from the arborter server
     GetConfig,
+    /// Download configuration to a file
+    DownloadConfig {
+        /// Path to save the configuration file
+        #[arg(short, long)]
+        path: String,
+    },
     /// Config: Add a new market to the arborter service
     AddMarket,
     /// Config: Add a new token to the arborter service
@@ -66,7 +71,7 @@ enum Commands {
         amount: u64,
         /// Limit price for the order
         #[arg(short, long)]
-        limit_price: u64,
+        limit_price: Option<u64>,
     },
     /// Send a SELL order
     Sell {
@@ -74,7 +79,7 @@ enum Commands {
         amount: u64,
         /// Limit price for the order
         #[arg(short, long)]
-        limit_price: u64,
+        limit_price: Option<u64>,
     },
     /// Get a list of all active orders
     GetOrders,
@@ -89,12 +94,6 @@ enum Commands {
     GetOrderbook {
         /// Market ID to fetch orderbook for
         market_id: String,
-    },
-    /// Download configuration to a file
-    DownloadConfig {
-        /// Path to save the configuration file
-        #[arg(short, long)]
-        path: String,
     },
 }
 
@@ -125,11 +124,10 @@ async fn main() -> Result<()> {
     // Load environment variables
     dotenv::from_filename(".env.anvil.local").ok();
 
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_writer(std::io::stdout)
-        .init();
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
 
     let cli = Cli::parse();
 
@@ -226,7 +224,7 @@ async fn main() -> Result<()> {
             limit_price,
         } => {
             info!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
-            send_order::call_send_order(cli.url.to_string(), 1, amount, Some(limit_price)).await?;
+            send_order::call_send_order(cli.url.to_string(), 1, amount, limit_price).await?;
             info!("Order sent");
         }
         Commands::Sell {
@@ -234,7 +232,7 @@ async fn main() -> Result<()> {
             limit_price,
         } => {
             info!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
-            send_order::call_send_order(cli.url.to_string(), 2, amount, Some(limit_price)).await?;
+            send_order::call_send_order(cli.url.to_string(), 2, amount, limit_price).await?;
             info!("Order sent");
         }
         Commands::GetOrders => {
@@ -247,131 +245,14 @@ async fn main() -> Result<()> {
         }
         Commands::Balance => {
             info!("Getting balance");
-            let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
-            let base_chain_usdc_token_address =
-                std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
-            let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL").unwrap();
-            let quote_chain_usdc_token_address =
-                std::env::var("QUOTE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
-
-            let error_val = Uint::from(99999);
-            let base_wallet_balance = match balance::call_get_erc20_balance(
-                NamedChain::BaseGoerli,
-                &base_chain_rpc_url,
-                &base_chain_usdc_token_address,
-            )
-            .await
-            {
-                Ok(balance) => balance,
-                Err(e) => {
-                    error!("Failed to get balance for {base_chain_usdc_token_address}: {e}");
-                    error_val
-                }
-            };
-
-            let base_available_balance = match balance::call_get_balance(
-                NamedChain::BaseGoerli,
-                &base_chain_rpc_url,
-                &base_chain_usdc_token_address,
-            )
-            .await
-            {
-                Ok(balance) => balance,
-                Err(e) => {
-                    error!(
-                        "Failed to get available balance for {base_chain_usdc_token_address}: {e}"
-                    );
-                    error_val
-                }
-            };
-
-            let base_locked_balance = match balance::call_get_locked_balance(
-                NamedChain::BaseGoerli,
-                &base_chain_rpc_url,
-                &base_chain_usdc_token_address,
-            )
-            .await
-            {
-                Ok(balance) => balance,
-                Err(e) => {
-                    error!("Failed to get locked balance for {base_chain_usdc_token_address}: {e}");
-                    error_val
-                }
-            };
-
-            let quote_wallet_balance = match balance::call_get_erc20_balance(
-                NamedChain::BaseSepolia,
-                &quote_chain_rpc_url,
-                &quote_chain_usdc_token_address,
-            )
-            .await
-            {
-                Ok(balance) => balance,
-                Err(e) => {
-                    error!("Failed to get balance for {quote_chain_usdc_token_address}: {e}");
-                    error_val
-                }
-            };
-
-            let quote_available_balance = match balance::call_get_balance(
-                NamedChain::BaseSepolia,
-                &quote_chain_rpc_url,
-                &quote_chain_usdc_token_address,
-            )
-            .await
-            {
-                Ok(balance) => balance,
-                Err(e) => {
-                    error!(
-                        "Failed to get available balance for {quote_chain_usdc_token_address}: {e}"
-                    );
-                    error_val
-                }
-            };
-
-            let quote_locked_balance = match balance::call_get_locked_balance(
-                NamedChain::BaseSepolia,
-                &quote_chain_rpc_url,
-                &quote_chain_usdc_token_address,
-            )
-            .await
-            {
-                Ok(balance) => balance,
-                Err(e) => {
-                    error!(
-                        "Failed to get locked balance for {quote_chain_usdc_token_address}: {e}"
-                    );
-                    error_val
-                }
-            };
-
-            let balance_table = balance::balance_table(
-                vec!["USDC", "Base Chain", "Quote Chain"],
-                base_wallet_balance,
-                base_available_balance,
-                base_locked_balance,
-                quote_wallet_balance,
-                quote_available_balance,
-                quote_locked_balance,
-            );
-            if base_wallet_balance.eq(&error_val)
-                | base_available_balance.eq(&error_val)
-                | base_locked_balance.eq(&error_val)
-                | quote_wallet_balance.eq(&error_val)
-                | quote_available_balance.eq(&error_val)
-                | quote_locked_balance.eq(&error_val)
-            {
-                info!("** A '99999' value represents an error in fetching the actual value");
-            }
-
-            info!("\n{balance_table}");
+            balance::balance(&[]).await?;
         }
         Commands::GetOrderbook { market_id } => {
             info!("Getting orderbook: {market_id:?}");
             info!("TODO: Implement this");
         }
         Commands::DownloadConfig { path } => {
-            download_config_to_file(path).await?;
+            download_config_to_file(cli.url.to_string(), path).await?;
         }
     }
 

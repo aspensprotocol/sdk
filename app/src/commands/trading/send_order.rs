@@ -7,7 +7,6 @@ use std::fmt;
 
 use alloy::primitives::PrimitiveSignature;
 use alloy::signers::{local::PrivateKeySigner, Signer};
-//use alloy_signer_local::PrivateKeySigner;
 use anyhow::Result;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{Order, SendOrderReply};
@@ -17,12 +16,10 @@ impl fmt::Display for Order {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Order {{\n  side: {},\n  quantity: {},\n  price: {},\n  market_name: {},\n  trade_symbol: {},\n  market_id: {},\n  base_account_address: {},\n  quote_account_address: {},\n  execution_type: {},\n  matching_order_ids: {:?},\n  signature_hash: {}\n}}",
+            "Order {{\n  side: {},\n  quantity: {},\n  price: {},\n  market_id: {},\n  base_account_address: {},\n  quote_account_address: {},\n  execution_type: {},\n  matching_order_ids: {:?},\n  signature_hash: {}\n}}",
             self.side,
             self.quantity,
             self.price.map_or("None".to_string(), |p| p.to_string()),
-            self.market_name,
-            self.trade_symbol,
             self.market_id,
             self.base_account_address,
             self.quote_account_address,
@@ -70,9 +67,7 @@ pub async fn call_send_order(
         side,
         quantity,
         price,
-        market_name: "not-considered".to_owned(),
-        trade_symbol: "not-considered".to_owned(),
-        market_id: env::var("MARKET_ID")?,
+        market_id: env::var("MARKET_ID_1")?,
         base_account_address: env::var("EVM_TESTNET_PUBKEY")?,
         quote_account_address: env::var("EVM_TESTNET_PUBKEY")?,
         execution_type: 0,

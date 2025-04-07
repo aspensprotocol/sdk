@@ -39,30 +39,29 @@ Interactive mode provides a REPL (Read-Eval-Print Loop) interface where you can 
 cargo run --bin aspens-cli repl
 
 aspens> help
-Available commands:
-  balance - Check your token balances
-  deposit - Deposit tokens for trading
-  send-order - Send an order to the market
-  withdraw - Withdraw tokens to your wallet
+Usage: <COMMAND>
 
-aspens> send-order buy 100 50
-Response received: SendOrderReply {
-  order_in_book: true,
-  order: Order {
-    side: 1,
-    quantity: 100,
-    price: 50,
-    ...
-  },
-  trades: []
-}
+Commands:
+  initialize       Initialize a new trading session by (optionally) defining the arborter URL
+  get-config       Config: Fetch the current configuration from the arborter server
+  download-config  Config: Download configuration to a file
+  add-market       Config: Add a new market to the arborter service
+  add-token        Config: Add a new token to the arborter service
+  deploy-contract  Deploy the trade contract onto the given chain
+  deposit          Deposit token(s) to make them available for trading
+  withdraw         Withdraw token(s) to a local wallet
+  buy              Send a BUY order
+  sell             Send a SELL order
+  get-orders       Get a list of all active orders
+  cancel-order     Cancel an order
+  balance          Fetch the balances
+  get-orderbook    Fetch the latest top of book
+  quit             Quit the REPL
+  help             Print this message or the help of the given subcommand(s)
 
-aspens> balance
-Token Balances:
-  USDC:
-    Base Sepolia: 1000 (Available: 900, Locked: 100)
-    Optimism Sepolia: 2000 (Available: 1800, Locked: 200)
-
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
 aspens> quit
 ```
 
@@ -186,7 +185,7 @@ After creating tokens, you can use them with the CLI:
 
 ```bash
 # Start the CLI
-cargo run --bin aspens-cli repl
+cargo run --bin aspens-repl
 
 # Initialize with local Anvil
 aspens> initialize http://localhost:50051
@@ -202,8 +201,6 @@ aspens> send-order --market-id <chain_id>::<token1>::<chain_id>::<token2> --side
 
 When you're done testing:
 ```bash
-aspens> quit
-
 # Stop Anvil instances
 just stop-anvil
 
