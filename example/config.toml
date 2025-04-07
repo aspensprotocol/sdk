@@ -32,6 +32,7 @@ service_address = "0x8464135c8F25Da09e49BC8782676a84730C318bC"
 
 [chains.trade_contract]
 address = "0x8398bCD4f633C72939F9043dB78c574A91C99c0A"
+contract_id = "0x0"
 
 [chains.tokens.USDC]
 name = "USD Coin"

@@ -33,7 +33,8 @@
         "rpc_url": "http://localhost:8545",
         "service_address": "0x8464135c8F25Da09e49BC8782676a84730C318bC",
         "trade_contract": {
-          "address": "0x8398bCD4f633C72939F9043dB78c574A91C99c0A"
+          "address": "0x8398bCD4f633C72939F9043dB78c574A91C99c0A",
+          "contact_id": "0x0"
         },
         "tokens": {
           "USDC": {
