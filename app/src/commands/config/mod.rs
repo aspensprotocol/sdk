@@ -2,8 +2,6 @@ pub mod config_pb {
     include!("../../../proto/generated/xyz.aspens.arborter_config.rs");
 }
 
-pub mod add_market;
-pub mod add_token;
 pub mod deploy_contract;
 
 use anyhow::Result;

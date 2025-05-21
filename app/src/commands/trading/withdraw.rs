@@ -6,7 +6,7 @@ use alloy_chains::NamedChain;
 use anyhow::Result;
 use url::Url;
 
-use super::Midrib;
+use super::MidribV2;
 
 pub async fn call_withdraw(
     chain: NamedChain,
@@ -34,10 +34,10 @@ pub async fn call_withdraw(
     let provider = ProviderBuilder::new()
         .with_chain(chain)
         .wallet(wallet)
-        .on_http(rpc_url);
+        .connect_http(rpc_url);
 
     // Get an instance of the contract
-    let contract = Midrib::new(contract_address, &provider);
+    let contract = MidribV2::new(contract_address, &provider);
 
     // Call the contract function
     let result = contract

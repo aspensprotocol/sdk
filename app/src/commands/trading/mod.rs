@@ -1,10 +1,12 @@
 use alloy_sol_types::sol;
 
-sol! {
+sol!(
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     #[sol(rpc)]
-    Midrib,
-    "../artifacts/Midrib.json"
-}
+    MidribV2,
+    "artifacts/MidribV2.json"
+);
 
 sol! {
     #[sol(abi, rpc)]

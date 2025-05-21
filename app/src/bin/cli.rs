@@ -6,9 +6,7 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use url::Url;
 
-use aspens::commands::config::{
-    add_market, add_token, call_get_config, deploy_contract, download_config_to_file,
-};
+use aspens::commands::config::{call_get_config, download_config_to_file};
 use aspens::commands::trading::{balance, deposit, send_order, withdraw};
 
 #[derive(Debug, Parser)]
@@ -37,19 +35,6 @@ enum Commands {
         /// Path to save the configuration file
         #[arg(short, long)]
         path: String,
-    },
-    /// Config: Add a new market to the arborter service
-    AddMarket,
-    /// Config: Add a new token to the arborter service
-    AddToken {
-        /// The chain network to add the token to
-        chain: String,
-    },
-    /// Deploy the trade contract onto the given chain
-    DeployContract {
-        /// The chain network to deploy the contract to
-        chain: String,
-        base_or_quote: BaseOrQuote,
     },
     /// Deposit token(s) to make them available for trading
     Deposit {
@@ -140,28 +125,6 @@ async fn main() -> Result<()> {
             info!("Fetching config...");
             let config = call_get_config(cli.url.to_string()).await?;
             info!("Configuration: {:#?}", config);
-        }
-        Commands::AddMarket => {
-            info!("Adding market...");
-            add_market::call_add_market(cli.url.to_string()).await?
-        }
-        Commands::AddToken { chain } => {
-            let chain = parse_chain(&chain)?;
-            info!("Adding token ___ on {chain:?}");
-            add_token::call_add_token(cli.url.to_string(), chain.as_ref()).await?
-        }
-        Commands::DeployContract {
-            chain,
-            base_or_quote,
-        } => {
-            let chain = parse_chain(&chain)?;
-            info!("Deploying contract on {chain:?}");
-            deploy_contract::call_deploy_contract(
-                cli.url.to_string(),
-                chain.as_ref(),
-                &base_or_quote.to_string(),
-            )
-            .await?
         }
         Commands::Deposit {
             chain,
