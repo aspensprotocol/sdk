@@ -7,7 +7,7 @@ use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
 use tracing::info;
 use url::Url;
 
-use super::{Midrib, IERC20};
+use super::{MidribV2, IERC20};
 
 pub async fn balance(_args: &[String]) -> Result<()> {
     let error_val = Uint::from(99999);
@@ -109,17 +109,18 @@ pub async fn call_get_balance(
 
     let rpc_url = Url::parse(rpc_url)?;
     // Set up the provider
-    let provider = ProviderBuilder::new().with_chain(chain).on_http(rpc_url);
+    let provider = ProviderBuilder::new()
+        .with_chain(chain)
+        .connect_http(rpc_url);
 
     // Get an instance of the contract
-    let contract = Midrib::new(contract_addr, &provider);
+    let contract = MidribV2::new(contract_addr, &provider);
 
     // Call the contract function
     let result = contract
         .getBalance(depositer_address, token_addr)
         .call()
-        .await?
-        ._0;
+        .await?;
 
     Ok(result)
 }
@@ -145,17 +146,16 @@ pub async fn call_get_locked_balance(
 
     let rpc_url = Url::parse(rpc_url)?;
     // Set up the provider
-    let provider = ProviderBuilder::new().on_http(rpc_url);
+    let provider = ProviderBuilder::new().connect_http(rpc_url);
 
     // Get an instance of the contract
-    let contract = Midrib::new(contract_addr, &provider);
+    let contract = MidribV2::new(contract_addr, &provider);
 
     // Call the contract function
     let result = contract
         .getLockedBalance(depositer_address, token_addr)
         .call()
-        .await?
-        ._0;
+        .await?;
 
     Ok(result)
 }
@@ -171,11 +171,13 @@ pub async fn call_get_erc20_balance(
 
     let rpc_url = Url::parse(rpc_url)?;
     // Set up the provider
-    let provider = ProviderBuilder::new().with_chain(chain).on_http(rpc_url);
+    let provider = ProviderBuilder::new()
+        .with_chain(chain)
+        .connect_http(rpc_url);
 
     // Get an instance of the contract
     let contract = IERC20::new(token_addr, &provider);
-    let result = contract.balanceOf(depositer_address).call().await?._0;
+    let result = contract.balanceOf(depositer_address).call().await?;
 
     Ok(result)
 }

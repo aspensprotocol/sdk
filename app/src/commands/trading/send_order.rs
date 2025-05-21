@@ -5,7 +5,7 @@ pub mod arborter_pb {
 use std::env;
 use std::fmt;
 
-use alloy::primitives::PrimitiveSignature;
+use alloy::primitives::Signature;
 use alloy::signers::{local::PrivateKeySigner, Signer};
 use anyhow::Result;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
@@ -95,7 +95,7 @@ pub async fn call_send_order(
     Ok(())
 }
 
-async fn sign_transaction(msg_bytes: &[u8]) -> Result<PrimitiveSignature> {
+async fn sign_transaction(msg_bytes: &[u8]) -> Result<Signature> {
     let signer = env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
     let signature = signer.sign_message(msg_bytes).await?;
     Ok(signature)

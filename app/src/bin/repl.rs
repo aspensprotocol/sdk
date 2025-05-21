@@ -1,6 +1,6 @@
 use alloy_chains::NamedChain;
 use anyhow::{Context, Result};
-use aspens::commands::config::{self, add_market, add_token, deploy_contract};
+use aspens::commands::config::{self, config_pb};
 use aspens::commands::trading::{balance, deposit, send_order, withdraw};
 use clap::{Parser, ValueEnum};
 use clap_repl::reedline::{
@@ -15,12 +15,14 @@ use url::Url;
 
 struct AppState {
     url: Arc<Mutex<Url>>,
+    config: Arc<Mutex<Option<config_pb::Configuration>>>,
 }
 
 impl AppState {
     fn new() -> Self {
         Self {
             url: Arc::new(Mutex::new(Url::parse("http://0.0.0.0:50051").unwrap())),
+            config: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -32,6 +34,16 @@ impl AppState {
     fn url(&self) -> String {
         let guard = self.url.lock().unwrap();
         guard.to_string()
+    }
+
+    fn update_config(&self, config: config_pb::Configuration) {
+        let mut guard = self.config.lock().unwrap();
+        *guard = Some(config);
+    }
+
+    fn get_config(&self) -> Option<config_pb::Configuration> {
+        let guard = self.config.lock().unwrap();
+        guard.clone()
     }
 }
 
@@ -51,19 +63,6 @@ enum ReplCommand {
         /// Path to save the configuration file
         #[arg(short, long)]
         path: String,
-    },
-    /// Config: Add a new market to the arborter service
-    AddMarket,
-    /// Config: Add a new token to the arborter service
-    AddToken {
-        /// The chain network to add the token to
-        chain: String,
-    },
-    /// Deploy the trade contract onto the given chain
-    DeployContract {
-        /// The chain network to deploy the contract to
-        chain: String,
-        base_or_quote: BaseOrQuote,
     },
     /// Deposit token(s) to make them available for trading
     Deposit {
@@ -185,38 +184,21 @@ fn main() {
             info!("Fetching config...");
             let url = app_state.url();
             let result = rt.block_on(config::call_get_config(url));
-            info!("GetConfig result: {result:#?}");
+            match result {
+                Ok(config) => {
+                    app_state.update_config(config.clone());
+                    info!("GetConfig result: {config:#?}");
+                }
+                Err(e) => {
+                    info!("Failed to get config: {e:?}");
+                }
+            }
         }
         ReplCommand::DownloadConfig { path } => {
             info!("Downloading config to file: {path}");
             let url = app_state.url();
             let result = rt.block_on(config::download_config_to_file(url, path));
             info!("DownloadConfig result: {result:?}");
-        }
-        ReplCommand::AddMarket => {
-            info!("Adding market...");
-            let url = app_state.url();
-            let result = rt.block_on(add_market::call_add_market(url));
-            info!("AddMarket result: {result:?}");
-        }
-        ReplCommand::AddToken { chain } => {
-            info!("Adding token ___ on {chain:?}");
-            let url = app_state.url();
-            let result = rt.block_on(add_token::call_add_token(url, chain.as_ref()));
-            info!("AddToken result: {result:?}");
-        }
-        ReplCommand::DeployContract {
-            chain,
-            base_or_quote,
-        } => {
-            info!("Deploying contract on {chain:?}");
-            let url = app_state.url();
-            let result = rt.block_on(deploy_contract::call_deploy_contract(
-                url,
-                chain.as_ref(),
-                &base_or_quote.to_string(),
-            ));
-            info!("DeployContract result: {result:?}");
         }
         ReplCommand::Deposit {
             chain,

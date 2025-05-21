@@ -8,7 +8,7 @@ use alloy_chains::NamedChain;
 use anyhow::Result;
 use url::Url;
 
-use super::{Midrib, IERC20};
+use super::{MidribV2, IERC20};
 
 pub async fn call_deposit(
     chain: NamedChain,
@@ -39,18 +39,17 @@ pub async fn call_deposit(
     let provider = ProviderBuilder::new()
         .with_chain(chain)
         .wallet(wallet)
-        .on_http(rpc_url);
+        .connect_http(rpc_url);
 
     // Get an instance of the contract
-    let contract = Midrib::new(contract_address, &provider);
+    let contract = MidribV2::new(contract_address, &provider);
 
     let erc20 = IERC20::new(token_addr, &provider);
     // Get the allowance
     let allowance_result = erc20
         .allowance(signer_address, signer_address)
         .call()
-        .await?
-        ._0;
+        .await?;
 
     tracing::info!("Get allowance result: {allowance_result:?}");
 
