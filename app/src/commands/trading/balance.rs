@@ -10,7 +10,6 @@ use url::Url;
 use super::{MidribV2, IERC20};
 
 pub async fn balance(_args: &[String]) -> Result<()> {
-    let error_val = Uint::from(99999);
     let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL")?;
     let base_chain_usdc_token_address = std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS")?;
     let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL")?;
@@ -22,7 +21,7 @@ pub async fn balance(_args: &[String]) -> Result<()> {
         base_chain_usdc_token_address.as_str(),
     )
     .await
-    .unwrap_or(error_val);
+    .map_or("error".to_string(), |v| v.to_string());
 
     let base_available_balance = call_get_balance(
         NamedChain::BaseGoerli,
@@ -30,7 +29,7 @@ pub async fn balance(_args: &[String]) -> Result<()> {
         base_chain_usdc_token_address.as_str(),
     )
     .await
-    .unwrap_or(error_val);
+    .map_or("error".to_string(), |v| v.to_string());
 
     let base_locked_balance = call_get_locked_balance(
         NamedChain::BaseGoerli,
@@ -38,7 +37,7 @@ pub async fn balance(_args: &[String]) -> Result<()> {
         base_chain_usdc_token_address.as_str(),
     )
     .await
-    .unwrap_or(error_val);
+    .map_or("error".to_string(), |v| v.to_string());
 
     let quote_wallet_balance = call_get_erc20_balance(
         NamedChain::BaseSepolia,
@@ -46,7 +45,7 @@ pub async fn balance(_args: &[String]) -> Result<()> {
         quote_chain_usdc_token_address.as_str(),
     )
     .await
-    .unwrap_or(error_val);
+    .map_or("error".to_string(), |v| v.to_string());
 
     let quote_available_balance = call_get_balance(
         NamedChain::BaseSepolia,
@@ -54,7 +53,7 @@ pub async fn balance(_args: &[String]) -> Result<()> {
         quote_chain_usdc_token_address.as_str(),
     )
     .await
-    .unwrap_or(error_val);
+    .map_or("error".to_string(), |v| v.to_string());
 
     let quote_locked_balance = call_get_locked_balance(
         NamedChain::BaseSepolia,
@@ -62,27 +61,17 @@ pub async fn balance(_args: &[String]) -> Result<()> {
         quote_chain_usdc_token_address.as_str(),
     )
     .await
-    .unwrap_or(error_val);
+    .map_or("error".to_string(), |v| v.to_string());
 
     let balance_table = balance_table(
         vec!["USDC", "Base Chain", "Quote Chain"],
-        base_wallet_balance,
-        base_available_balance,
-        base_locked_balance,
-        quote_wallet_balance,
-        quote_available_balance,
-        quote_locked_balance,
+        &base_wallet_balance,
+        &base_available_balance,
+        &base_locked_balance,
+        &quote_wallet_balance,
+        &quote_available_balance,
+        &quote_locked_balance,
     );
-
-    if quote_wallet_balance.eq(&error_val)
-        | quote_available_balance.eq(&error_val)
-        | quote_locked_balance.eq(&error_val)
-        | base_wallet_balance.eq(&error_val)
-        | base_available_balance.eq(&error_val)
-        | base_locked_balance.eq(&error_val)
-    {
-        tracing::error!("** A '99999' value represents an error in fetching the actual value");
-    }
 
     info!("\n{}", balance_table);
     Ok(())
@@ -184,12 +173,12 @@ pub async fn call_get_erc20_balance(
 
 pub fn balance_table(
     header: Vec<&str>,
-    base_wallet_bal: Uint<256, 4>,
-    base_available_bal: Uint<256, 4>,
-    base_locked_bal: Uint<256, 4>,
-    quote_wallet_bal: Uint<256, 4>,
-    quote_available_bal: Uint<256, 4>,
-    quote_locked_bal: Uint<256, 4>,
+    base_wallet_bal: &str,
+    base_available_bal: &str,
+    base_locked_bal: &str,
+    quote_wallet_bal: &str,
+    quote_available_bal: &str,
+    quote_locked_bal: &str,
 ) -> Table {
     let mut table = Table::new();
 
@@ -198,18 +187,18 @@ pub fn balance_table(
         .set_header(header)
         .add_row(vec![
             "Wallet Balance",
-            &format!("{base_wallet_bal}"),
-            &format!("{quote_wallet_bal}"),
+            base_wallet_bal,
+            quote_wallet_bal,
         ])
         .add_row(vec![
             "Available Balance",
-            &format!("{base_available_bal:?}"),
-            &format!("{quote_available_bal:?}"),
+            base_available_bal,
+            quote_available_bal,
         ])
         .add_row(vec![
             "Locked Balance",
-            &format!("{base_locked_bal:?}"),
-            &format!("{quote_locked_bal:?}"),
+            base_locked_bal,
+            quote_locked_bal,
         ]);
 
     table

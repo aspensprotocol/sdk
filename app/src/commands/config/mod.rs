@@ -2,8 +2,6 @@ pub mod config_pb {
     include!("../../../proto/generated/xyz.aspens.arborter_config.rs");
 }
 
-pub mod deploy_contract;
-
 use anyhow::Result;
 use config_pb::{Chain, Configuration, Market, Token};
 use std::fs;
