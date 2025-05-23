@@ -1,6 +1,6 @@
 # Apsens CLI
  
-a REPL style CLI to interact with an Aspens Markets Stack
+a REPL / CLI to interact with an Aspens Markets Stack
 
 ## Prerequisites
 
@@ -10,14 +10,7 @@ a REPL style CLI to interact with an Aspens Markets Stack
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-2. Install Foundry (for local development):
-```bash
-# Install Foundry
-curl -L https://foundry.paradigm.xyz | bash
-foundryup
-```
-
-3. Set up environment variables:
+2. Set up environment variables:
 ```bash
 # Copy the .env sample 
 cp app/.env.sample app/.env
@@ -28,7 +21,7 @@ source app/.env
 
 ## Usage
 
-The CLI can be used in two modes: interactive and scripted.
+The CLI can be used two ways: interactive and scripted.
 
 ### Interactive Mode
 
@@ -45,9 +38,6 @@ Commands:
   initialize       Initialize a new trading session by (optionally) defining the arborter URL
   get-config       Config: Fetch the current configuration from the arborter server
   download-config  Config: Download configuration to a file
-  add-market       Config: Add a new market to the arborter service
-  add-token        Config: Add a new token to the arborter service
-  deploy-contract  Deploy the trade contract onto the given chain
   deposit          Deposit token(s) to make them available for trading
   withdraw         Withdraw token(s) to a local wallet
   buy              Send a BUY order
@@ -70,140 +60,22 @@ aspens> quit
 Scripted mode allows you to execute commands directly from the command line, which is useful for automation and scripting:
 
 ```bash
-# Send a buy order
-cargo run --bin aspens-cli buy --amount 100 --limit-price 50
+❯ cargo run --bin aspens-cli
+Aspens CLI for trading operations
 
-# Check balances
-cargo run --bin aspens-cli balance
+Usage: aspens-cli [OPTIONS] <COMMAND>
 
-# Deposit tokens
-cargo run --bin aspens-cli deposit --chain base-sepolia --token USDC --amount 1000
-
-# Withdraw tokens
-cargo run --bin aspens-cli withdraw --chain optimism-sepolia --token USDC --amount 500
-```
-
-### Available Commands
-
-### Configuration Commands
-- `initialize` - Initialize a new trading session
-- `get-config` - Fetch the current configuration from the arborter server
-- `download-config` - Download the current configuration to a JSON file
-- `add-market` - Add a new market to the arborter service
-- `add-token` - Add a new token to the arborter service
-- `deploy-contract` - Deploy the trade contract onto a given chain
-
-### Trading Commands
-- `deposit` - Deposit token(s) to make them available for trading
-- `withdraw` - Withdraw token(s) to a local wallet
-- `buy` - Send a BUY order
-- `sell` - Send a SELL order
-- `get-orders` - Get a list of all active orders
-- `cancel-order` - Cancel an order
-- `balance` - Fetch the balances
-- `get-orderbook` - Fetch the latest top of book
-
-### REPL Commands
-The REPL interface provides the same commands as above, but with a more interactive experience:
-- `initialize` - Initialize a new trading session
-- `get-config` - Fetch the current configuration
-- `add-market` - Add a new market
-- `add-token` - Add a new token
-- `deploy-contract` - Deploy the trade contract
-- `deposit` - Deposit tokens
-- `withdraw` - Withdraw tokens
-- `buy` - Send a BUY order
-- `sell` - Send a SELL order
-- `get-orders` - Get active orders
-- `cancel-order` - Cancel an order
-- `balance` - Fetch balances
-- `get-orderbook` - Fetch orderbook
-- `quit` - Close the session and quit
-
-### REPL Mode
-```bash
-# Start the REPL
-cargo run --bin aspens-repl
-
-# Available commands in REPL mode:
-initialize
-get-config
-download-config --path <path>
-add-market
-add-token --chain <chain_network>
-deploy-contract --chain <chain_network> --base-or-quote <base|quote>
-deposit --chain <chain_network> --token <token_symbol> --amount <amount>
-withdraw --chain <chain_network> --token <token_symbol> --amount <amount>
-buy --amount <amount> --limit-price <price>
-sell --amount <amount> --limit-price <price>
-get-orders
-cancel-order --order-id <order_id>
-balance
-get-orderbook --market-id <market_id>
-quit
-```
-
-## Local Development with Anvil
-
-For local development and testing, you can use Anvil (part of Foundry) to create a local blockchain environment.
-
-### Setting up the Environment
-
-```bash
-# Set up Anvil and deploy test tokens
-just setup-anvil-full
-
-# This will:
-# - Start two Anvil instances (ports 8545 and 8546)
-# - Deploy USDC and WBTC on the first chain
-# - Deploy USDT on the second chain
-# - Mint initial tokens to test accounts
-```
-
-### Creating Custom Tokens
-
-You can create custom ERC20 tokens for testing using the `create-token` command:
-
-```bash
-# Create a token with default 18 decimals
-just create-token BTC
-
-# Create a token with custom decimals (e.g., 8 decimals like BTC)
-just create-token BTC 8
-```
-
-The command will:
-- Deploy a new ERC20 token to your local Anvil instance
-- Set the token name and symbol
-- Configure the number of decimal places
-- Mint 1,000,000 tokens to the deployer
-- Display the token details (name, symbol, address, decimals)
-
-### Testing with Local Tokens
-
-After creating tokens, you can use them with the CLI:
-
-```bash
-# Start the CLI
-cargo run --bin aspens-repl
-
-# Initialize with local Anvil
-aspens> initialize http://localhost:50051
-
-# Check balances
-aspens> balance
-
-# Place orders using the token addresses from the deployment output
-aspens> send-order --market-id <chain_id>::<token1>::<chain_id>::<token2> --side buy --amount 100000000 --price 100
-```
-
-### Cleanup
-
-When you're done testing:
-```bash
-# Stop Anvil instances
-just stop-anvil
-
-# Clean up build artifacts
-just clean
+Commands:
+  initialize       Initialize a new trading session
+  get-config       Config: Fetch the current configuration from the arborter server
+  download-config  Download configuration to a file
+  deposit          Deposit token(s) to make them available for trading
+  withdraw         Withdraw token(s) to a local wallet
+  buy              Send a BUY order
+  sell             Send a SELL order
+  get-orders       Get a list of all active orders
+  cancel-order     Cancel an order
+  balance          Fetch the balances
+  get-orderbook    Fetch the latest top of book
+  help             Print this message or the help of the given subcommand(s)
 ```

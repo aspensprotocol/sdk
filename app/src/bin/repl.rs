@@ -187,7 +187,8 @@ fn main() {
             match result {
                 Ok(config) => {
                     app_state.update_config(config.clone());
-                    info!("GetConfig result: {config:#?}");
+                    let updated_config = app_state.get_config();
+                    info!("GetConfig result: {updated_config:#?}");
                 }
                 Err(e) => {
                     info!("Failed to get config: {e:?}");
