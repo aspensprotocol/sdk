@@ -1,40 +1,126 @@
 syntax = "proto3";
 
-package xyz.aspens.arborter_config;
+package xyz.aspens.arborter_config.v1;
 
 option optimize_for = SPEED;
 
 // The Configuration service definition
 service ConfigService {
   // rpc service to deploy a contract on the base and quote chains
-  rpc DeployContract(DeployContractRequest) returns (DeployContractReply) {}
+  rpc DeployContract(DeployContractRequest) returns (DeployContractResponse) {}
+  // rpc service to add a chain to the configuration
+  rpc AddChain(AddChainRequest) returns (AddChainResponse) {}
+  // rpc service to add a new token to trade
+  rpc AddToken(AddTokenRequest) returns (AddTokenResponse) {}
   // rpc service to add a new market to trade
-  rpc AddToken(AddTokenRequest) returns (Configuration);
-  // rpc service to add a new market to trade
-  rpc AddMarket(Market) returns (AddMarketReply);
+  rpc AddMarket(AddMarketRequest) returns (AddMarketResponse) {}
+  // rpc service to add a new trade contract
+  rpc AddTradeContract(AddTradeContractRequest) returns (AddTradeContractResponse) {}
   // rpc service to get the configuration
-  rpc GetConfig (ConfigRequest) returns (Configuration);
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse) {}
+  // rpc service to get version information
+  rpc GetVersion(Empty) returns (VersionInfo) {}
+}
+
+message DeployContractRequest {
+  // The name of the chain to deploy the contract on. e.g. base-sepolia
+  string chain_network = 1;
+  // designate whether to deploy the contract on the base or quote chain
+  string base_or_quote = 2;
+}
+
+message DeployContractResponse {
+  // The address that the contract is deployed to on the base chain.
+  string base_address = 1;
+  // The address that the contract is deployed to on the quote chain.
+  string quote_address = 2;
+}
+
+message AddChainRequest {
+  // The chain to add
+  Chain chain = 1;
+}
+
+message AddChainResponse {
+  // Indicates if the chain was added successfully
+  bool success = 1;
+  // The configuration object
+  Configuration config = 2;
+}
+
+message AddTokenRequest {
+  // The name of the chain to add the token to. e.g. base-sepolia
+  string chain_network = 1;
+  // The token to ad
+  Token token = 2;
+}
+
+message AddTokenResponse {
+  // Indicates if the token was added successfully
+  bool success = 1;
+  // The configuration object
+  Configuration config = 2;
+}
+
+message AddMarketRequest {
+  // The base chain network
+  string base_chain_network = 1;
+  // The quote chain network
+  string quote_chain_network = 2;
+  // The base chain token symbol
+  string base_chain_token_symbol = 3;
+  // The quote chain token symbol
+  string quote_chain_token_symbol = 4;
+}
+
+message AddMarketResponse {
+  // Indicates if the market was added successfully
+  bool success = 1;
+  // The configuration object
+  Configuration config = 2;
+}
+
+message AddTradeContractRequest {
+  // The chain address of the trade contract
+  string address = 1;
+  // The chain ID to associate the trade contract with
+  int32 chain_id = 2;
+}
+
+message AddTradeContractResponse {
+  // The created trade contract
+  TradeContract trade_contract = 1;
+}
+
+// Request message for the service
+message GetConfigRequest {
+  // Add optional filters in the future (e.g., chain or market name)
+}
+message GetConfigResponse {
+  // The configuration object
+  Configuration config = 1;
 }
 
 // The top-level response containing chains and markets
 message Configuration {
   // List of supported chains
-  repeated Chain chains = 3;
+  repeated Chain chains = 1;
   // List of supported markets
-  repeated Market markets = 4;
-}
-
-// Request message for the service
-message ConfigRequest {
-  // Add optional filters in the future (e.g., chain or market name)
+  repeated Market markets = 2;
 }
 
 // Represents the trade contract details
 message TradeContract {
-  // Optional: For non-EVM chains like Hedera
-  optional string contract_id = 1; 
+  // Optional: For non-EVM chains like Hedera, Solana, etc.
+  optional string contract_id = 1;
   // The chain address of the trade contract
   string address = 2;
+}
+
+enum BaseOrQuote {
+  BASE_OR_QUOTE_UNSPECIFIED = 0;
+  BASE_OR_QUOTE_BASE = 1;
+  BASE_OR_QUOTE_QUOTE = 2;
 }
 
 // Represents a single blockchain network
@@ -58,7 +144,9 @@ message Chain {
   // The trade contract details
   TradeContract trade_contract = 9;
   // Mapping of token symbols to token details
-  map<string, Token> tokens = 10; 
+  map<string, Token> tokens = 10;
+  // Declare whether this chain should act as the base or quote side of the trading pairs
+  BaseOrQuote base_or_quote = 11;
 }
 
 // Represents a market with a base- and quote- chain token pair
@@ -79,29 +167,6 @@ message Market {
   optional string market_id = 7;
 }
 
-message DeployContractRequest { 
-  // The name of the chain to deploy the contract on. e.g. base-sepolia
-  string chain_network = 1;
-  // designate whether to deploy the contract on the base or quote chain
-  string base_or_quote = 2;
-}
-
-/* rpc: DeployContract */
-message DeployContractReply {
-  // The address that the contract is deployed to on the base chain.
-  string base_address = 1;
-  // The address that the contract is deployed to on the quote chain.
-  string quote_address = 2;
-}
-
-// Define the message structure for AddMarketReply
-message AddMarketReply {
-  // Indicates if the market was added successfully
-  bool success = 1;       
-  // Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
-  string market_id = 2;     
-}
-
 // Represents a single token
 message Token {
   // The name of the token
@@ -111,14 +176,31 @@ message Token {
   // The chain address of the token contract
   string address = 3;
   // Optional: for networks that use IDs (e.g., Hedera)
-  optional string token_id = 4; 
+  optional string token_id = 4;
   // The number of decimal places the token use's
   int32 decimals = 5;
 }
 
-message AddTokenRequest {
-  // The name of the chain to add the token to. e.g. base-sepolia
-  string chain_network = 1;
-  // The token to ad
-  Token token = 2;
+// Empty message for requests that don't need parameters
+message Empty {}
+
+// Version information in vergen style
+message VersionInfo {
+  // The version of the application (e.g., "1.0.0")
+  string version = 1;
+  // The git commit hash
+  string git_commit_hash = 2;
+  // The git commit date
+  string git_commit_date = 3;
+  // The git branch name
+  string git_branch = 4;
+  // The build timestamp
+  string build_timestamp = 5;
+  // The target triple
+  string target_triple = 6;
+  // The rustc version used to build
+  string rustc_version = 7;
+  // The cargo features enabled
+  repeated string cargo_features = 8;
 }
+
