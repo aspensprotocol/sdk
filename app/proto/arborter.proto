@@ -1,19 +1,40 @@
 syntax = "proto3";
 
-package xyz.aspens.arborter;
+package xyz.aspens.arborter.v1;
 
 option optimize_for = SPEED;
 
 service ArborterService {
-  rpc SendOrder(Order) returns (SendOrderReply) {}
-  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderReply) {}
+  rpc SendOrder(SendOrderRequest) returns (SendOrderResponse) {}
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {}
   rpc GetRecentTrades(Empty) returns (stream Trade) {}
-  rpc Orderbook (OrderbookRequest) returns (stream OrderbookEntry);
+  rpc Orderbook(OrderbookRequest) returns (stream OrderbookEntry) {}
 }
 
 message Empty {}
 
-/* rpc: SendOrder */
+message CancelOrderRequest {
+  OrderToCancel order = 1;
+  bytes signature_hash = 2;
+}
+
+message CancelOrderResponse {
+  // Whether the order was found and canceled
+  bool order_canceled = 1;
+}
+
+message OrderbookRequest {
+  // Used to keep the client alive
+  bool continue_stream = 1;
+}
+
+message SendOrderRequest {
+  // The order to send
+  Order order = 1;
+  // Valid EIP-712 signature hash of this order
+  bytes signature_hash = 2;
+}
+
 message Order {
   // 'BID' or 'ASK'
   Side side = 1;
@@ -31,31 +52,29 @@ message Order {
   ExecutionType execution_type = 7;
   // When execution_type == 'discretionary', include order_ids to match with.
   repeated uint64 matching_order_ids = 8;
-  // Valid EIP-712 signature hash of this order
-  bytes signature_hash = 9;
 }
 
 enum Side {
-  SIDE_NOT_SET = 0;
-  BID = 1;
-  ASK = 2;
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BID = 1;
+  SIDE_ASK = 2;
 }
 
 enum ExecutionType {
-  // Default 
-  DIRECT = 0;
-  // For dealroom use. 
-  DISCRETIONARY = 1;
+  // Default - direct
+  EXECUTION_TYPE_UNSPECIFIED = 0;
+  // For dealroom use.
+  EXECUTION_TYPE_DISCRETIONARY = 1;
 }
 
 enum OrderStatus {
-  ORDER_STATUS_NOT_SET = 0;
+  ORDER_STATUS_UNSPECIFIED = 0;
   // When new order is added to the book
-  ADDED = 1;
+  ORDER_STATUS_ADDED = 1;
   // When an existing order is updated
-  UPDATED = 2;
+  ORDER_STATUS_UPDATED = 2;
   // When an existing order is filled completely or canceled
-  REMOVED = 3;
+  ORDER_STATUS_REMOVED = 3;
 }
 
 message Trade {
@@ -82,7 +101,7 @@ message Trade {
 }
 
 /* rpc: SendOrder */
-message SendOrderReply {
+message SendOrderResponse {
   // Whether the order has unmatched volume and has been added to the book.
   bool order_in_book = 1;
   // If the order lands in the book, what remains unfilled from the order.
@@ -99,28 +118,10 @@ message OrderToCancel {
   Side side = 2;
   // the token address
   string token_address = 3;
-  // Internal order Id. 
+  // Internal order Id.
   uint64 order_id = 4;
 }
 
-/* rpc: CancelOrder */
-message CancelOrderRequest {
-  OrderToCancel order = 1;
-  bytes signature_hash = 2;
-}
-
-/* rpc: CancelOrder */
-message CancelOrderReply {
-  // Whether the order was found and canceled
-  bool order_canceled = 1;
-}
-
-
-/* rpc: Orderbook */
-message OrderbookRequest {
-  // Used to keep the client alive
-  bool continue_stream = 1;
-}
 
 /* rpc: Orderbook */
 message OrderbookEntry {
