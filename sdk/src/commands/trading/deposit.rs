@@ -1,5 +1,3 @@
-use std::env;
-
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::ProviderBuilder;
@@ -12,28 +10,21 @@ use super::{MidribV2, IERC20};
 
 pub async fn call_deposit(
     chain: NamedChain,
-    rpc_url: &str,
-    token_address: &str,
+    rpc_url: String,
+    token_address: String,
+    contract_address: String,
+    privkey: String,
     amount: u64,
 ) -> Result<()> {
     let allowance_amount = U256::from(amount.saturating_add(1000));
     let deposit_amount = U256::from(amount);
-    let base_chain_contract_address = std::env::var("BASE_CHAIN_CONTRACT_ADDRESS")?;
-    let quote_chain_contract_address = std::env::var("QUOTE_CHAIN_CONTRACT_ADDRESS")?;
-    let contract_address = match chain {
-        NamedChain::BaseGoerli => base_chain_contract_address,
-        NamedChain::BaseSepolia => quote_chain_contract_address,
-        _ => unreachable!(),
-    };
-
-    let contract_address: Address = Address::parse_checksummed(contract_address, None)?;
+    let contract_address: Address = Address::parse_checksummed(&contract_address, None)?;
     let token_addr: Address = token_address.parse()?;
-
-    let signer = env::var("EVM_TESTNET_PRIVKEY")?.parse::<PrivateKeySigner>()?;
+    let signer = privkey.parse::<PrivateKeySigner>()?;
     tracing::debug!("{:?}", &signer);
     let signer_address = signer.address();
     let wallet = EthereumWallet::new(signer);
-    let rpc_url = Url::parse(rpc_url)?;
+    let rpc_url = Url::parse(&rpc_url)?;
 
     // Set up the provider
     let provider = ProviderBuilder::new()

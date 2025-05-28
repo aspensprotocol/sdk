@@ -1,14 +1,14 @@
 pub mod config_pb {
-    include!("../../../proto/generated/xyz.aspens.arborter_config.rs");
+    include!("../../../proto/generated/xyz.aspens.arborter_config.v1.rs");
 }
 
 use anyhow::Result;
-use config_pb::{Chain, Configuration, Market, Token};
+use config_pb::{Chain, GetConfigRequest, GetConfigResponse, Market, Token};
 use std::fs;
 use std::path::Path;
 use tracing::info;
 
-impl Configuration {
+impl GetConfigResponse {
     pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let path = path.as_ref();
         let contents = fs::read_to_string(path)?;
@@ -25,7 +25,11 @@ impl Configuration {
     }
 
     pub fn get_chain(&self, network: &str) -> Option<&Chain> {
-        self.chains.iter().find(|chain| chain.network == network)
+        self.config
+            .as_ref()?
+            .chains
+            .iter()
+            .find(|chain| chain.network == network)
     }
 
     pub fn get_token(&self, network: &str, symbol: &str) -> Option<&Token> {
@@ -34,7 +38,11 @@ impl Configuration {
     }
 
     pub fn get_market(&self, slug: &str) -> Option<&Market> {
-        self.markets.iter().find(|market| market.slug == slug)
+        self.config
+            .as_ref()?
+            .markets
+            .iter()
+            .find(|market| market.slug == slug)
     }
 
     pub fn get_market_by_tokens(
@@ -44,7 +52,7 @@ impl Configuration {
         quote_network: &str,
         quote_symbol: &str,
     ) -> Option<&Market> {
-        self.markets.iter().find(|market| {
+        self.config.as_ref()?.markets.iter().find(|market| {
             market.base_chain_network == base_network
                 && market.base_chain_token_symbol == base_symbol
                 && market.quote_chain_network == quote_network
@@ -53,13 +61,15 @@ impl Configuration {
     }
 
     pub fn get_chain_by_id(&self, chain_id: i32) -> Option<&Chain> {
-        self.chains
+        self.config
+            .as_ref()?
+            .chains
             .iter()
             .find(|chain| chain.chain_id.eq(&chain_id))
     }
 }
 
-pub async fn call_get_config(url: String) -> Result<Configuration> {
+pub async fn call_get_config(url: String) -> Result<GetConfigResponse> {
     // Create a channel to connect to the gRPC server
     let channel = tonic::transport::Channel::from_shared(url)?
         .connect()
@@ -69,7 +79,7 @@ pub async fn call_get_config(url: String) -> Result<Configuration> {
     let mut client = config_pb::config_service_client::ConfigServiceClient::new(channel);
 
     // Create a request object
-    let request = tonic::Request::new(config_pb::ConfigRequest {});
+    let request = tonic::Request::new(GetConfigRequest {});
 
     // Call the get_config endpoint
     let response = client.get_config(request).await?;
@@ -101,19 +111,19 @@ mod tests {
 
     #[test]
     fn test_json_config_parsing() {
-        let config = Configuration::from_file("../example/config.json").unwrap();
+        let config = GetConfigResponse::from_file("../example/config.json").unwrap();
         verify_config(&config);
     }
 
     #[test]
     fn test_toml_config_parsing() {
-        let config = Configuration::from_file("../example/config.toml").unwrap();
+        let config = GetConfigResponse::from_file("../example/config.toml").unwrap();
         verify_config(&config);
     }
 
     #[tokio::test]
     async fn test_download_config_to_file() -> Result<()> {
-        let config = Configuration::from_file("../example/config.toml").unwrap();
+        let config = GetConfigResponse::from_file("../example/config.toml").unwrap();
 
         let anvil1 = config.get_chain("anvil-1").unwrap();
         let temp_dir = tempdir()?;
@@ -123,12 +133,12 @@ mod tests {
 
         // Verify file exists and contains valid JSON
         let contents = fs::read_to_string(&config_path)?;
-        let _: Configuration = serde_json::from_str(&contents)?;
+        let _: GetConfigResponse = serde_json::from_str(&contents)?;
 
         Ok(())
     }
 
-    fn verify_config(config: &Configuration) {
+    fn verify_config(config: &GetConfigResponse) {
         // Test chain retrieval
         let anvil1 = config.get_chain("anvil-1").unwrap();
         assert_eq!(anvil1.chain_id, 84531);

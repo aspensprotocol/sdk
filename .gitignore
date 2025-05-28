@@ -1,4 +1,5 @@
-app/target
+sdk/target
+wrappers/target
 .env
 lib/
 anvil1.log

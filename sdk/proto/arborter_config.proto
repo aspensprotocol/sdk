@@ -71,6 +71,10 @@ message AddMarketRequest {
   string base_chain_token_symbol = 3;
   // The quote chain token symbol
   string quote_chain_token_symbol = 4;
+  // The base chain token address
+  string base_chain_token_address = 5;
+  // The quote chain token address
+  string quote_chain_token_address = 6;
 }
 
 message AddMarketResponse {

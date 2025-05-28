@@ -3,14 +3,6 @@ name = "aspens"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "aspens-cli"
-path = "src/bin/cli.rs"
-
-[[bin]]
-name = "aspens-repl"
-path = "src/bin/repl.rs"
-
 [dependencies]
 alloy = { version = "1.0.5", default-features = false, features = ["contract", "network", "providers", "reqwest", "signer-local", "signers"] }
 alloy-chains = "0.2.1"
@@ -33,6 +25,11 @@ tonic = { version = "0.13.1", default-features = false, features = ["codegen", "
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5.4"
+
+[features]
+default = ["trader"]
+trader = []
+admin = []
 
 [build-dependencies]
 tonic-build = "0.13.1"

@@ -1,13 +1,11 @@
-use alloy_chains::NamedChain;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use std::str::FromStr;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use url::Url;
-
-use aspens::commands::config::{call_get_config, download_config_to_file};
-use aspens::commands::trading::{balance, deposit, send_order, withdraw};
+#[cfg(feature = "admin")]
+use wrappers::utils::wrap_admin::*;
+use wrappers::utils::{executor::DirectExecutor, wrap_trader::*};
 
 #[derive(Debug, Parser)]
 #[command(name = "aspens-cli")]
@@ -29,8 +27,10 @@ enum Commands {
     /// Initialize a new trading session
     Initialize,
     /// Config: Fetch the current configuration from the arborter server
+    #[cfg(feature = "admin")]
     GetConfig,
     /// Download configuration to a file
+    #[cfg(feature = "admin")]
     DownloadConfig {
         /// Path to save the configuration file
         #[arg(short, long)]
@@ -97,13 +97,6 @@ impl std::fmt::Display for BaseOrQuote {
     }
 }
 
-// Helper function to parse chain string into NamedChain
-fn parse_chain(chain_str: &str) -> Result<NamedChain> {
-    NamedChain::from_str(chain_str).with_context(|| {
-        format!("Invalid chain name: {chain_str}. Valid chains are: base-goerli or base-sepolia")
-    })
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load environment variables
@@ -115,88 +108,47 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
 
     let cli = Cli::parse();
+    let executor = DirectExecutor;
 
     match cli.command {
         Commands::Initialize => {
             info!("Initialized session at {}", cli.url);
             info!("Available config for {} is <TODO!!>", cli.url);
         }
+        #[cfg(feature = "admin")]
         Commands::GetConfig => {
-            info!("Fetching config...");
-            let config = call_get_config(cli.url.to_string()).await?;
-            info!("Configuration: {:#?}", config);
+            let _ = wrap_get_config(&executor, cli.url.to_string());
+            ()
         }
         Commands::Deposit {
             chain,
             token,
             amount,
         } => {
-            let chain = parse_chain(&chain)?;
-            info!("Depositing {amount:?} {token:?} on {chain:?}");
-            let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
-            let base_chain_usdc_token_address =
-                std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
-            let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL").unwrap();
-            let quote_chain_usdc_token_address =
-                std::env::var("QUOTE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
-
-            let rpc_url = match chain {
-                NamedChain::BaseGoerli => base_chain_rpc_url,
-                NamedChain::BaseSepolia => quote_chain_rpc_url,
-                _ => unreachable!(),
-            };
-
-            let token_address = match chain {
-                NamedChain::BaseGoerli => base_chain_usdc_token_address,
-                NamedChain::BaseSepolia => quote_chain_usdc_token_address,
-                _ => unreachable!(),
-            };
-
-            deposit::call_deposit(chain, &rpc_url, &token_address, amount).await?
+            let _ = wrap_deposit(&executor, chain, token, amount);
+            ()
         }
         Commands::Withdraw {
             chain,
             token,
             amount,
         } => {
-            let chain = parse_chain(&chain)?;
-            info!("Withdrawing {amount:?} {token:?} on {chain:?}");
-            let base_chain_rpc_url = std::env::var("BASE_CHAIN_RPC_URL").unwrap();
-            let base_chain_usdc_token_address =
-                std::env::var("BASE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
-            let quote_chain_rpc_url = std::env::var("QUOTE_CHAIN_RPC_URL").unwrap();
-            let quote_chain_usdc_token_address =
-                std::env::var("QUOTE_CHAIN_USDC_TOKEN_ADDRESS").unwrap();
-
-            let rpc_url = match chain {
-                NamedChain::BaseGoerli => base_chain_rpc_url,
-                NamedChain::BaseSepolia => quote_chain_rpc_url,
-                _ => unreachable!(),
-            };
-
-            let token_address = match chain {
-                NamedChain::BaseGoerli => base_chain_usdc_token_address,
-                NamedChain::BaseSepolia => quote_chain_usdc_token_address,
-                _ => unreachable!(),
-            };
-
-            withdraw::call_withdraw(chain, &rpc_url, &token_address, amount).await?
+            let _ = wrap_withdraw(&executor, chain, token, amount);
+            ()
         }
         Commands::Buy {
             amount,
             limit_price,
         } => {
-            info!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
-            send_order::call_send_order(cli.url.to_string(), 1, amount, limit_price).await?;
-            info!("Order sent");
+            let _ = wrap_buy(&executor, cli.url.to_string(), amount, limit_price);
+            ()
         }
         Commands::Sell {
             amount,
             limit_price,
         } => {
-            info!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
-            send_order::call_send_order(cli.url.to_string(), 2, amount, limit_price).await?;
-            info!("Order sent");
+            let _ = wrap_sell(&executor, cli.url.to_string(), amount, limit_price);
+            ()
         }
         Commands::GetOrders => {
             info!("Getting orders...");
@@ -207,15 +159,17 @@ async fn main() -> Result<()> {
             info!("TODO: Implement this");
         }
         Commands::Balance => {
-            info!("Getting balance");
-            balance::balance(&[]).await?;
+            let _ = wrap_balance(&executor);
+            ()
         }
         Commands::GetOrderbook { market_id } => {
             info!("Getting orderbook: {market_id:?}");
             info!("TODO: Implement this");
         }
+        #[cfg(feature = "admin")]
         Commands::DownloadConfig { path } => {
-            download_config_to_file(cli.url.to_string(), path).await?;
+            let _ = wrap_download_config(&executor, cli.url.to_string(), path);
+            ()
         }
     }
 

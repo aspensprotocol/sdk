@@ -1,0 +1,48 @@
+[package]
+name = "wrappers"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "aspens-cli"
+path = "src/bin/cli.rs"
+
+[[bin]]
+name = "aspens-repl"
+path = "src/bin/repl.rs"
+
+[dependencies]
+alloy = { version = "1.0.5", default-features = false, features = ["contract", "network", "providers", "reqwest", "signer-local", "signers"] }
+alloy-chains = "0.2.1"
+alloy-contract = "1.0.5"
+# alloy-signer-local = "0.11"
+alloy-sol-types = { version = "1.1.2", features = ["json"] }
+anyhow = "1.0"
+clap = { version = "4.5.38", features = ["derive"] }
+clap-repl = "0.3.2"
+clap-verbosity = "2.1.0"
+comfy-table = "7.1.4"
+dotenv = "0.15.0"
+hex = "0.4.3"
+prost = "0.13.5"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.45.0", features = ["rt-multi-thread"] }
+toml = "0.8.22"
+tonic = { version = "0.13.1", default-features = false, features = ["codegen", "prost", "transport"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2.5.4"
+aspens = { path = "./../sdk" }
+futures = "0.3"
+
+[features]
+default = ["trader"]
+trader = ["aspens/trader"]
+admin = ["aspens/admin"]
+
+[build-dependencies]
+tonic-build = "0.13.1"
+
+[dev-dependencies]
+tempfile = "3.20.0"
