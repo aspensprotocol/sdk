@@ -21,43 +21,31 @@ fn build_protos() -> Result<()> {
         .build_client(true)
         .out_dir("proto/generated")
         .type_attribute(
-            "xyz.aspens.arborter_config.Configuration",
+            "xyz.aspens.arborter_config.v1.Configuration",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
         .type_attribute(
-            "xyz.aspens.arborter_config.ConfigRequest",
+            "xyz.aspens.arborter_config.v1.Chain",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
         .type_attribute(
-            "xyz.aspens.arborter_config.TradeContract",
+            "xyz.aspens.arborter_config.v1.Market",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
         .type_attribute(
-            "xyz.aspens.arborter_config.Chain",
+            "xyz.aspens.arborter_config.v1.Token",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
         .type_attribute(
-            "xyz.aspens.arborter_config.Market",
+            "xyz.aspens.arborter_config.v1.TradeContract",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
         .type_attribute(
-            "xyz.aspens.arborter_config.DeployContractRequest",
+            "xyz.aspens.arborter_config.v1.GetConfigResponse",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
         .type_attribute(
-            "xyz.aspens.arborter_config.DeployContractReply",
-            "#[derive(serde::Serialize, serde::Deserialize)]",
-        )
-        .type_attribute(
-            "xyz.aspens.arborter_config.AddMarketReply",
-            "#[derive(serde::Serialize, serde::Deserialize)]",
-        )
-        .type_attribute(
-            "xyz.aspens.arborter_config.Token",
-            "#[derive(serde::Serialize, serde::Deserialize)]",
-        )
-        .type_attribute(
-            "xyz.aspens.arborter_config.AddTokenRequest",
+            "xyz.aspens.arborter_config.v1.GetConfigRequest",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
         .compile_protos(&["proto/arborter_config.proto"], &["proto"])?;

@@ -64,6 +64,12 @@ pub struct AddMarketRequest {
     /// The quote chain token symbol
     #[prost(string, tag = "4")]
     pub quote_chain_token_symbol: ::prost::alloc::string::String,
+    /// The base chain token address
+    #[prost(string, tag = "5")]
+    pub base_chain_token_address: ::prost::alloc::string::String,
+    /// The quote chain token address
+    #[prost(string, tag = "6")]
+    pub quote_chain_token_address: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AddMarketResponse {
@@ -92,8 +98,10 @@ pub struct AddTradeContractResponse {
 /// Request message for the service
 ///
 /// Add optional filters in the future (e.g., chain or market name)
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct GetConfigRequest {}
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetConfigResponse {
     /// The configuration object
@@ -101,6 +109,7 @@ pub struct GetConfigResponse {
     pub config: ::core::option::Option<Configuration>,
 }
 /// The top-level response containing chains and markets
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Configuration {
     /// List of supported chains
@@ -111,6 +120,7 @@ pub struct Configuration {
     pub markets: ::prost::alloc::vec::Vec<Market>,
 }
 /// Represents the trade contract details
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TradeContract {
     /// Optional: For non-EVM chains like Hedera, Solana, etc.
@@ -121,6 +131,7 @@ pub struct TradeContract {
     pub address: ::prost::alloc::string::String,
 }
 /// Represents a single blockchain network
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Chain {
     /// The architecture of the chain (e.g., EVM, Hedera)
@@ -158,6 +169,7 @@ pub struct Chain {
     pub base_or_quote: i32,
 }
 /// Represents a market with a base- and quote- chain token pair
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Market {
     /// The market slug, e.g. 'base-sepolia-usdc--op-sepolia-usdc'
@@ -183,6 +195,7 @@ pub struct Market {
     pub market_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// Represents a single token
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Token {
     /// The name of the token

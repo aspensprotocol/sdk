@@ -9,6 +9,7 @@ service ArborterService {
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {}
   rpc GetRecentTrades(Empty) returns (stream Trade) {}
   rpc Orderbook(OrderbookRequest) returns (stream OrderbookEntry) {}
+  rpc AddOrderbook(AddOrderbookRequest) returns (AddOrderbookResponse) {}
 }
 
 message Empty {}
@@ -141,4 +142,20 @@ message OrderbookEntry {
   string maker_quote_address = 7;
   // 'ADDED = 1', 'UPDATED = 2', 'REMOVED = 3'
   OrderStatus status = 8;
+}
+
+// Request to add a new orderbook
+message AddOrderbookRequest {
+  // The market ID to add the orderbook for
+  string market_id = 1;
+  // The number of decimal places for the orderbook
+  int32 decimal_places = 2;
+}
+
+// Response for adding a new orderbook
+message AddOrderbookResponse {
+  // Whether the orderbook was added successfully
+  bool success = 1;
+  // The market ID of the created orderbook
+  string market_id = 2;
 }
