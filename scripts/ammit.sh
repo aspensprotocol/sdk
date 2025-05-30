@@ -33,7 +33,7 @@ check_command "just"
 run_cli_command() {
     local args="$@"
     echo -e "${GREEN}Running: cargo run --bin aspens-cli $args${NC}"
-    cd app && cargo run --bin aspens-cli $args && cd ..
+    cd wrappers && cargo run --bin aspens-cli $args && cd ..
 }
 
 # Main test sequence
