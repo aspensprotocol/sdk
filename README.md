@@ -29,7 +29,8 @@ Interactive mode provides a REPL (Read-Eval-Print Loop) interface where you can 
 
 ```bash
 # Start the REPL
-cargo run --bin aspens-cli repl
+❯ cd wrappers/
+❯ cargo run --bin aspens-repl
 
 aspens> help
 Usage: <COMMAND>
@@ -60,7 +61,9 @@ aspens> quit
 Scripted mode allows you to execute commands directly from the command line, which is useful for automation and scripting:
 
 ```bash
+❯ cd wrappers/ 
 ❯ cargo run --bin aspens-cli
+
 Aspens CLI for trading operations
 
 Usage: aspens-cli [OPTIONS] <COMMAND>
