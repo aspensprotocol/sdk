@@ -210,9 +210,12 @@ pub struct Token {
     /// Optional: for networks that use IDs (e.g., Hedera)
     #[prost(string, optional, tag = "4")]
     pub token_id: ::core::option::Option<::prost::alloc::string::String>,
-    /// The number of decimal places the token use's
+    /// The number of decimal places the token is defined with
     #[prost(int32, tag = "5")]
     pub decimals: i32,
+    /// The level of precision the token trades at
+    #[prost(int32, tag = "6")]
+    pub trade_precision: i32,
 }
 /// Empty message for requests that don't need parameters
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]

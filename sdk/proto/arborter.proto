@@ -27,6 +27,10 @@ message CancelOrderResponse {
 message OrderbookRequest {
   // Used to keep the client alive
   bool continue_stream = 1;
+  // The market ID to stream orders for
+  string market_id = 2;
+  // If true, returns existing open orders when stream starts, then continues streaming
+  optional bool historical_open_orders = 3;
 }
 
 message SendOrderRequest {
@@ -142,6 +146,8 @@ message OrderbookEntry {
   string maker_quote_address = 7;
   // 'ADDED = 1', 'UPDATED = 2', 'REMOVED = 3'
   OrderStatus status = 8;
+  // The market ID this order belongs to
+  string market_id = 9;
 }
 
 // Request to add a new orderbook

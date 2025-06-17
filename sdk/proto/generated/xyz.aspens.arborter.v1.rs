@@ -14,11 +14,17 @@ pub struct CancelOrderResponse {
     #[prost(bool, tag = "1")]
     pub order_canceled: bool,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OrderbookRequest {
     /// Used to keep the client alive
     #[prost(bool, tag = "1")]
     pub continue_stream: bool,
+    /// The market ID to stream orders for
+    #[prost(string, tag = "2")]
+    pub market_id: ::prost::alloc::string::String,
+    /// If true, returns existing open orders when stream starts, then continues streaming
+    #[prost(bool, optional, tag = "3")]
+    pub historical_open_orders: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SendOrderRequest {
@@ -145,6 +151,9 @@ pub struct OrderbookEntry {
     /// 'ADDED = 1', 'UPDATED = 2', 'REMOVED = 3'
     #[prost(enumeration = "OrderStatus", tag = "8")]
     pub status: i32,
+    /// The market ID this order belongs to
+    #[prost(string, tag = "9")]
+    pub market_id: ::prost::alloc::string::String,
 }
 /// Request to add a new orderbook
 #[derive(Clone, PartialEq, ::prost::Message)]

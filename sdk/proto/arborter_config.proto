@@ -181,8 +181,10 @@ message Token {
   string address = 3;
   // Optional: for networks that use IDs (e.g., Hedera)
   optional string token_id = 4;
-  // The number of decimal places the token use's
+  // The number of decimal places the token is defined with 
   int32 decimals = 5;
+  // The level of precision the token trades at 
+  int32 trade_precision = 6;
 }
 
 // Empty message for requests that don't need parameters
