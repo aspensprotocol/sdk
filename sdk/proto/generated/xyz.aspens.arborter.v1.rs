@@ -41,11 +41,11 @@ pub struct Order {
     #[prost(enumeration = "Side", tag = "1")]
     pub side: i32,
     /// Order size
-    #[prost(uint64, tag = "2")]
-    pub quantity: u64,
+    #[prost(string, tag = "2")]
+    pub quantity: ::prost::alloc::string::String,
     /// Optional. including is a LIMIT order. excluding is a MARKET order.
-    #[prost(uint64, optional, tag = "3")]
-    pub price: ::core::option::Option<u64>,
+    #[prost(string, optional, tag = "3")]
+    pub price: ::core::option::Option<::prost::alloc::string::String>,
     /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
     #[prost(string, tag = "4")]
     pub market_id: ::prost::alloc::string::String,
@@ -68,11 +68,11 @@ pub struct Trade {
     #[prost(uint64, tag = "1")]
     pub timestamp: u64,
     /// The setttled price net of fees
-    #[prost(uint64, tag = "2")]
-    pub price: u64,
+    #[prost(string, tag = "2")]
+    pub price: ::prost::alloc::string::String,
     /// How much or many of the quote token
-    #[prost(uint64, tag = "3")]
-    pub qty: u64,
+    #[prost(string, tag = "3")]
+    pub qty: ::prost::alloc::string::String,
     /// Maker's internal trader id. Safely ignore.
     #[prost(string, tag = "4")]
     pub maker: ::prost::alloc::string::String,
@@ -134,11 +134,11 @@ pub struct OrderbookEntry {
     #[prost(uint64, tag = "2")]
     pub order_id: u64,
     /// price of the order - in non-decimal form
-    #[prost(uint64, tag = "3")]
-    pub price: u64,
+    #[prost(string, tag = "3")]
+    pub price: ::prost::alloc::string::String,
     /// quantity of the order - in non-decimal form
-    #[prost(uint64, tag = "4")]
-    pub quantity: u64,
+    #[prost(string, tag = "4")]
+    pub quantity: ::prost::alloc::string::String,
     /// 'BID = 1' or 'ASK = 2'
     #[prost(enumeration = "Side", tag = "5")]
     pub side: i32,
@@ -174,6 +174,53 @@ pub struct AddOrderbookResponse {
     /// The market ID of the created orderbook
     #[prost(string, tag = "2")]
     pub market_id: ::prost::alloc::string::String,
+}
+/// Request to remove an orderbook
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RemoveOrderbookRequest {
+    /// The market ID to remove the orderbook for
+    #[prost(string, tag = "1")]
+    pub market_id: ::prost::alloc::string::String,
+}
+/// Response for removing an orderbook
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RemoveOrderbookResponse {
+    /// Whether the orderbook was removed successfully
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+    /// The market ID of the removed orderbook
+    #[prost(string, tag = "2")]
+    pub market_id: ::prost::alloc::string::String,
+}
+/// Converts a value in pair decimals to the correct token decimals for a given market and side
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnNormalizeDecimalsRequest {
+    #[prost(string, tag = "1")]
+    pub market_id: ::prost::alloc::string::String,
+    /// "buy" or "sell"
+    #[prost(string, tag = "2")]
+    pub side: ::prost::alloc::string::String,
+    /// in pair decimals
+    #[prost(string, tag = "3")]
+    pub quantity: ::prost::alloc::string::String,
+    /// in pair decimals
+    #[prost(string, tag = "4")]
+    pub price: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnNormalizeDecimalsResponse {
+    /// in base token decimals
+    #[prost(string, tag = "1")]
+    pub base_token_quantity: ::prost::alloc::string::String,
+    /// in quote token decimals
+    #[prost(string, tag = "2")]
+    pub quote_token_quantity: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub base_token_decimals: u32,
+    #[prost(uint32, tag = "4")]
+    pub quote_token_decimals: u32,
+    #[prost(uint32, tag = "5")]
+    pub pair_decimals: u32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -499,6 +546,64 @@ pub mod arborter_service_client {
                     GrpcMethod::new(
                         "xyz.aspens.arborter.v1.ArborterService",
                         "AddOrderbook",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn remove_orderbook(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RemoveOrderbookRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RemoveOrderbookResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter.v1.ArborterService/RemoveOrderbook",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter.v1.ArborterService",
+                        "RemoveOrderbook",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn un_normalize_decimals(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UnNormalizeDecimalsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UnNormalizeDecimalsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter.v1.ArborterService/UnNormalizeDecimals",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter.v1.ArborterService",
+                        "UnNormalizeDecimals",
                     ),
                 );
             self.inner.unary(req, path, codec).await

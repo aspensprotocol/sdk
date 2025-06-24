@@ -58,8 +58,8 @@ pub fn wrap_withdraw<E: AsyncExecutor>(
 pub fn wrap_buy<E: AsyncExecutor>(
     executor: &E,
     url: String,
-    amount: u64,
-    limit_price: Option<u64>,
+    amount: String,
+    limit_price: Option<String>,
 ) -> Result<()> {
     info!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
     let market_id = std::env::var("MARKET_ID_1").unwrap();
@@ -83,8 +83,8 @@ pub fn wrap_buy<E: AsyncExecutor>(
 pub fn wrap_sell<E: AsyncExecutor>(
     executor: &E,
     url: String,
-    amount: u64,
-    limit_price: Option<u64>,
+    amount: String,
+    limit_price: Option<String>,
 ) -> Result<()> {
     info!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
     let market_id = std::env::var("MARKET_ID_1").unwrap();

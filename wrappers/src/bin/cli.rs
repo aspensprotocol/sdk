@@ -53,18 +53,18 @@ enum Commands {
     /// Send a BUY order
     Buy {
         /// Amount to buy
-        amount: u64,
+        amount: String,
         /// Limit price for the order
         #[arg(short, long)]
-        limit_price: Option<u64>,
+        limit_price: Option<String>,
     },
     /// Send a SELL order
     Sell {
         /// Amount to sell
-        amount: u64,
+        amount: String,
         /// Limit price for the order
         #[arg(short, long)]
-        limit_price: Option<u64>,
+        limit_price: Option<String>,
     },
     /// Get a list of all active orders
     GetOrders,

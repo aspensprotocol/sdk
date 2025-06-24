@@ -70,6 +70,15 @@ pub struct AddMarketRequest {
     /// The quote chain token address
     #[prost(string, tag = "6")]
     pub quote_chain_token_address: ::prost::alloc::string::String,
+    /// The base chain token decimals
+    #[prost(int32, tag = "7")]
+    pub base_chain_token_decimals: i32,
+    /// The quote chain token decimals
+    #[prost(int32, tag = "8")]
+    pub quote_chain_token_decimals: i32,
+    /// The pair decimals (this is chosen by the stack admin)
+    #[prost(int32, tag = "9")]
+    pub pair_decimals: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AddMarketResponse {
@@ -190,8 +199,17 @@ pub struct Market {
     /// / The token symbol for the quote chain
     #[prost(string, tag = "6")]
     pub quote_chain_token_symbol: ::prost::alloc::string::String,
+    /// The base chain token decimals
+    #[prost(int32, tag = "7")]
+    pub base_chain_token_decimals: i32,
+    /// The quote chain token decimals
+    #[prost(int32, tag = "8")]
+    pub quote_chain_token_decimals: i32,
+    /// The pair decimals (this is chosen by the stack admin)
+    #[prost(int32, tag = "9")]
+    pub pair_decimals: i32,
     /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
-    #[prost(string, optional, tag = "7")]
+    #[prost(string, optional, tag = "10")]
     pub market_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// Represents a single token
@@ -217,7 +235,77 @@ pub struct Token {
     #[prost(int32, tag = "6")]
     pub trade_precision: i32,
 }
-/// Empty message for requests that don't need parameters
+/// Delete market request
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteMarketRequest {
+    /// The market ID to delete
+    #[prost(string, tag = "1")]
+    pub market_id: ::prost::alloc::string::String,
+}
+/// Delete market response
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteMarketResponse {
+    /// Indicates if the market was deleted successfully
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+    /// The configuration object after deletion
+    #[prost(message, optional, tag = "2")]
+    pub config: ::core::option::Option<Configuration>,
+}
+/// Delete token request
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteTokenRequest {
+    /// The chain network where the token exists
+    #[prost(string, tag = "1")]
+    pub chain_network: ::prost::alloc::string::String,
+    /// The token symbol to delete
+    #[prost(string, tag = "2")]
+    pub token_symbol: ::prost::alloc::string::String,
+}
+/// Delete token response
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteTokenResponse {
+    /// Indicates if the token was deleted successfully
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+    /// The configuration object after deletion
+    #[prost(message, optional, tag = "2")]
+    pub config: ::core::option::Option<Configuration>,
+}
+/// Delete chain request
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteChainRequest {
+    /// The chain network to delete
+    #[prost(string, tag = "1")]
+    pub chain_network: ::prost::alloc::string::String,
+}
+/// Delete chain response
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteChainResponse {
+    /// Indicates if the chain was deleted successfully
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+    /// The configuration object after deletion
+    #[prost(message, optional, tag = "2")]
+    pub config: ::core::option::Option<Configuration>,
+}
+/// Delete trade contract request
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct DeleteTradeContractRequest {
+    /// The chain ID to delete the trade contract from
+    #[prost(int32, tag = "1")]
+    pub chain_id: i32,
+}
+/// Delete trade contract response
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteTradeContractResponse {
+    /// Indicates if the trade contract was deleted successfully
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+    /// The configuration object after deletion
+    #[prost(message, optional, tag = "2")]
+    pub config: ::core::option::Option<Configuration>,
+}
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct Empty {}
 /// Version information in vergen style
@@ -572,6 +660,126 @@ pub mod config_service_client {
                     GrpcMethod::new(
                         "xyz.aspens.arborter_config.v1.ConfigService",
                         "GetVersion",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// rpc service to delete a market
+        pub async fn delete_market(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteMarketRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteMarketResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/DeleteMarket",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "DeleteMarket",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// rpc service to delete a token
+        pub async fn delete_token(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteTokenRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteTokenResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/DeleteToken",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "DeleteToken",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// rpc service to delete a chain
+        pub async fn delete_chain(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteChainRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteChainResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/DeleteChain",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "DeleteChain",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// rpc service to delete a trade contract
+        pub async fn delete_trade_contract(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteTradeContractRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteTradeContractResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/DeleteTradeContract",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "DeleteTradeContract",
                     ),
                 );
             self.inner.unary(req, path, codec).await
