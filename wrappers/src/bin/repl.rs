@@ -197,7 +197,7 @@ fn main() {
                 limit_price
             };
 
-            if let Err(e) = wrap_buy(&executor, app_state.url(), amount, limit_price) {
+            if let Err(e) = wrap_buy(&executor, app_state.url(), amount.to_string(), limit_price.map(|p| p.to_string())) {
                 info!("Failed to send buy order: {e:?}");
             }
         }
@@ -214,7 +214,7 @@ fn main() {
                 limit_price
             };
 
-            if let Err(e) = wrap_sell(&executor, app_state.url(), amount, limit_price) {
+            if let Err(e) = wrap_sell(&executor, app_state.url(), amount.to_string(), limit_price.map(|p| p.to_string())) {
                 info!("Failed to send sell order: {e:?}");
             }
         }

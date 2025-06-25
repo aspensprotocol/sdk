@@ -20,6 +20,14 @@ service ConfigService {
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse) {}
   // rpc service to get version information
   rpc GetVersion(Empty) returns (VersionInfo) {}
+  // rpc service to delete a market
+  rpc DeleteMarket(DeleteMarketRequest) returns (DeleteMarketResponse) {}
+  // rpc service to delete a token
+  rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse) {}
+  // rpc service to delete a chain
+  rpc DeleteChain(DeleteChainRequest) returns (DeleteChainResponse) {}
+  // rpc service to delete a trade contract
+  rpc DeleteTradeContract(DeleteTradeContractRequest) returns (DeleteTradeContractResponse) {}
 }
 
 message DeployContractRequest {
@@ -75,6 +83,12 @@ message AddMarketRequest {
   string base_chain_token_address = 5;
   // The quote chain token address
   string quote_chain_token_address = 6;
+  // The base chain token decimals
+  int32 base_chain_token_decimals = 7;
+  // The quote chain token decimals
+  int32 quote_chain_token_decimals = 8;
+  // The pair decimals (this is chosen by the stack admin)
+  int32 pair_decimals = 9;
 }
 
 message AddMarketResponse {
@@ -167,8 +181,14 @@ message Market {
   string base_chain_token_symbol = 5;
   /// The token symbol for the quote chain
   string quote_chain_token_symbol = 6;
+  // The base chain token decimals
+  int32 base_chain_token_decimals = 7;
+  // The quote chain token decimals
+  int32 quote_chain_token_decimals = 8;
+  // The pair decimals (this is chosen by the stack admin)
+  int32 pair_decimals = 9;
   // Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
-  optional string market_id = 7;
+  optional string market_id = 10;
 }
 
 // Represents a single token
@@ -187,7 +207,64 @@ message Token {
   int32 trade_precision = 6;
 }
 
-// Empty message for requests that don't need parameters
+// Delete market request
+message DeleteMarketRequest {
+  // The market ID to delete
+  string market_id = 1;
+}
+
+// Delete market response
+message DeleteMarketResponse {
+  // Indicates if the market was deleted successfully
+  bool success = 1;
+  // The configuration object after deletion
+  Configuration config = 2;
+}
+
+// Delete token request
+message DeleteTokenRequest {
+  // The chain network where the token exists
+  string chain_network = 1;
+  // The token symbol to delete
+  string token_symbol = 2;
+}
+
+// Delete token response
+message DeleteTokenResponse {
+  // Indicates if the token was deleted successfully
+  bool success = 1;
+  // The configuration object after deletion
+  Configuration config = 2;
+}
+
+// Delete chain request
+message DeleteChainRequest {
+  // The chain network to delete
+  string chain_network = 1;
+}
+
+// Delete chain response
+message DeleteChainResponse {
+  // Indicates if the chain was deleted successfully
+  bool success = 1;
+  // The configuration object after deletion
+  Configuration config = 2;
+}
+
+// Delete trade contract request
+message DeleteTradeContractRequest {
+  // The chain ID to delete the trade contract from
+  int32 chain_id = 1;
+}
+
+// Delete trade contract response
+message DeleteTradeContractResponse {
+  // Indicates if the trade contract was deleted successfully
+  bool success = 1;
+  // The configuration object after deletion
+  Configuration config = 2;
+}
+
 message Empty {}
 
 // Version information in vergen style
@@ -209,4 +286,3 @@ message VersionInfo {
   // The cargo features enabled
   repeated string cargo_features = 8;
 }
-

@@ -10,6 +10,8 @@ service ArborterService {
   rpc GetRecentTrades(Empty) returns (stream Trade) {}
   rpc Orderbook(OrderbookRequest) returns (stream OrderbookEntry) {}
   rpc AddOrderbook(AddOrderbookRequest) returns (AddOrderbookResponse) {}
+  rpc RemoveOrderbook(RemoveOrderbookRequest) returns (RemoveOrderbookResponse) {}
+  rpc UnNormalizeDecimals(UnNormalizeDecimalsRequest) returns (UnNormalizeDecimalsResponse);
 }
 
 message Empty {}
@@ -44,9 +46,9 @@ message Order {
   // 'BID' or 'ASK'
   Side side = 1;
   // Order size
-  uint64 quantity = 2;
+  string quantity = 2;
   // Optional. including is a LIMIT order. excluding is a MARKET order.
-  optional uint64 price = 3;
+  optional string price = 3;
   // Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
   string market_id = 4;
   // User's pubkey (address)on the Base chain
@@ -86,9 +88,9 @@ message Trade {
   // When the engine registers this executed trade
   uint64 timestamp = 1;
   // The setttled price net of fees
-  uint64 price = 2;
+  string price = 2;
   // How much or many of the quote token
-  uint64 qty = 3;
+  string qty = 3;
   // Maker's internal trader id. Safely ignore.
   string maker = 4;
   // Taker's internal trader id. Safely ignore.
@@ -135,9 +137,9 @@ message OrderbookEntry {
   // internal id of the order
   uint64 order_id = 2;
   // price of the order - in non-decimal form
-  uint64 price = 3;
+  string price = 3;
   // quantity of the order - in non-decimal form
-  uint64 quantity = 4;
+  string quantity = 4;
   // 'BID = 1' or 'ASK = 2'
   Side side = 5;
   // The maker's base chain wallet address
@@ -164,4 +166,34 @@ message AddOrderbookResponse {
   bool success = 1;
   // The market ID of the created orderbook
   string market_id = 2;
+}
+
+// Request to remove an orderbook
+message RemoveOrderbookRequest {
+  // The market ID to remove the orderbook for
+  string market_id = 1;
+}
+
+// Response for removing an orderbook
+message RemoveOrderbookResponse {
+  // Whether the orderbook was removed successfully
+  bool success = 1;
+  // The market ID of the removed orderbook
+  string market_id = 2;
+}
+
+// Converts a value in pair decimals to the correct token decimals for a given market and side
+message UnNormalizeDecimalsRequest {
+  string market_id = 1;
+  string side = 2; // "buy" or "sell"
+  string quantity = 3; // in pair decimals
+  string price = 4;    // in pair decimals
+}
+
+message UnNormalizeDecimalsResponse {
+  string base_token_quantity = 1; // in base token decimals
+  string quote_token_quantity = 2; // in quote token decimals
+  uint32 base_token_decimals = 3;
+  uint32 quote_token_decimals = 4;
+  uint32 pair_decimals = 5;
 }

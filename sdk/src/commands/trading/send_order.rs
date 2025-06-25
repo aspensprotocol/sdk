@@ -18,7 +18,7 @@ impl fmt::Display for Order {
             "Order {{\n  side: {},\n  quantity: {},\n  price: {},\n  market_id: {},\n  base_account_address: {},\n  quote_account_address: {},\n  execution_type: {},\n  matching_order_ids: {:?}\n}}",
             self.side,
             self.quantity,
-            self.price.map_or("None".to_string(), |p| p.to_string()),
+            self.price.clone().map_or("None".to_string(), |p| p.to_string()),
             self.market_id,
             self.base_account_address,
             self.quote_account_address,
@@ -49,8 +49,8 @@ impl fmt::Display for SendOrderResponse {
 pub async fn call_send_order(
     url: String,
     side: i32,
-    quantity: u64,
-    price: Option<u64>,
+    quantity: String,
+    price: Option<String>,
     market_id: String,
     base_account_address: String,
     quote_account_address: String,
@@ -64,28 +64,28 @@ pub async fn call_send_order(
     // Instantiate the client
     let mut client = ArborterServiceClient::new(channel);
 
-    // Craft the order
-    let order = Order {
+    // Create the order for sending with original pair decimal values
+    let order_for_sending = Order {
         side,
-        quantity,
-        price,
-        market_id,
-        base_account_address,
-        quote_account_address,
+        quantity: quantity.clone(), // Original pair decimal values
+        price: price.clone(),       // Original pair decimal values
+        market_id: market_id.clone(),
+        base_account_address: base_account_address.clone(),
+        quote_account_address: quote_account_address.clone(),
         execution_type: 0,
         matching_order_ids: vec![],
     };
 
-    // Serialize the order to a byte vector
+    // Serialize the order to a byte vector for signing
     let mut buffer = Vec::new();
-    order.encode(&mut buffer)?;
+    order_for_sending.encode(&mut buffer)?;
 
-    // Sign the order
+    // Sign the order using the same values that will be sent
     let signature = sign_transaction(&buffer, &privkey).await?;
 
-    // Create the request with the order and signature
+    // Create the request with the original order and signature
     let request = SendOrderRequest {
-        order: Some(order),
+        order: Some(order_for_sending),
         signature_hash: signature.as_bytes().to_vec(),
     };
 
