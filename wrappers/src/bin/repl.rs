@@ -50,6 +50,15 @@ impl AppState {
 }
 
 #[derive(Debug, Parser)]
+#[command(name = "aspens-repl")]
+#[command(about = "Aspens REPL for interactive trading operations")]
+struct ReplCli {
+    /// Environment configuration to use
+    #[arg(short, long, default_value = "anvil")]
+    env: String,
+}
+
+#[derive(Debug, Parser)]
 #[command(name = "", author, version, about, long_about = None)]
 enum ReplCommand {
     /// Initialize a new trading session by (optionally) defining the arborter URL
@@ -120,7 +129,14 @@ enum ReplCommand {
 }
 
 fn main() {
-    dotenv::from_filename(".env.anvil.local").ok();
+    let cli = ReplCli::parse();
+    
+    // Load environment variables based on the specified environment
+    // Check for ASPENS_ENV environment variable first, then use CLI argument
+    let env_name = std::env::var("ASPENS_ENV").unwrap_or_else(|_| cli.env.clone());
+    let env_file = format!(".env.{}.local", env_name);
+    info!("Loading environment from: {}", env_file);
+    dotenv::from_filename(&env_file).ok();
 
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
