@@ -15,6 +15,10 @@ struct Cli {
     #[arg(short, long, default_value_t = Url::parse("http://localhost:50051").unwrap())]
     url: Url,
 
+    /// Environment configuration to use
+    #[arg(short, long, default_value = "anvil")]
+    env: String,
+
     #[command(flatten)]
     verbose: clap_verbosity::Verbosity,
 
@@ -99,15 +103,20 @@ impl std::fmt::Display for BaseOrQuote {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load environment variables
-    dotenv::from_filename(".env.anvil.local").ok();
+    let cli = Cli::parse();
+    
+    // Load environment variables based on the specified environment
+    // Check for ASPENS_ENV environment variable first, then use CLI argument
+    let env_name = std::env::var("ASPENS_ENV").unwrap_or_else(|_| cli.env.clone());
+    let env_file = format!(".env.{}.local", env_name);
+    info!("Loading environment from: {}", env_file);
+    dotenv::from_filename(&env_file).ok();
 
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
 
-    let cli = Cli::parse();
     let executor = DirectExecutor;
 
     match cli.command {

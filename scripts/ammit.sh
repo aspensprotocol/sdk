@@ -10,38 +10,102 @@ set -e pipefail
 # Colors for output
 GREEN='\033[0;32m'
 RED='\033[0;31m'
+YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+
+# Default environment
+DEFAULT_ENV="anvil"
 
 # Function to print section headers
 print_section() {
     echo -e "\n${GREEN}=== $1 ===${NC}"
 }
 
+# Function to print colored output
+print_info() {
+    echo -e "${GREEN}$1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}$1${NC}"
+}
+
+print_error() {
+    echo -e "${RED}$1${NC}"
+}
+
+# Function to show usage
+show_usage() {
+    echo "Usage: $0 [environment_name]"
+    echo ""
+    echo "Available environments:"
+    echo "  anvil    - Local Anvil development environment (default)"
+    echo "  testnet  - Testnet environment"
+    echo ""
+    echo "Examples:"
+    echo "  $0 anvil"
+    echo "  $0 testnet"
+    echo ""
+    echo "You can also set the ASPENS_ENV environment variable:"
+    echo "  export ASPENS_ENV=testnet"
+    echo "  $0"
+}
+
 # Function to check if a command exists
 check_command() {
     if ! command -v $1 &> /dev/null; then
-        echo -e "${RED}Error: $1 is not installed${NC}"
+        print_error "Error: $1 is not installed"
         exit 1
     fi
 }
 
-# Check prerequisites
-check_command "cargo"
-check_command "just"
+# Function to check if environment file exists
+check_env_file() {
+    local env_name=$1
+    local env_file=".env.${env_name}.local"
+    
+    if [[ ! -f "$env_file" ]]; then
+        print_error "Environment file $env_file not found!"
+        print_warning "Please create $env_file with your configuration values."
+        return 1
+    fi
+    
+    return 0
+}
 
 # Function to run CLI command and check result
 run_cli_command() {
     local args="$@"
-    echo -e "${GREEN}Running: cargo run --bin aspens-cli $args${NC}"
-    cd wrappers && cargo run --bin aspens-cli $args && cd ..
+    echo -e "${GREEN}Running: cargo run --bin aspens-cli -- --env $ENV_NAME $args${NC}"
+    cd wrappers && cargo run --bin aspens-cli -- --env $ENV_NAME $args && cd ..
 }
 
 # Main test sequence
 main() {
-    source .env.anvil.local
-    # print_section "Setting up Anvil environment"
-    # just setup-anvil-full
-    #
+    # Parse command line arguments
+    if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+        show_usage
+        exit 0
+    fi
+    
+    # Determine environment to use
+    ENV_NAME="${1:-$DEFAULT_ENV}"
+    
+    # Check if environment file exists
+    if ! check_env_file "$ENV_NAME"; then
+        exit 1
+    fi
+    
+    print_info "Using environment: $ENV_NAME"
+    print_info "Loading environment from: .env.${ENV_NAME}.local"
+    
+    # Load environment variables
+    source .env.${ENV_NAME}.local
+    
+    # Check prerequisites
+    check_command "cargo"
+    check_command "just"
+
     print_section "Fetching config"
     run_cli_command "get-config"
 
