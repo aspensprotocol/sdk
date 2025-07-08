@@ -24,6 +24,8 @@ message CancelOrderRequest {
 message CancelOrderResponse {
   // Whether the order was found and canceled
   bool order_canceled = 1;
+  // Transaction hashes associated with this cancellation
+  repeated TransactionHash transaction_hashes = 2;
 }
 
 message OrderbookRequest {
@@ -107,6 +109,14 @@ message Trade {
   uint64 order_hit = 10;
 }
 
+/* Transaction hash information */
+message TransactionHash {
+  // Type of transaction hash
+  string hash_type = 1;
+  // The transaction hash value
+  string hash_value = 2;
+}
+
 /* rpc: SendOrder */
 message SendOrderResponse {
   // Whether the order has unmatched volume and has been added to the book.
@@ -115,6 +125,8 @@ message SendOrderResponse {
   optional Order order = 2;
   // Which other orders, if any, this order was matched with.
   repeated Trade trades = 3;
+  // Transaction hashes associated with this order
+  repeated TransactionHash transaction_hashes = 4;
 }
 
 /* rpc: CancelOrder */

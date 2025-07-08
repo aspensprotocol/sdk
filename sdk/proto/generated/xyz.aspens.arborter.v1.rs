@@ -8,11 +8,14 @@ pub struct CancelOrderRequest {
     #[prost(bytes = "vec", tag = "2")]
     pub signature_hash: ::prost::alloc::vec::Vec<u8>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CancelOrderResponse {
     /// Whether the order was found and canceled
     #[prost(bool, tag = "1")]
     pub order_canceled: bool,
+    /// Transaction hashes associated with this cancellation
+    #[prost(message, repeated, tag = "2")]
+    pub transaction_hashes: ::prost::alloc::vec::Vec<TransactionHash>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OrderbookRequest {
@@ -95,6 +98,16 @@ pub struct Trade {
     #[prost(uint64, tag = "10")]
     pub order_hit: u64,
 }
+/// Transaction hash information
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TransactionHash {
+    /// Type of transaction hash
+    #[prost(string, tag = "1")]
+    pub hash_type: ::prost::alloc::string::String,
+    /// The transaction hash value
+    #[prost(string, tag = "2")]
+    pub hash_value: ::prost::alloc::string::String,
+}
 /// rpc: SendOrder
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SendOrderResponse {
@@ -107,6 +120,9 @@ pub struct SendOrderResponse {
     /// Which other orders, if any, this order was matched with.
     #[prost(message, repeated, tag = "3")]
     pub trades: ::prost::alloc::vec::Vec<Trade>,
+    /// Transaction hashes associated with this order
+    #[prost(message, repeated, tag = "4")]
+    pub transaction_hashes: ::prost::alloc::vec::Vec<TransactionHash>,
 }
 /// rpc: CancelOrder
 #[derive(Clone, PartialEq, ::prost::Message)]
