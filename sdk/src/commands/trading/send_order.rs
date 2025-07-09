@@ -8,7 +8,7 @@ use alloy::primitives::Signature;
 use alloy::signers::{local::PrivateKeySigner, Signer};
 use anyhow::Result;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
-use arborter_pb::{Order, SendOrderRequest, SendOrderResponse};
+use arborter_pb::{Order, SendOrderRequest, SendOrderResponse, TransactionHash};
 use prost::Message;
 
 impl fmt::Display for Order {
@@ -28,11 +28,45 @@ impl fmt::Display for Order {
     }
 }
 
+/// Transaction hash information for blockchain transactions
+/// 
+/// This struct contains information about transaction hashes that are generated
+/// when orders are processed on the blockchain. Each transaction hash includes
+/// a type (e.g., "deposit", "settlement", "withdrawal") and the actual hash value.
+impl fmt::Display for TransactionHash {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "TransactionHash {{ hash_type: {}, hash_value: {} }}", self.hash_type, self.hash_value)
+    }
+}
+
+impl TransactionHash {
+    /// Format transaction hash for CLI display
+    /// 
+    /// Returns a user-friendly string representation of the transaction hash
+    /// in the format "type: hash_value"
+    pub fn format_for_cli(&self) -> String {
+        format!("{}: {}", self.hash_type, self.hash_value)
+    }
+}
+
+impl SendOrderResponse {
+    /// Get formatted transaction hashes for CLI display
+    /// 
+    /// Returns a vector of formatted transaction hash strings that can be
+    /// easily displayed in the CLI or REPL interface
+    pub fn get_formatted_transaction_hashes(&self) -> Vec<String> {
+        self.transaction_hashes
+            .iter()
+            .map(|th| th.format_for_cli())
+            .collect()
+    }
+}
+
 impl fmt::Display for SendOrderResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "SendOrderResponse {{\n  order_in_book: {},\n  order: {},\n  trades: [{}]\n}}",
+            "SendOrderResponse {{\n  order_in_book: {},\n  order: {},\n  trades: [{}],\n  transaction_hashes: [{}]\n}}",
             self.order_in_book,
             self.order
                 .as_ref()
@@ -40,6 +74,11 @@ impl fmt::Display for SendOrderResponse {
             self.trades
                 .iter()
                 .map(|t| format!("{:?}", t))
+                .collect::<Vec<_>>()
+                .join(", "),
+            self.transaction_hashes
+                .iter()
+                .map(|th| format!("{}: {}", th.hash_type, th.hash_value))
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -55,7 +94,7 @@ pub async fn call_send_order(
     base_account_address: String,
     quote_account_address: String,
     privkey: String,
-) -> Result<()> {
+) -> Result<SendOrderResponse> {
     // Create a channel to connect to the gRPC server
     let channel = tonic::transport::Channel::from_shared(url)?
         .connect()
@@ -95,10 +134,13 @@ pub async fn call_send_order(
     // Call the send_order endpoint
     let response = client.send_order(request).await?;
 
+    // Get the response data
+    let response_data = response.into_inner();
+    
     // Print the response from the server
-    tracing::info!("Response received: {}", response.into_inner());
+    tracing::info!("Response received: {}", response_data);
 
-    Ok(())
+    Ok(response_data)
 }
 
 async fn sign_transaction(msg_bytes: &[u8], privkey: &str) -> Result<Signature> {

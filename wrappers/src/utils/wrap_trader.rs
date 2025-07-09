@@ -76,6 +76,15 @@ pub fn wrap_buy<E: AsyncExecutor>(
         privkey,
     ))?;
     info!("SendOrder result: {result:?}");
+    
+    // Log transaction hashes if available
+    if !result.transaction_hashes.is_empty() {
+        info!("Transaction hashes:");
+        for formatted_hash in result.get_formatted_transaction_hashes() {
+            info!("  {}", formatted_hash);
+        }
+    }
+    
     info!("Order sent");
     Ok(())
 }
@@ -101,6 +110,15 @@ pub fn wrap_sell<E: AsyncExecutor>(
         privkey,
     ))?;
     info!("SendOrder result: {result:?}");
+    
+    // Log transaction hashes if available
+    if !result.transaction_hashes.is_empty() {
+        info!("Transaction hashes:");
+        for formatted_hash in result.get_formatted_transaction_hashes() {
+            info!("  {}", formatted_hash);
+        }
+    }
+    
     info!("Order sent");
     Ok(())
 }
