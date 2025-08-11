@@ -1,6 +1,6 @@
 # Apsens CLI
  
-a REPL / CLI to interact with an Aspens Markets Stack
+A REPL / CLI to interact with an Aspens Markets Stack
 
 ## Prerequisites
 
