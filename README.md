@@ -1,29 +1,51 @@
-# Apsens CLI
- 
-A REPL / CLI to interact with an Aspens Markets Stack
+# Aspens SDK
+
+A comprehensive SDK and CLI tools for interacting with Aspens Markets Stack, providing cross-chain trading capabilities with proper decimal handling and market operations.
+
+## Project Structure
+
+- **`sdk/`** - Core Rust SDK with trading logic and gRPC client
+- **`wrappers/`** - CLI and REPL tools built on top of the SDK
+- **`examples/`** - Practical examples and decimal conversion guides
+- **`scripts/`** - Utility scripts for environment management and testing
 
 ## Prerequisites
 
-1. Install Rust:
+1. **Install Rust:**
 ```bash
 # Install Rust using rustup
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-2. Set up environment variables:
+2. **Set up environment variables:**
 ```bash
-# Copy the .env sample 
-cp app/.env.sample app/.env
+# Copy the environment template
+cp sdk/.env.sample sdk/.env
 
-# After changing the values in your .env
-source app/.env
+# Edit the configuration values in sdk/.env
+# Then source the environment
+source sdk/.env
+```
+
+## Building the Project
+
+```bash
+# Build the core SDK
+just build
+
+# Build release version
+just release
+
+# Build the CLI wrappers
+cd wrappers
+cargo build --release
 ```
 
 ## Usage
 
-The CLI can be used two ways: interactive and scripted.
+The CLI can be used in two modes: interactive (REPL) and scripted.
 
-### Interactive Mode
+### Interactive Mode (REPL)
 
 Interactive mode provides a REPL (Read-Eval-Print Loop) interface where you can execute commands one at a time:
 
@@ -82,3 +104,116 @@ Commands:
   get-orderbook    Fetch the latest top of book
   help             Print this message or the help of the given subcommand(s)
 ```
+
+## Quick Start with Examples
+
+For practical examples and decimal conversion guides, see the [examples directory](examples/README.md) which includes:
+
+- Decimal conversion examples for various token pairs
+- Interactive trading sessions
+- Batch trading scripts
+- Troubleshooting guides
+
+## Available Commands
+
+### Just Commands
+
+The project includes a `justfile` with convenient commands:
+
+```bash
+# List all available commands
+just
+
+# Build the project
+just build
+
+# Run tests
+just test
+
+# Format code
+just fmt
+
+# Run CLI with specific environment
+just cli-anvil
+just cli-testnet
+
+# Run REPL with specific environment
+just repl-anvil
+just repl-testnet
+```
+
+### Environment Management
+
+```bash
+# List available environments
+just env-list
+
+# Switch to specific environment
+just env-switch <environment>
+
+# Create new environment template
+just create-env <name>
+```
+
+## Development
+
+### Running Tests
+
+```bash
+# Run all tests
+just test
+
+# Run tests with specific environment
+just test-anvil
+just test-testnet
+```
+
+### Code Quality
+
+```bash
+# Format code
+just fmt
+
+# Check code style
+just check
+
+# Run linter
+just lint
+```
+
+### Clean Build
+
+```bash
+# Clean build artifacts
+just clean
+```
+
+## Configuration
+
+The SDK uses environment variables for configuration. Key variables include:
+
+- `ARBORTER_URL` - Arborter server endpoint
+- `MARKET_ID_*` - Market identifiers for trading pairs
+- `*_RPC_URL` - Blockchain RPC endpoints
+- `*_CONTRACT_ADDRESS` - Smart contract addresses
+- `PRIVATE_KEY_*` - Wallet private keys (use test accounts only!)
+
+## Support and Documentation
+
+- [Examples Directory](examples/README.md) - Practical usage examples
+- [Decimal Conversion Guide](decimals.md) - Understanding decimal handling
+- [SDK Documentation](sdk/src/lib.rs) - Core SDK API reference
+- [CLI Documentation](wrappers/src/bin/cli.rs) - Command-line interface reference
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests: `just test`
+5. Format code: `just fmt`
+6. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License.
