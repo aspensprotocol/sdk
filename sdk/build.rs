@@ -7,7 +7,7 @@ fn main() -> Result<()> {
 
 fn build_protos() -> Result<()> {
     // build arborter API
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .protoc_arg("--experimental_allow_proto3_optional")
         .build_server(false)
         .build_client(true)
@@ -15,7 +15,7 @@ fn build_protos() -> Result<()> {
         .compile_protos(&["proto/arborter.proto"], &["proto"])?;
 
     // build arborter_config API
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .protoc_arg("--experimental_allow_proto3_optional")
         .build_server(false)
         .build_client(true)
