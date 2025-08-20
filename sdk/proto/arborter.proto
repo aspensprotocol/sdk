@@ -7,7 +7,7 @@ option optimize_for = SPEED;
 service ArborterService {
   rpc SendOrder(SendOrderRequest) returns (SendOrderResponse) {}
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {}
-  rpc GetRecentTrades(Empty) returns (stream Trade) {}
+  rpc Trades(TradeRequest) returns (stream Trade) {}
   rpc Orderbook(OrderbookRequest) returns (stream OrderbookEntry) {}
   rpc AddOrderbook(AddOrderbookRequest) returns (AddOrderbookResponse) {}
   rpc RemoveOrderbook(RemoveOrderbookRequest) returns (RemoveOrderbookResponse) {}
@@ -31,10 +31,23 @@ message CancelOrderResponse {
 message OrderbookRequest {
   // Used to keep the client alive
   bool continue_stream = 1;
-  // The market ID to stream orders for
+  // The market id to stream orders for
   string market_id = 2;
   // If true, returns existing open orders when stream starts, then continues streaming
   optional bool historical_open_orders = 3;
+  // If this is sent too, then we filter by a specific trader
+  optional string filter_by_trader = 4;
+}
+
+message TradeRequest {
+    // Used to keep the client alive
+    bool continue_stream = 1;
+    // The market id to stream orders for
+    string market_id = 2;
+    // If true, returns existing closed when stream starts, then continues streaming
+    optional bool historical_closed_trades = 3;
+    // If this is sent too, then we filter by a specific trader
+    optional string filter_by_trader = 4;
 }
 
 message SendOrderRequest {
@@ -94,19 +107,29 @@ message Trade {
   // How much or many of the quote token
   string qty = 3;
   // Maker's internal trader id. Safely ignore.
-  string maker = 4;
+  string maker_id = 4;
   // Taker's internal trader id. Safely ignore.
-  string taker = 5;
+  string taker_id = 5;
   // The maker's base chain wallet address
   string maker_base_address = 6;
   // The maker's quote chain wallet address
   string maker_quote_address = 7;
-  // Buyer's internal trader id. Safely ignore.
-  string buyer = 8;
-  // Seller's internal trader id. Safely ignore.
-  string seller = 9;
+  // The taker's base chain wallet address
+  string taker_base_address = 8;
+  // The taker's quote chain wallet address
+  string taker_quote_address = 9;
+  // Who is the buyer in this trade (MAKER or TAKER)
+  TradeRole buyer_is = 10;
+  // Who is the seller in this trade (MAKER or TAKER)
+  TradeRole seller_is = 11;
   // The order_id that created this trade.
-  uint64 order_hit = 10;
+  uint64 order_hit = 12;
+}
+
+enum TradeRole {
+  TRADE_ROLE_UNSPECIFIED = 0;
+  MAKER = 1;
+  TAKER = 2;
 }
 
 /* Transaction hash information */
