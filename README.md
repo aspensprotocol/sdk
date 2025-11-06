@@ -20,7 +20,27 @@ This is a Cargo workspace with three main components:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-2. **Set up environment variables:**
+2. **Install Just (Optional but Recommended):**
+
+[Just](https://github.com/casey/just) is a command runner that simplifies common development tasks. This project uses a `justfile` for convenient commands.
+
+```bash
+# On macOS
+brew install just
+
+# On Linux
+curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+# On Windows
+cargo install just
+
+# Or using cargo on any platform
+cargo install just
+```
+
+Alternatively, you can use cargo commands directly (e.g., `cargo build` instead of `just build`).
+
+3. **Set up environment variables:**
 ```bash
 # Copy the environment template
 cp .env.sample .env.anvil.local
