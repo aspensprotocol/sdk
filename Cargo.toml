@@ -21,11 +21,13 @@ alloy-sol-types = { version = "1.4.1", features = ["json"] }
 
 # gRPC & Protobuf
 tonic = { version = "0.14.2", default-features = false, features = ["codegen", "transport"] }
+tonic-reflection = "0.14.2"
 tonic-prost = "0.14.2"
 prost = "0.14.1"
 
 # Async runtime
 tokio = { version = "1.48.0", features = ["rt-multi-thread"] }
+tokio-stream = "0.1"
 futures = "0.3"
 
 # Serialization
@@ -46,6 +48,7 @@ url = "2.5.7"
 comfy-table = "7.2.1"
 
 # Logging
+log = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

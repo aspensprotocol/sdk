@@ -221,7 +221,7 @@ When adding tests:
 use aspens::{AspensClient, DirectExecutor};
 
 let client = AspensClient::builder()
-    .with_url("http://localhost:50051")?
+    .with_url("https://<aspens-stack-url.com>")?
     .with_environment("testnet")
     .build()?;
 

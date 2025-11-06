@@ -32,6 +32,79 @@ impl AspensClient {
     pub fn get_env(&self, key: &str) -> Option<&String> {
         self.env_vars.get(key)
     }
+
+    /// Normalize chain identifier to environment variable prefix
+    ///
+    /// Maps chain identifiers (like "base", "BaseSepolia", "84532") to
+    /// environment variable prefixes ("BASE", "QUOTE")
+    pub fn normalize_chain_identifier(&self, chain: &str) -> Result<String> {
+        let chain_lower = chain.to_lowercase();
+
+        // Direct matches
+        if chain_lower == "base" || chain_lower.contains("base") {
+            return Ok("BASE".to_string());
+        }
+        if chain_lower == "quote"
+            || chain_lower.contains("optimism")
+            || chain_lower.contains("sepolia")
+            || chain_lower == "ethereum" {
+            return Ok("QUOTE".to_string());
+        }
+
+        // Try to match by chain ID from RPC URLs
+        if let Some(base_rpc) = self.get_env("BASE_CHAIN_RPC_URL") {
+            if base_rpc.contains(&chain_lower) {
+                return Ok("BASE".to_string());
+            }
+        }
+        if let Some(quote_rpc) = self.get_env("QUOTE_CHAIN_RPC_URL") {
+            if quote_rpc.contains(&chain_lower) {
+                return Ok("QUOTE".to_string());
+            }
+        }
+
+        // Default to BASE if no match
+        eyre::bail!("Unable to determine chain type for '{}'. Expected 'base' or 'quote', or a known chain name like 'BaseSepolia' or 'OptimismSepolia'", chain)
+    }
+
+    /// Resolve token address for a given chain and token symbol
+    ///
+    /// Looks up token addresses using the pattern: {CHAIN}_CHAIN_{TOKEN}_TOKEN_ADDRESS
+    /// For example: BASE_CHAIN_USDC_TOKEN_ADDRESS or QUOTE_CHAIN_WETH_TOKEN_ADDRESS
+    pub fn resolve_token_address(&self, chain: &str, token: &str) -> Result<String> {
+        let token_upper = token.to_uppercase();
+        let chain_normalized = self.normalize_chain_identifier(chain)?;
+
+        // Try pattern: {CHAIN}_CHAIN_{TOKEN}_TOKEN_ADDRESS
+        let key = format!("{}_CHAIN_{}_TOKEN_ADDRESS", chain_normalized, token_upper);
+
+        self.get_env(&key)
+            .cloned()
+            .ok_or_else(|| eyre::eyre!(
+                "Token address not found for {} on {}. Expected environment variable: {}",
+                token, chain, key
+            ))
+    }
+
+    /// Get RPC URL for a given chain
+    pub fn get_chain_rpc_url(&self, chain: &str) -> Result<String> {
+        let chain_normalized = self.normalize_chain_identifier(chain)?;
+        let key = format!("{}_CHAIN_RPC_URL", chain_normalized);
+
+        self.get_env(&key)
+            .cloned()
+            .ok_or_else(|| eyre::eyre!("RPC URL not found for chain {}. Expected environment variable: {}", chain, key))
+    }
+
+    /// Get contract address for a given chain
+    pub fn get_chain_contract_address(&self, chain: &str) -> Result<String> {
+        let chain_normalized = self.normalize_chain_identifier(chain)?;
+        let key = format!("{}_CHAIN_CONTRACT_ADDRESS", chain_normalized);
+
+        self.get_env(&key)
+            .cloned()
+            .ok_or_else(|| eyre::eyre!("Contract address not found for chain {}. Expected environment variable: {}", chain, key))
+    }
 }
 
 /// Builder for AspensClient
@@ -83,7 +156,7 @@ impl AspensClientBuilder {
                     .get("ARBORTER_URL")
                     .and_then(|u| Url::parse(u).ok())
             })
-            .unwrap_or_else(|| Url::parse("http://localhost:50051").unwrap());
+            .unwrap_or_else(|| Url::parse("http://0.0.0.0:50051").unwrap());
 
         Ok(AspensClient {
             url,

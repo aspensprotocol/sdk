@@ -2,7 +2,7 @@ use aspens::commands::trading::{balance, deposit, send_order, withdraw};
 use aspens::{AspensClient, AsyncExecutor, BlockingExecutor};
 use clap::Parser;
 use clap_repl::reedline::{
-    DefaultPrompt, DefaultPromptSegment, FileBackedHistory, Reedline, Signal,
+    DefaultPrompt, DefaultPromptSegment, FileBackedHistory,
 };
 use clap_repl::ClapEditor;
 use std::str::FromStr;
@@ -43,6 +43,21 @@ impl AppState {
         let guard = self.client.lock().unwrap();
         guard.get_env(key).cloned()
     }
+
+    fn resolve_token_address(&self, chain: &str, token: &str) -> eyre::Result<String> {
+        let guard = self.client.lock().unwrap();
+        guard.resolve_token_address(chain, token)
+    }
+
+    fn get_chain_rpc_url(&self, chain: &str) -> eyre::Result<String> {
+        let guard = self.client.lock().unwrap();
+        guard.get_chain_rpc_url(chain)
+    }
+
+    fn get_chain_contract_address(&self, chain: &str) -> eyre::Result<String> {
+        let guard = self.client.lock().unwrap();
+        guard.get_chain_contract_address(chain)
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -57,69 +72,66 @@ struct ReplCli {
 #[derive(Debug, Parser)]
 #[command(name = "", author, version, about, long_about = None)]
 enum ReplCommand {
-    /// Initialize a new trading session by (optionally) defining the arborter URL
+    /// Initialize a new trading session with optional gRPC endpoint URL
     Initialize {
-        /// The URL of the arborter server
-        #[arg(short, long, default_value_t = Url::parse("http://0.0.0.0:50051").unwrap())]
+        /// gRPC endpoint URL (defaults to http://localhost:50051)
+        #[arg(short, long, default_value_t = Url::parse("http://localhost:50051").unwrap())]
         url: Url,
     },
-    /// Config: Fetch the current configuration from the arborter server
+    /// Fetch the current configuration from the arborter server
     #[cfg(feature = "admin")]
     GetConfig,
-    /// Config: Download configuration to a file
+    /// Download configuration to a file at the specified path
     #[cfg(feature = "admin")]
     DownloadConfig {
         /// Path to save the configuration file
         #[arg(short, long)]
         path: String,
     },
-    /// Deposit token(s) to make them available for trading
+    /// Deposit tokens to make them available for trading (requires chain, token, amount)
     Deposit {
         /// The chain network to deposit to
         chain: String,
+        /// Token symbol to deposit (e.g., USDC, WETH, WBTC)
         token: String,
+        /// Amount to deposit
         amount: u64,
     },
-    /// Withdraw token(s) to a local wallet
+    /// Withdraw tokens to a local wallet (requires chain, token, amount)
     Withdraw {
         /// The chain network to withdraw from
         chain: String,
+        /// Token symbol to withdraw (e.g., USDC, WETH, WBTC)
         token: String,
+        /// Amount to withdraw
         amount: u64,
     },
-    /// Send a BUY order
+    /// Send a BUY order with amount and optional limit price
     Buy {
         /// Amount to buy
-        amount: u64,
+        amount: String,
+        /// Optional limit price for the order
         #[arg(short, long)]
-        limit_price: Option<u64>,
+        limit_price: Option<String>,
+        /// Market ID to trade on (defaults to MARKET_ID_1 from environment)
         #[arg(short, long)]
-        matching_order_ids: Option<u64>,
+        market: Option<String>,
     },
-    /// Send a SELL order
+    /// Send a SELL order with amount and optional limit price
     Sell {
         /// Amount to sell
-        amount: u64,
-        /// Limit price for the order
+        amount: String,
+        /// Optional limit price for the order
         #[arg(short, long)]
-        limit_price: Option<u64>,
+        limit_price: Option<String>,
+        /// Market ID to trade on (defaults to MARKET_ID_1 from environment)
         #[arg(short, long)]
-        matching_order_ids: Option<u64>,
+        market: Option<String>,
     },
-    /// Get a list of all active orders
-    GetOrders,
-    /// Cancel an order
-    CancelOrder {
-        /// Order ID to cancel
-        order_id: u64,
-    },
-    /// Fetch the balances
+    /// Fetch the current balances across all chains
     Balance,
-    /// Fetch the latest top of book
-    GetOrderbook {
-        /// Market ID to fetch orderbook for
-        market_id: String,
-    },
+    /// Show current configuration and connection status
+    Status,
     /// Quit the REPL
     Quit,
 }
@@ -159,8 +171,23 @@ fn main() {
     rl.repl(|command| match command {
         ReplCommand::Initialize { url } => {
             app_state.with_url(url.clone());
-            info!("Initialized session at {url:?}");
-            info!("Available config for {url:?} is <TODO!!>");
+            info!("Initializing session at {}", url);
+
+            // Check gRPC server health via reflection
+            match executor.execute(aspens::health::check_grpc_server(url.to_string())) {
+                Ok(services) => {
+                    if services.is_empty() {
+                        info!("⚠️  Connected to server but no services found (reflection may not be enabled)");
+                    } else {
+                        info!("✓ Successfully connected to gRPC server");
+                        info!("  Found {} service(s)", services.len());
+                    }
+                }
+                Err(e) => {
+                    info!("✗ Failed to connect to gRPC server: {}", e);
+                    info!("  Please check that the server is running at {}", url);
+                }
+            }
         }
         #[cfg(feature = "admin")]
         ReplCommand::GetConfig => {
@@ -184,27 +211,48 @@ fn main() {
             amount,
         } => {
             info!("Depositing {amount:?} {token:?} on {chain:?}");
-            let base_chain_rpc_url = app_state.get_env("BASE_CHAIN_RPC_URL").unwrap();
-            let base_chain_contract_address =
-                app_state.get_env("BASE_CHAIN_CONTRACT_ADDRESS").unwrap();
-            let base_chain_usdc_token_address = app_state
-                .get_env("BASE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap();
+
+            // Resolve chain-specific configuration
+            let rpc_url = match app_state.get_chain_rpc_url(&chain) {
+                Ok(url) => url,
+                Err(e) => {
+                    info!("Failed to resolve chain RPC URL: {e:?}");
+                    return;
+                }
+            };
+            let contract_address = match app_state.get_chain_contract_address(&chain) {
+                Ok(addr) => addr,
+                Err(e) => {
+                    info!("Failed to resolve chain contract address: {e:?}");
+                    return;
+                }
+            };
+            let token_address = match app_state.resolve_token_address(&chain, &token) {
+                Ok(addr) => addr,
+                Err(e) => {
+                    info!("Failed to resolve token address: {e:?}");
+                    info!("Hint: Ensure {} has a configured token address for {}", chain, token);
+                    return;
+                }
+            };
             let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
 
-            let chain = alloy_chains::NamedChain::from_str(&chain).unwrap_or_else(|_| {
+            let chain_type = alloy_chains::NamedChain::from_str(&chain).unwrap_or_else(|_| {
                 info!("Invalid chain name: {}, using BaseGoerli as default", chain);
                 alloy_chains::NamedChain::BaseGoerli
             });
             if let Err(e) = executor.execute(deposit::call_deposit(
-                chain,
-                base_chain_rpc_url,
-                base_chain_usdc_token_address,
-                base_chain_contract_address,
+                chain_type,
+                rpc_url,
+                token_address,
+                contract_address,
                 privkey,
                 amount,
             )) {
                 info!("Failed to deposit: {e:?}");
+                info!("Hint: Check your balance with the 'balance' command");
+                info!("Hint: Verify server connection with 'initialize'");
+                info!("Hint: Ensure you have sufficient token balance in your wallet");
             }
         }
         ReplCommand::Withdraw {
@@ -213,98 +261,127 @@ fn main() {
             amount,
         } => {
             info!("Withdrawing {amount:?} {token:?} on {chain:?}");
-            let base_chain_rpc_url = app_state.get_env("BASE_CHAIN_RPC_URL").unwrap();
-            let base_chain_contract_address =
-                app_state.get_env("BASE_CHAIN_CONTRACT_ADDRESS").unwrap();
-            let base_chain_usdc_token_address = app_state
-                .get_env("BASE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap();
+
+            // Resolve chain-specific configuration
+            let rpc_url = match app_state.get_chain_rpc_url(&chain) {
+                Ok(url) => url,
+                Err(e) => {
+                    info!("Failed to resolve chain RPC URL: {e:?}");
+                    return;
+                }
+            };
+            let contract_address = match app_state.get_chain_contract_address(&chain) {
+                Ok(addr) => addr,
+                Err(e) => {
+                    info!("Failed to resolve chain contract address: {e:?}");
+                    return;
+                }
+            };
+            let token_address = match app_state.resolve_token_address(&chain, &token) {
+                Ok(addr) => addr,
+                Err(e) => {
+                    info!("Failed to resolve token address: {e:?}");
+                    info!("Hint: Ensure {} has a configured token address for {}", chain, token);
+                    return;
+                }
+            };
             let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
 
-            let chain = alloy_chains::NamedChain::from_str(&chain).unwrap_or_else(|_| {
+            let chain_type = alloy_chains::NamedChain::from_str(&chain).unwrap_or_else(|_| {
                 info!("Invalid chain name: {}, using BaseGoerli as default", chain);
                 alloy_chains::NamedChain::BaseGoerli
             });
             if let Err(e) = executor.execute(withdraw::call_withdraw(
-                chain,
-                base_chain_rpc_url,
-                base_chain_usdc_token_address,
-                base_chain_contract_address,
+                chain_type,
+                rpc_url,
+                token_address,
+                contract_address,
                 privkey,
                 amount,
             )) {
                 info!("Failed to withdraw: {e:?}");
+                info!("Hint: Check your available balance with the 'balance' command");
+                info!("Hint: Ensure you have sufficient balance in the contract");
+                info!("Hint: Verify server connection with 'initialize'");
             }
         }
         ReplCommand::Buy {
             amount,
             limit_price,
-            matching_order_ids: _,
+            market,
         } => {
-            let limit_price = if limit_price.is_none() {
-                let mut rl = Reedline::create();
-                let price = read_input(&mut rl, "At what price? ");
-                Some(price.parse::<u64>().unwrap())
-            } else {
-                limit_price
-            };
-
-            info!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
-            let market_id = app_state.get_env("MARKET_ID_1").unwrap();
+            let market_id = market.unwrap_or_else(|| app_state.get_env("MARKET_ID_1").unwrap());
+            info!("Sending BUY order for {amount:?} at limit price {limit_price:?} on market {market_id}");
             let pubkey = app_state.get_env("EVM_TESTNET_PUBKEY").unwrap();
             let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
 
-            if let Err(e) = executor.execute(send_order::call_send_order(
+            match executor.execute(send_order::call_send_order(
                 app_state.url(),
                 1, // Buy side
-                amount.to_string(),
-                limit_price.map(|p| p.to_string()),
+                amount,
+                limit_price,
                 market_id,
                 pubkey.clone(),
                 pubkey,
                 privkey,
             )) {
-                info!("Failed to send buy order: {e:?}");
+                Ok(result) => {
+                    info!("✓ Buy order sent successfully");
+                    if !result.transaction_hashes.is_empty() {
+                        info!("Transaction hashes:");
+                        for formatted_hash in result.get_formatted_transaction_hashes() {
+                            info!("  {}", formatted_hash);
+                        }
+                        info!("💡 Paste these hashes into your chain's block explorer");
+                    }
+                }
+                Err(e) => {
+                    info!("Failed to send buy order: {e:?}");
+                    info!("Hint: Check your balance with the 'balance' command");
+                    info!("Hint: Ensure you have sufficient quote token for the buy");
+                    info!("Hint: Verify server connection with 'initialize'");
+                    info!("Hint: Check market status with 'status' command");
+                }
             }
         }
         ReplCommand::Sell {
             amount,
             limit_price,
-            matching_order_ids: _,
+            market,
         } => {
-            let limit_price = if limit_price.is_none() {
-                let mut rl = Reedline::create();
-                let price = read_input(&mut rl, "At what price? ");
-                Some(price.parse::<u64>().unwrap())
-            } else {
-                limit_price
-            };
-
-            info!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
-            let market_id = app_state.get_env("MARKET_ID_1").unwrap();
+            let market_id = market.unwrap_or_else(|| app_state.get_env("MARKET_ID_1").unwrap());
+            info!("Sending SELL order for {amount:?} at limit price {limit_price:?} on market {market_id}");
             let pubkey = app_state.get_env("EVM_TESTNET_PUBKEY").unwrap();
             let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
 
-            if let Err(e) = executor.execute(send_order::call_send_order(
+            match executor.execute(send_order::call_send_order(
                 app_state.url(),
                 2, // Sell side
-                amount.to_string(),
-                limit_price.map(|p| p.to_string()),
+                amount,
+                limit_price,
                 market_id,
                 pubkey.clone(),
                 pubkey,
                 privkey,
             )) {
-                info!("Failed to send sell order: {e:?}");
+                Ok(result) => {
+                    info!("✓ Sell order sent successfully");
+                    if !result.transaction_hashes.is_empty() {
+                        info!("Transaction hashes:");
+                        for formatted_hash in result.get_formatted_transaction_hashes() {
+                            info!("  {}", formatted_hash);
+                        }
+                        info!("💡 Paste these hashes into your chain's block explorer");
+                    }
+                }
+                Err(e) => {
+                    info!("Failed to send sell order: {e:?}");
+                    info!("Hint: Check your balance with the 'balance' command");
+                    info!("Hint: Ensure you have sufficient base token for the sell");
+                    info!("Hint: Verify server connection with 'initialize'");
+                    info!("Hint: Check market status with 'status' command");
+                }
             }
-        }
-        ReplCommand::GetOrders => {
-            info!("Getting orders...");
-            info!("TODO: Implement this");
-        }
-        ReplCommand::CancelOrder { order_id } => {
-            info!("Order canceled: {order_id:?}");
-            info!("TODO: Implement this");
         }
         ReplCommand::Balance => {
             info!("Getting balance");
@@ -333,28 +410,24 @@ fn main() {
                 privkey,
             )) {
                 info!("Failed to get balance: {e:?}");
+                info!("Hint: Check your RPC URLs with 'status' command");
+                info!("Hint: Ensure your private key is correctly configured");
+                info!("Hint: Verify the contract addresses are correct");
             }
         }
-        ReplCommand::GetOrderbook { market_id } => {
-            info!("Getting orderbook: {market_id:?}");
-            info!("TODO: Implement this");
+        ReplCommand::Status => {
+            info!("Configuration Status:");
+            info!("  Environment: {}", app_state.client.lock().unwrap().environment());
+            info!("  Server URL: {}", app_state.url());
+            info!("  Market ID 1: {}", app_state.get_env("MARKET_ID_1").unwrap_or("not set".to_string()));
+            info!("  Market ID 2: {}", app_state.get_env("MARKET_ID_2").unwrap_or("not set".to_string()));
+            info!("  Base Chain RPC: {}", app_state.get_env("BASE_CHAIN_RPC_URL").unwrap_or("not set".to_string()));
+            info!("  Quote Chain RPC: {}", app_state.get_env("QUOTE_CHAIN_RPC_URL").unwrap_or("not set".to_string()));
+            info!("  Public Key: {}", app_state.get_env("EVM_TESTNET_PUBKEY").unwrap_or("not set".to_string()));
         }
         ReplCommand::Quit => {
             info!("goodbye");
             std::process::exit(0)
         }
     });
-}
-
-fn read_input(rl: &mut Reedline, prompt: &str) -> String {
-    let Signal::Success(line) = rl
-        .read_line(&DefaultPrompt::new(
-            DefaultPromptSegment::Basic(prompt.to_owned()),
-            DefaultPromptSegment::Empty,
-        ))
-        .unwrap()
-    else {
-        panic!();
-    };
-    line
 }
