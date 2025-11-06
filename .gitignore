@@ -1,6 +1,10 @@
-sdk/target
-wrappers/target
+# Rust build artifacts
+/target
+
+# Environment files
 .env
+
+# Local files
 lib/
 anvil1.log
 anvil2.log

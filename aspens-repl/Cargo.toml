@@ -1,0 +1,28 @@
+[package]
+name = "aspens-repl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "aspens-repl"
+path = "src/main.rs"
+
+[dependencies]
+# Local dependencies
+aspens = { path = "../aspens" }
+
+# Workspace dependencies
+alloy-chains.workspace = true
+eyre.workspace = true
+clap.workspace = true
+clap-repl.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+
+[features]
+default = []
+admin = ["aspens/admin"]
