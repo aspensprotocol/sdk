@@ -3,7 +3,7 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::ProviderBuilder;
 use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
-use anyhow::Result;
+use eyre::Result;
 use url::Url;
 
 use super::{MidribV2, IERC20};

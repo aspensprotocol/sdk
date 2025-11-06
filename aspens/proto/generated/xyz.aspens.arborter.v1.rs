@@ -16,6 +16,9 @@ pub struct CancelOrderResponse {
     /// Transaction hashes associated with this cancellation
     #[prost(message, repeated, tag = "2")]
     pub transaction_hashes: ::prost::alloc::vec::Vec<TransactionHash>,
+    /// Current state of the orderbook after this operation
+    #[prost(message, repeated, tag = "3")]
+    pub current_orderbook: ::prost::alloc::vec::Vec<OrderbookEntry>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OrderbookRequest {
@@ -147,6 +150,9 @@ pub struct SendOrderResponse {
     /// Transaction hashes associated with this order
     #[prost(message, repeated, tag = "4")]
     pub transaction_hashes: ::prost::alloc::vec::Vec<TransactionHash>,
+    /// Current state of the orderbook after this operation
+    #[prost(message, repeated, tag = "5")]
+    pub current_orderbook: ::prost::alloc::vec::Vec<OrderbookEntry>,
 }
 /// rpc: CancelOrder
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -188,12 +194,12 @@ pub struct OrderbookEntry {
     /// The maker's quote chain wallet address
     #[prost(string, tag = "7")]
     pub maker_quote_address: ::prost::alloc::string::String,
-    /// 'ADDED = 1', 'UPDATED = 2', 'REMOVED = 3'
-    #[prost(enumeration = "OrderStatus", tag = "8")]
-    pub status: i32,
     /// The market ID this order belongs to
-    #[prost(string, tag = "9")]
+    #[prost(string, tag = "8")]
     pub market_id: ::prost::alloc::string::String,
+    /// The actual state of the order (Pending, Confirmed, Matched, Canceled, Settled)
+    #[prost(enumeration = "OrderState", tag = "9")]
+    pub state: i32,
 }
 /// Request to add a new orderbook
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -262,6 +268,21 @@ pub struct UnNormalizeDecimalsResponse {
     #[prost(uint32, tag = "5")]
     pub pair_decimals: u32,
 }
+/// Request to get the stronghold signer public key
+///
+/// Empty request - no parameters needed
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetStrongholdPublicKeyRequest {}
+/// Response containing the stronghold signer public key
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetStrongholdPublicKeyResponse {
+    /// The base chain public key (address)
+    #[prost(string, tag = "1")]
+    pub base_chain_public_key: ::prost::alloc::string::String,
+    /// The quote chain public key (address)
+    #[prost(string, tag = "2")]
+    pub quote_chain_public_key: ::prost::alloc::string::String,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum Side {
@@ -319,37 +340,46 @@ impl ExecutionType {
         }
     }
 }
+/// The actual state of an order in the matching engine
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
-pub enum OrderStatus {
+pub enum OrderState {
     Unspecified = 0,
-    /// When new order is added to the book
-    Added = 1,
-    /// When an existing order is updated
-    Updated = 2,
-    /// When an existing order is filled completely or canceled
-    Removed = 3,
+    /// Order submitted, funds locked on-chain, shows in orderbook but NOT matchable
+    Pending = 1,
+    /// OrderOpen blockchain event received, order is now matchable
+    Confirmed = 2,
+    /// Order matched by matching engine, trade recorded
+    Matched = 3,
+    /// Order canceled
+    Canceled = 4,
+    /// On-chain settlement completed successfully
+    Settled = 5,
 }
-impl OrderStatus {
+impl OrderState {
     /// String value of the enum field names used in the ProtoBuf definition.
     ///
     /// The values are not transformed in any way and thus are considered stable
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            Self::Unspecified => "ORDER_STATUS_UNSPECIFIED",
-            Self::Added => "ORDER_STATUS_ADDED",
-            Self::Updated => "ORDER_STATUS_UPDATED",
-            Self::Removed => "ORDER_STATUS_REMOVED",
+            Self::Unspecified => "ORDER_STATE_UNSPECIFIED",
+            Self::Pending => "ORDER_STATE_PENDING",
+            Self::Confirmed => "ORDER_STATE_CONFIRMED",
+            Self::Matched => "ORDER_STATE_MATCHED",
+            Self::Canceled => "ORDER_STATE_CANCELED",
+            Self::Settled => "ORDER_STATE_SETTLED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
-            "ORDER_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
-            "ORDER_STATUS_ADDED" => Some(Self::Added),
-            "ORDER_STATUS_UPDATED" => Some(Self::Updated),
-            "ORDER_STATUS_REMOVED" => Some(Self::Removed),
+            "ORDER_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "ORDER_STATE_PENDING" => Some(Self::Pending),
+            "ORDER_STATE_CONFIRMED" => Some(Self::Confirmed),
+            "ORDER_STATE_MATCHED" => Some(Self::Matched),
+            "ORDER_STATE_CANCELED" => Some(Self::Canceled),
+            "ORDER_STATE_SETTLED" => Some(Self::Settled),
             _ => None,
         }
     }
@@ -670,6 +700,35 @@ pub mod arborter_service_client {
                     GrpcMethod::new(
                         "xyz.aspens.arborter.v1.ArborterService",
                         "UnNormalizeDecimals",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_stronghold_public_key(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetStrongholdPublicKeyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetStrongholdPublicKeyResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter.v1.ArborterService/GetStrongholdPublicKey",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter.v1.ArborterService",
+                        "GetStrongholdPublicKey",
                     ),
                 );
             self.inner.unary(req, path, codec).await

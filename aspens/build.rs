@@ -1,6 +1,10 @@
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn main() -> Result<()> {
+    // Tell Cargo to rerun this build script if proto files change
+    println!("cargo:rerun-if-changed=proto/arborter.proto");
+    println!("cargo:rerun-if-changed=proto/arborter_config.proto");
+
     build_protos()?;
     Ok(())
 }

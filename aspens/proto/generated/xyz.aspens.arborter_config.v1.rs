@@ -4,18 +4,12 @@ pub struct DeployContractRequest {
     /// The name of the chain to deploy the contract on. e.g. base-sepolia
     #[prost(string, tag = "1")]
     pub chain_network: ::prost::alloc::string::String,
-    /// designate whether to deploy the contract on the base or quote chain
-    #[prost(string, tag = "2")]
-    pub base_or_quote: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeployContractResponse {
-    /// The address that the contract is deployed to on the base chain.
+    /// The address that the contract is deployed to on the specified chain
     #[prost(string, tag = "1")]
-    pub base_address: ::prost::alloc::string::String,
-    /// The address that the contract is deployed to on the quote chain.
-    #[prost(string, tag = "2")]
-    pub quote_address: ::prost::alloc::string::String,
+    pub contract_address: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AddChainRequest {
@@ -167,50 +161,47 @@ pub struct Chain {
     /// The address of the factory service contract on this chain. This is the address to call to deploy a new trade contract
     #[prost(string, tag = "8")]
     pub service_address: ::prost::alloc::string::String,
+    /// The address of the permit2 contract on this chain
+    #[prost(string, tag = "9")]
+    pub permit2_address: ::prost::alloc::string::String,
     /// The trade contract details
-    #[prost(message, optional, tag = "9")]
+    #[prost(message, optional, tag = "10")]
     pub trade_contract: ::core::option::Option<TradeContract>,
     /// Mapping of token symbols to token details
-    #[prost(map = "string, message", tag = "10")]
+    #[prost(map = "string, message", tag = "11")]
     pub tokens: ::std::collections::HashMap<::prost::alloc::string::String, Token>,
-    /// Declare whether this chain should act as the base or quote side of the trading pairs
-    #[prost(enumeration = "BaseOrQuote", tag = "11")]
-    pub base_or_quote: i32,
 }
 /// Represents a market with a base- and quote- chain token pair
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Market {
-    /// The market slug, e.g. 'base-sepolia-usdc--op-sepolia-usdc'
-    #[prost(string, tag = "1")]
-    pub slug: ::prost::alloc::string::String,
     /// The market name, e.g. 'Base Sepolia USDC - OP Sepolia USDC'
-    #[prost(string, tag = "2")]
+    #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
     /// The base chain, e.g. 'base-sepolia'
-    #[prost(string, tag = "3")]
+    #[prost(string, tag = "2")]
     pub base_chain_network: ::prost::alloc::string::String,
     /// The quote chain, e.g. 'op-sepolia'
-    #[prost(string, tag = "4")]
+    #[prost(string, tag = "3")]
     pub quote_chain_network: ::prost::alloc::string::String,
     /// / The token symbol for the base chain
-    #[prost(string, tag = "5")]
+    #[prost(string, tag = "4")]
     pub base_chain_token_symbol: ::prost::alloc::string::String,
     /// / The token symbol for the quote chain
-    #[prost(string, tag = "6")]
+    #[prost(string, tag = "5")]
     pub quote_chain_token_symbol: ::prost::alloc::string::String,
     /// The base chain token decimals
-    #[prost(int32, tag = "7")]
+    #[prost(int32, tag = "6")]
     pub base_chain_token_decimals: i32,
     /// The quote chain token decimals
-    #[prost(int32, tag = "8")]
+    #[prost(int32, tag = "7")]
     pub quote_chain_token_decimals: i32,
     /// The pair decimals (this is chosen by the stack admin)
-    #[prost(int32, tag = "9")]
+    #[prost(int32, tag = "8")]
     pub pair_decimals: i32,
     /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
-    #[prost(string, optional, tag = "10")]
-    pub market_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag = "9")]
+    pub market_id: ::prost::alloc::string::String,
 }
 /// Represents a single token
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -335,35 +326,6 @@ pub struct VersionInfo {
     /// The cargo features enabled
     #[prost(string, repeated, tag = "8")]
     pub cargo_features: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum BaseOrQuote {
-    Unspecified = 0,
-    Base = 1,
-    Quote = 2,
-}
-impl BaseOrQuote {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "BASE_OR_QUOTE_UNSPECIFIED",
-            Self::Base => "BASE_OR_QUOTE_BASE",
-            Self::Quote => "BASE_OR_QUOTE_QUOTE",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "BASE_OR_QUOTE_UNSPECIFIED" => Some(Self::Unspecified),
-            "BASE_OR_QUOTE_BASE" => Some(Self::Base),
-            "BASE_OR_QUOTE_QUOTE" => Some(Self::Quote),
-            _ => None,
-        }
-    }
 }
 /// Generated client implementations.
 pub mod config_service_client {

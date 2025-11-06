@@ -6,7 +6,7 @@ use std::fmt;
 
 use alloy::primitives::Signature;
 use alloy::signers::{local::PrivateKeySigner, Signer};
-use anyhow::Result;
+use eyre::Result;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{Order, SendOrderRequest, SendOrderResponse, TransactionHash};
 use prost::Message;

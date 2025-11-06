@@ -12,6 +12,7 @@ service ArborterService {
   rpc AddOrderbook(AddOrderbookRequest) returns (AddOrderbookResponse) {}
   rpc RemoveOrderbook(RemoveOrderbookRequest) returns (RemoveOrderbookResponse) {}
   rpc UnNormalizeDecimals(UnNormalizeDecimalsRequest) returns (UnNormalizeDecimalsResponse);
+  rpc GetStrongholdPublicKey(GetStrongholdPublicKeyRequest) returns (GetStrongholdPublicKeyResponse);
 }
 
 message Empty {}
@@ -26,6 +27,8 @@ message CancelOrderResponse {
   bool order_canceled = 1;
   // Transaction hashes associated with this cancellation
   repeated TransactionHash transaction_hashes = 2;
+  // Current state of the orderbook after this operation
+  repeated OrderbookEntry current_orderbook = 3;
 }
 
 message OrderbookRequest {
@@ -89,14 +92,19 @@ enum ExecutionType {
   EXECUTION_TYPE_DISCRETIONARY = 1;
 }
 
-enum OrderStatus {
-  ORDER_STATUS_UNSPECIFIED = 0;
-  // When new order is added to the book
-  ORDER_STATUS_ADDED = 1;
-  // When an existing order is updated
-  ORDER_STATUS_UPDATED = 2;
-  // When an existing order is filled completely or canceled
-  ORDER_STATUS_REMOVED = 3;
+// The actual state of an order in the matching engine
+enum OrderState {
+  ORDER_STATE_UNSPECIFIED = 0;
+  // Order submitted, funds locked on-chain, shows in orderbook but NOT matchable
+  ORDER_STATE_PENDING = 1;
+  // OrderOpen blockchain event received, order is now matchable
+  ORDER_STATE_CONFIRMED = 2;
+  // Order matched by matching engine, trade recorded
+  ORDER_STATE_MATCHED = 3;
+  // Order canceled
+  ORDER_STATE_CANCELED = 4;
+  // On-chain settlement completed successfully
+  ORDER_STATE_SETTLED = 5;
 }
 
 message Trade {
@@ -150,6 +158,8 @@ message SendOrderResponse {
   repeated Trade trades = 3;
   // Transaction hashes associated with this order
   repeated TransactionHash transaction_hashes = 4;
+  // Current state of the orderbook after this operation
+  repeated OrderbookEntry current_orderbook = 5;
 }
 
 /* rpc: CancelOrder */
@@ -181,10 +191,10 @@ message OrderbookEntry {
   string maker_base_address = 6;
   // The maker's quote chain wallet address
   string maker_quote_address = 7;
-  // 'ADDED = 1', 'UPDATED = 2', 'REMOVED = 3'
-  OrderStatus status = 8;
   // The market ID this order belongs to
-  string market_id = 9;
+  string market_id = 8;
+  // The actual state of the order (Pending, Confirmed, Matched, Canceled, Settled)
+  OrderState state = 9;
 }
 
 // Request to add a new orderbook
@@ -231,4 +241,17 @@ message UnNormalizeDecimalsResponse {
   uint32 base_token_decimals = 3;
   uint32 quote_token_decimals = 4;
   uint32 pair_decimals = 5;
+}
+
+// Request to get the stronghold signer public key
+message GetStrongholdPublicKeyRequest {
+  // Empty request - no parameters needed
+}
+
+// Response containing the stronghold signer public key
+message GetStrongholdPublicKeyResponse {
+  // The base chain public key (address)
+  string base_chain_public_key = 1;
+  // The quote chain public key (address)
+  string quote_chain_public_key = 2;
 }

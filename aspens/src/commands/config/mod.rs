@@ -2,14 +2,14 @@ pub mod config_pb {
     include!("../../../proto/generated/xyz.aspens.arborter_config.v1.rs");
 }
 
-use anyhow::Result;
+use eyre::{bail, Result};
 use config_pb::{Chain, GetConfigRequest, GetConfigResponse, Market, Token};
 use std::fs;
 use std::path::Path;
 use tracing::info;
 
 impl GetConfigResponse {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         let contents = fs::read_to_string(path)?;
 
@@ -17,8 +17,8 @@ impl GetConfigResponse {
         let config = match path.extension().and_then(|ext| ext.to_str()) {
             Some("json") => serde_json::from_str(&contents)?,
             Some("toml") => toml::from_str(&contents)?,
-            Some(ext) => anyhow::bail!("Unsupported file extension: {}", ext),
-            None => anyhow::bail!("No file extension found"),
+            Some(ext) => bail!("Unsupported file extension: {}", ext),
+            None => bail!("No file extension found"),
         };
 
         Ok(config)

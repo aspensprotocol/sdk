@@ -7,49 +7,56 @@ default:
 # Set up the development environment
 setup:
     #!/usr/bin/env bash
-    cp sdk/.env.sample app/.env
-    echo "Please edit sdk/.env with your configuration values"
-    echo "Then run: source sdk/.env"
+    cp .env.sample .env.anvil.local
+    echo "Please edit .env.anvil.local with your configuration values"
 
-# Build the project
+# Build the entire workspace
 build:
-    cd sdk && cargo build
+    cargo build
 
+# Build workspace in release mode
 release:
-    cd sdk && cargo build --release
+    cargo build --release
 
-# Run tests
+# Build only the core library
+build-lib:
+    cargo build -p aspens
+
+# Build only the CLI
+build-cli:
+    cargo build -p aspens-cli
+
+# Build only the REPL
+build-repl:
+    cargo build -p aspens-repl
+
+# Run tests for the entire workspace
 test:
-    cd sdk && cargo test
+    cargo test
+
+# Run tests for core library only
+test-lib:
+    cargo test -p aspens
 
 # Clean build artifacts
 clean:
     #!/usr/bin/env bash
-    cd sdk && cargo clean
-    rm -rf sdk/target
-    rm -rf sdk/out
-    rm -rf sdk/anvil*.log
+    cargo clean
+    rm -rf target
+    rm -rf anvil*.log
     rm -rf artifacts/
 
-# Format code
+# Format code for the entire workspace
 fmt:
-    cd sdk && cargo fmt
+    cargo fmt --all
 
-# Check code style
+# Check code style for the entire workspace
 check:
-    cd sdk && cargo check
+    cargo check --workspace
 
-# Run linter
+# Run linter on the entire workspace
 lint:
-    cd sdk && cargo clippy
-
-# Run the CLI in interactive mode
-cli:
-    cd sdk && cargo run
-
-# Run the CLI in scripted mode with arguments
-run *args:
-    cd sdk && cargo run {{args}}
+    cargo clippy --workspace
 
 # Environment management commands
 env-list:
@@ -62,17 +69,17 @@ env-switch env:
 
 # Run CLI with specific environment
 cli-anvil *args:
-    cd wrappers && cargo run --bin aspens-cli -- --env anvil {{args}}
+    cargo run -p aspens-cli -- --env anvil {{args}}
 
 cli-testnet *args:
-    cd wrappers && cargo run --bin aspens-cli -- --env testnet {{args}}
+    cargo run -p aspens-cli -- --env testnet {{args}}
 
 # Run REPL with specific environment
 repl-anvil:
-    cd wrappers && cargo run --bin aspens-repl -- --env anvil
+    cargo run -p aspens-repl -- --env anvil
 
 repl-testnet:
-    cd wrappers && cargo run --bin aspens-repl -- --env testnet
+    cargo run -p aspens-repl -- --env testnet
 
 # Run AMMIT tests with specific environment
 test-anvil:
