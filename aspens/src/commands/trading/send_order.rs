@@ -6,9 +6,9 @@ use std::fmt;
 
 use alloy::primitives::Signature;
 use alloy::signers::{local::PrivateKeySigner, Signer};
-use eyre::Result;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{Order, SendOrderRequest, SendOrderResponse, TransactionHash};
+use eyre::Result;
 use prost::Message;
 
 impl fmt::Display for Order {
@@ -29,13 +29,17 @@ impl fmt::Display for Order {
 }
 
 /// Transaction hash information for blockchain transactions
-/// 
+///
 /// This struct contains information about transaction hashes that are generated
 /// when orders are processed on the blockchain. Each transaction hash includes
 /// a type (e.g., "deposit", "settlement", "withdrawal") and the actual hash value.
 impl fmt::Display for TransactionHash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "TransactionHash {{ hash_type: {}, hash_value: {} }}", self.hash_type, self.hash_value)
+        write!(
+            f,
+            "TransactionHash {{ hash_type: {}, hash_value: {} }}",
+            self.hash_type, self.hash_value
+        )
     }
 }
 
@@ -53,13 +57,16 @@ impl TransactionHash {
     /// Returns a suggested block explorer base URL for common chains
     pub fn get_explorer_hint(&self) -> Option<String> {
         // This is a simple implementation - could be enhanced with actual chain detection
-        Some("Paste this hash into your chain's block explorer (e.g., Etherscan, Basescan)".to_string())
+        Some(
+            "Paste this hash into your chain's block explorer (e.g., Etherscan, Basescan)"
+                .to_string(),
+        )
     }
 }
 
 impl SendOrderResponse {
     /// Get formatted transaction hashes for CLI display
-    /// 
+    ///
     /// Returns a vector of formatted transaction hash strings that can be
     /// easily displayed in the CLI or REPL interface
     pub fn get_formatted_transaction_hashes(&self) -> Vec<String> {
@@ -93,6 +100,7 @@ impl fmt::Display for SendOrderResponse {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn call_send_order(
     url: String,
     side: i32,
@@ -144,7 +152,7 @@ pub async fn call_send_order(
 
     // Get the response data
     let response_data = response.into_inner();
-    
+
     // Print the response from the server
     tracing::info!("Response received: {}", response_data);
 

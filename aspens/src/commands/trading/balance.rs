@@ -2,8 +2,8 @@ use alloy::primitives::{Address, Uint};
 use alloy::providers::ProviderBuilder;
 use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
-use eyre::Result;
 use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
+use eyre::Result;
 use tracing::info;
 use url::Url;
 
