@@ -56,9 +56,9 @@ pub async fn call_deposit(
 
     // Call the contract function
     tracing::info!("Attempting deposit of {deposit_amount} tokens to contract {contract_address}");
-    
+
     let deposit_tx = contract.deposit(token_addr, deposit_amount);
-    
+
     // Try to estimate gas first to see if the transaction would succeed
     match deposit_tx.estimate_gas().await {
         Ok(gas_estimate) => {
@@ -69,17 +69,12 @@ pub async fn call_deposit(
             return Err(e.into());
         }
     }
-    
-    let result = deposit_tx
-        .send()
-        .await?;
-    
+
+    let result = deposit_tx.send().await?;
+
     tracing::info!("Deposit transaction sent: {result:?}");
-    
-    let receipt = result
-        .with_required_confirmations(1)
-        .watch()
-        .await?;
+
+    let receipt = result.with_required_confirmations(1).watch().await?;
 
     tracing::info!("Deposit transaction hash: {receipt:?}");
 

@@ -1,7 +1,7 @@
-use eyre::Result;
 use aspens::commands::trading::{balance, deposit, send_order, withdraw};
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use clap::{Parser, ValueEnum};
+use eyre::Result;
 use std::str::FromStr;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -43,6 +43,12 @@ enum Commands {
         /// Path to save the configuration file
         #[arg(short, long)]
         path: String,
+    },
+    /// Fetch and display the configuration from the server
+    Config {
+        /// Optional path to save the configuration file (supports .json or .toml)
+        #[arg(short, long)]
+        output_file: Option<String>,
     },
     /// Deposit tokens to make them available for trading (requires CHAIN TOKEN AMOUNT)
     Deposit {
@@ -123,11 +129,8 @@ async fn main() -> Result<()> {
         }
     };
 
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(log_level)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Failed to set global subscriber");
+    let subscriber = FmtSubscriber::builder().with_max_level(log_level).finish();
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
 
     // Build the client
     let mut builder = AspensClient::builder().with_environment(&cli.env);
@@ -181,7 +184,7 @@ async fn main() -> Result<()> {
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
             let chain_type = alloy_chains::NamedChain::from_str(&chain)?;
-            let result = executor.execute(deposit::call_deposit(
+            executor.execute(deposit::call_deposit(
                 chain_type,
                 rpc_url,
                 token_address,
@@ -189,7 +192,7 @@ async fn main() -> Result<()> {
                 privkey,
                 amount,
             ))?;
-            info!("Deposit result: {result:?}");
+            info!("Deposit was successfuly");
         }
         Commands::Withdraw {
             chain,
@@ -220,7 +223,8 @@ async fn main() -> Result<()> {
             limit_price,
             market,
         } => {
-            let market_id = market.unwrap_or_else(|| client.get_env("MARKET_ID_1").unwrap().clone());
+            let market_id =
+                market.unwrap_or_else(|| client.get_env("MARKET_ID_1").unwrap().clone());
             info!("Sending BUY order for {amount:?} at limit price {limit_price:?} on market {market_id}");
             let pubkey = client.get_env("EVM_TESTNET_PUBKEY").unwrap().clone();
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
@@ -253,7 +257,8 @@ async fn main() -> Result<()> {
             limit_price,
             market,
         } => {
-            let market_id = market.unwrap_or_else(|| client.get_env("MARKET_ID_1").unwrap().clone());
+            let market_id =
+                market.unwrap_or_else(|| client.get_env("MARKET_ID_1").unwrap().clone());
             info!("Sending SELL order for {amount:?} at limit price {limit_price:?} on market {market_id}");
             let pubkey = client.get_env("EVM_TESTNET_PUBKEY").unwrap().clone();
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
@@ -303,7 +308,7 @@ async fn main() -> Result<()> {
                 .clone();
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            let result = executor.execute(balance::balance(
+            executor.execute(balance::balance(
                 base_chain_rpc_url,
                 base_chain_usdc_token_address,
                 quote_chain_rpc_url,
@@ -312,24 +317,67 @@ async fn main() -> Result<()> {
                 quote_chain_contract_address,
                 privkey,
             ))?;
-            info!("Balance result: {result:?}");
+            info!("Balance call was successful");
         }
         Commands::Status => {
             info!("Configuration Status:");
             info!("  Environment: {}", client.environment());
             info!("  Server URL: {}", client.url());
-            info!("  Market ID 1: {}", client.get_env("MARKET_ID_1").unwrap_or(&"not set".to_string()));
-            info!("  Market ID 2: {}", client.get_env("MARKET_ID_2").unwrap_or(&"not set".to_string()));
-            info!("  Base Chain RPC: {}", client.get_env("BASE_CHAIN_RPC_URL").unwrap_or(&"not set".to_string()));
-            info!("  Quote Chain RPC: {}", client.get_env("QUOTE_CHAIN_RPC_URL").unwrap_or(&"not set".to_string()));
-            info!("  Public Key: {}", client.get_env("EVM_TESTNET_PUBKEY").unwrap_or(&"not set".to_string()));
+            info!(
+                "  Market ID 1: {}",
+                client
+                    .get_env("MARKET_ID_1")
+                    .unwrap_or(&"not set".to_string())
+            );
+            info!(
+                "  Market ID 2: {}",
+                client
+                    .get_env("MARKET_ID_2")
+                    .unwrap_or(&"not set".to_string())
+            );
+            info!(
+                "  Base Chain RPC: {}",
+                client
+                    .get_env("BASE_CHAIN_RPC_URL")
+                    .unwrap_or(&"not set".to_string())
+            );
+            info!(
+                "  Quote Chain RPC: {}",
+                client
+                    .get_env("QUOTE_CHAIN_RPC_URL")
+                    .unwrap_or(&"not set".to_string())
+            );
+            info!(
+                "  Public Key: {}",
+                client
+                    .get_env("EVM_TESTNET_PUBKEY")
+                    .unwrap_or(&"not set".to_string())
+            );
         }
         #[cfg(feature = "admin")]
         Commands::DownloadConfig { path } => {
             use aspens::commands::config;
-            let result =
-                executor.execute(config::download_config(client.url().to_string(), path));
+            let result = executor.execute(config::download_config(client.url().to_string(), path));
             info!("DownloadConfig result: {result:?}");
+        }
+        Commands::Config { output_file } => {
+            use aspens::commands::config;
+
+            info!("Fetching configuration from {}", client.url());
+            let config = executor.execute(config::get_config(client.url().to_string()))?;
+
+            // If output_file is provided, save to file
+            if let Some(path) = output_file {
+                executor.execute(config::download_config(
+                    client.url().to_string(),
+                    path.clone(),
+                ))?;
+                info!("Configuration saved to: {}", path);
+            } else {
+                // Display config as JSON
+                let json = serde_json::to_string_pretty(&config)?;
+                println!("{}", json);
+            }
         }
     }
 

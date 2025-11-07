@@ -30,6 +30,12 @@ pub struct BlockingExecutor {
     rt: tokio::runtime::Runtime,
 }
 
+impl Default for BlockingExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BlockingExecutor {
     pub fn new() -> Self {
         Self {

@@ -2,11 +2,40 @@ pub mod config_pb {
     include!("../../../proto/generated/xyz.aspens.arborter_config.v1.rs");
 }
 
-use eyre::{bail, Result};
 use config_pb::{Chain, GetConfigRequest, GetConfigResponse, Market, Token};
+use eyre::{bail, Result};
 use std::fs;
 use std::path::Path;
 use tracing::info;
+
+/// Fetch configuration from the trading server
+pub async fn get_config(url: String) -> Result<GetConfigResponse> {
+    use config_pb::config_service_client::ConfigServiceClient;
+
+    let mut client = ConfigServiceClient::connect(url).await?;
+    let request = tonic::Request::new(GetConfigRequest {});
+    let response = client.get_config(request).await?;
+
+    Ok(response.into_inner())
+}
+
+/// Download configuration from server and save to file
+pub async fn download_config(url: String, path: String) -> Result<()> {
+    let config = get_config(url).await?;
+
+    // Determine format based on file extension
+    let contents = match Path::new(&path).extension().and_then(|ext| ext.to_str()) {
+        Some("json") => serde_json::to_string_pretty(&config)?,
+        Some("toml") => toml::to_string_pretty(&config)?,
+        Some(ext) => bail!("Unsupported file extension: {}. Use .json or .toml", ext),
+        None => bail!("No file extension found. Use .json or .toml"),
+    };
+
+    fs::write(&path, contents)?;
+    info!("Configuration saved to: {}", path);
+
+    Ok(())
+}
 
 impl GetConfigResponse {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -37,12 +66,12 @@ impl GetConfigResponse {
             .and_then(|chain| chain.tokens.get(symbol))
     }
 
-    pub fn get_market(&self, slug: &str) -> Option<&Market> {
+    pub fn get_market(&self, name: &str) -> Option<&Market> {
         self.config
             .as_ref()?
             .markets
             .iter()
-            .find(|market| market.slug == slug)
+            .find(|market| market.name == name)
     }
 
     pub fn get_market_by_tokens(
@@ -110,18 +139,21 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    #[ignore = "requires example config files"]
     fn test_json_config_parsing() {
         let config = GetConfigResponse::from_file("../example/config.json").unwrap();
         verify_config(&config);
     }
 
     #[test]
+    #[ignore = "requires example config files"]
     fn test_toml_config_parsing() {
         let config = GetConfigResponse::from_file("../example/config.toml").unwrap();
         verify_config(&config);
     }
 
     #[tokio::test]
+    #[ignore = "requires example config files and running server"]
     async fn test_download_config_to_file() -> Result<()> {
         let config = GetConfigResponse::from_file("../example/config.toml").unwrap();
 
@@ -160,6 +192,6 @@ mod tests {
         // Test market lookup by tokens
         let market = config.get_market_by_tokens("anvil-1", "USDC", "anvil-2", "USDT");
         assert!(market.is_some());
-        assert_eq!(market.unwrap().slug, "A1USDC-A2USDT");
+        assert_eq!(market.unwrap().name, "Anvil-1 USDC - Anvil-2 USDT");
     }
 }

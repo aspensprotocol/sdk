@@ -47,7 +47,8 @@ impl AspensClient {
         if chain_lower == "quote"
             || chain_lower.contains("optimism")
             || chain_lower.contains("sepolia")
-            || chain_lower == "ethereum" {
+            || chain_lower == "ethereum"
+        {
             return Ok("QUOTE".to_string());
         }
 
@@ -78,12 +79,14 @@ impl AspensClient {
         // Try pattern: {CHAIN}_CHAIN_{TOKEN}_TOKEN_ADDRESS
         let key = format!("{}_CHAIN_{}_TOKEN_ADDRESS", chain_normalized, token_upper);
 
-        self.get_env(&key)
-            .cloned()
-            .ok_or_else(|| eyre::eyre!(
+        self.get_env(&key).cloned().ok_or_else(|| {
+            eyre::eyre!(
                 "Token address not found for {} on {}. Expected environment variable: {}",
-                token, chain, key
-            ))
+                token,
+                chain,
+                key
+            )
+        })
     }
 
     /// Get RPC URL for a given chain
@@ -91,9 +94,13 @@ impl AspensClient {
         let chain_normalized = self.normalize_chain_identifier(chain)?;
         let key = format!("{}_CHAIN_RPC_URL", chain_normalized);
 
-        self.get_env(&key)
-            .cloned()
-            .ok_or_else(|| eyre::eyre!("RPC URL not found for chain {}. Expected environment variable: {}", chain, key))
+        self.get_env(&key).cloned().ok_or_else(|| {
+            eyre::eyre!(
+                "RPC URL not found for chain {}. Expected environment variable: {}",
+                chain,
+                key
+            )
+        })
     }
 
     /// Get contract address for a given chain
@@ -101,9 +108,13 @@ impl AspensClient {
         let chain_normalized = self.normalize_chain_identifier(chain)?;
         let key = format!("{}_CHAIN_CONTRACT_ADDRESS", chain_normalized);
 
-        self.get_env(&key)
-            .cloned()
-            .ok_or_else(|| eyre::eyre!("Contract address not found for chain {}. Expected environment variable: {}", chain, key))
+        self.get_env(&key).cloned().ok_or_else(|| {
+            eyre::eyre!(
+                "Contract address not found for chain {}. Expected environment variable: {}",
+                chain,
+                key
+            )
+        })
     }
 }
 
@@ -188,7 +199,15 @@ fn load_env_file(path: &str) -> Result<HashMap<String, String>> {
             // Parse KEY=VALUE
             if let Some((key, value)) = line.split_once('=') {
                 let key = key.trim().to_string();
-                let value = value.trim().to_string();
+                let mut value = value.trim().to_string();
+
+                // Strip surrounding quotes if present
+                if (value.starts_with('"') && value.ends_with('"'))
+                    || (value.starts_with('\'') && value.ends_with('\''))
+                {
+                    value = value[1..value.len() - 1].to_string();
+                }
+
                 env_vars.insert(key.clone(), value.clone());
                 // Also set in process environment for backwards compatibility
                 std::env::set_var(&key, &value);
@@ -202,6 +221,8 @@ fn load_env_file(path: &str) -> Result<HashMap<String, String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_builder_defaults() {
@@ -226,5 +247,24 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(client.environment(), "testnet");
+    }
+
+    #[test]
+    fn test_env_file_quote_stripping() {
+        // Create a temporary .env file with quoted values
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "DOUBLE_QUOTED=\"value1\"").unwrap();
+        writeln!(file, "SINGLE_QUOTED='value2'").unwrap();
+        writeln!(file, "UNQUOTED=value3").unwrap();
+        writeln!(file, "# Comment line").unwrap();
+        writeln!(file, "EMPTY_VALUE=\"\"").unwrap();
+        file.flush().unwrap();
+
+        let env_vars = load_env_file(file.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(env_vars.get("DOUBLE_QUOTED"), Some(&"value1".to_string()));
+        assert_eq!(env_vars.get("SINGLE_QUOTED"), Some(&"value2".to_string()));
+        assert_eq!(env_vars.get("UNQUOTED"), Some(&"value3".to_string()));
+        assert_eq!(env_vars.get("EMPTY_VALUE"), Some(&"".to_string()));
     }
 }

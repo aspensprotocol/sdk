@@ -1,8 +1,7 @@
 use eyre::{Context, Result};
 use tonic::transport::Channel;
 use tonic_reflection::pb::v1::{
-    server_reflection_client::ServerReflectionClient,
-    server_reflection_request::MessageRequest,
+    server_reflection_client::ServerReflectionClient, server_reflection_request::MessageRequest,
     server_reflection_response::MessageResponse, ServerReflectionRequest,
 };
 use tracing::info;

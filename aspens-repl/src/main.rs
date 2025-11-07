@@ -1,9 +1,7 @@
 use aspens::commands::trading::{balance, deposit, send_order, withdraw};
 use aspens::{AspensClient, AsyncExecutor, BlockingExecutor};
 use clap::Parser;
-use clap_repl::reedline::{
-    DefaultPrompt, DefaultPromptSegment, FileBackedHistory,
-};
+use clap_repl::reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory};
 use clap_repl::ClapEditor;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -88,6 +86,12 @@ enum ReplCommand {
         #[arg(short, long)]
         path: String,
     },
+    /// Fetch and display the configuration from the server
+    Config {
+        /// Optional path to save the configuration file (supports .json or .toml)
+        #[arg(short, long)]
+        output_file: Option<String>,
+    },
     /// Deposit tokens to make them available for trading (requires chain, token, amount)
     Deposit {
         /// The chain network to deposit to
@@ -142,8 +146,7 @@ fn main() {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .finish();
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Failed to set global subscriber");
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
 
     // Build the client
     let client = AspensClient::builder()
@@ -203,6 +206,34 @@ fn main() {
             use aspens::commands::config;
             if let Err(e) = executor.execute(config::download_config(app_state.url(), path)) {
                 info!("Failed to download config: {e:?}");
+            }
+        }
+        ReplCommand::Config { output_file } => {
+            use aspens::commands::config;
+
+            info!("Fetching configuration from {}", app_state.url());
+            match executor.execute(config::get_config(app_state.url())) {
+                Ok(config) => {
+                    // If output_file is provided, save to file
+                    if let Some(path) = output_file {
+                        if let Err(e) =
+                            executor.execute(config::download_config(app_state.url(), path.clone()))
+                        {
+                            info!("Failed to save configuration: {e:?}");
+                        } else {
+                            info!("Configuration saved to: {}", path);
+                        }
+                    } else {
+                        // Display config as JSON
+                        match serde_json::to_string_pretty(&config) {
+                            Ok(json) => println!("{}", json),
+                            Err(e) => info!("Failed to serialize config: {e:?}"),
+                        }
+                    }
+                }
+                Err(e) => {
+                    info!("Failed to fetch config: {e:?}");
+                }
             }
         }
         ReplCommand::Deposit {
