@@ -18,6 +18,7 @@ alloy-chains.workspace = true
 eyre.workspace = true
 clap.workspace = true
 clap-verbosity.workspace = true
+log.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

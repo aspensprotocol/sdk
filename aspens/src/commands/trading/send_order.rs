@@ -41,11 +41,19 @@ impl fmt::Display for TransactionHash {
 
 impl TransactionHash {
     /// Format transaction hash for CLI display
-    /// 
+    ///
     /// Returns a user-friendly string representation of the transaction hash
     /// in the format "type: hash_value"
     pub fn format_for_cli(&self) -> String {
-        format!("{}: {}", self.hash_type, self.hash_value)
+        format!("[{}] {}", self.hash_type.to_uppercase(), self.hash_value)
+    }
+
+    /// Get block explorer URL hints based on common chains
+    ///
+    /// Returns a suggested block explorer base URL for common chains
+    pub fn get_explorer_hint(&self) -> Option<String> {
+        // This is a simple implementation - could be enhanced with actual chain detection
+        Some("Paste this hash into your chain's block explorer (e.g., Etherscan, Basescan)".to_string())
     }
 }
 

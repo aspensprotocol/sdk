@@ -28,62 +28,66 @@ struct Cli {
 
 #[derive(Debug, Parser)]
 enum Commands {
-    /// Initialize a new trading session
-    Initialize,
-    /// Config: Fetch the current configuration from the arborter server
+    /// Initialize a new trading session with optional gRPC endpoint URL
+    Initialize {
+        /// gRPC endpoint URL (defaults to http://0.0.0.0:50051)
+        #[arg(value_name = "URL")]
+        url: Option<String>,
+    },
+    /// Fetch the current configuration from the arborter server
     #[cfg(feature = "admin")]
     GetConfig,
-    /// Download configuration to a file
+    /// Download configuration to a file at the specified path
     #[cfg(feature = "admin")]
     DownloadConfig {
         /// Path to save the configuration file
         #[arg(short, long)]
         path: String,
     },
-    /// Deposit token(s) to make them available for trading
+    /// Deposit tokens to make them available for trading (requires CHAIN TOKEN AMOUNT)
     Deposit {
         /// The chain network to deposit to
         chain: String,
+        /// Token symbol to deposit (e.g., USDC, WETH, WBTC)
         token: String,
+        /// Amount to deposit
         amount: u64,
     },
-    /// Withdraw token(s) to a local wallet
+    /// Withdraw tokens to a local wallet (requires CHAIN TOKEN AMOUNT)
     Withdraw {
         /// The chain network to withdraw from
         chain: String,
+        /// Token symbol to withdraw (e.g., USDC, WETH, WBTC)
         token: String,
+        /// Amount to withdraw
         amount: u64,
     },
-    /// Send a BUY order
+    /// Send a BUY order with amount and optional limit price
     Buy {
         /// Amount to buy
         amount: String,
-        /// Limit price for the order
+        /// Optional limit price for the order
         #[arg(short, long)]
         limit_price: Option<String>,
+        /// Market ID to trade on (defaults to MARKET_ID_1 from environment)
+        #[arg(short, long)]
+        market: Option<String>,
     },
-    /// Send a SELL order
+    /// Send a SELL order with amount and optional limit price
     Sell {
         /// Amount to sell
         amount: String,
-        /// Limit price for the order
+        /// Optional limit price for the order
         #[arg(short, long)]
         limit_price: Option<String>,
+        /// Market ID to trade on (defaults to MARKET_ID_1 from environment)
+        #[arg(short, long)]
+        market: Option<String>,
     },
-    /// Get a list of all active orders
-    GetOrders,
-    /// Cancel an order
-    CancelOrder {
-        /// Order ID to cancel
-        order_id: u64,
-    },
-    /// Fetch the balances
+    /// Fetch the current balances across all chains
     Balance,
-    /// Fetch the latest top of book
-    GetOrderbook {
-        /// Market ID to fetch orderbook for
-        market_id: String,
-    },
+    /// Show current configuration and connection status
+    Status,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -105,8 +109,22 @@ impl std::fmt::Display for BaseOrQuote {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Configure log level based on verbosity flag
+    let log_level = if cli.verbose.is_silent() {
+        Level::ERROR
+    } else {
+        match cli.verbose.log_level_filter() {
+            log::LevelFilter::Off => Level::ERROR,
+            log::LevelFilter::Error => Level::ERROR,
+            log::LevelFilter::Warn => Level::WARN,
+            log::LevelFilter::Info => Level::INFO,
+            log::LevelFilter::Debug => Level::DEBUG,
+            log::LevelFilter::Trace => Level::TRACE,
+        }
+    };
+
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
+        .with_max_level(log_level)
         .finish();
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set global subscriber");
@@ -122,9 +140,26 @@ async fn main() -> Result<()> {
     let executor = DirectExecutor;
 
     match cli.command {
-        Commands::Initialize => {
-            info!("Initialized session at {}", client.url());
-            info!("Available config for {} is <TODO!!>", client.url());
+        Commands::Initialize { url } => {
+            // Use provided URL or default to localhost:50051
+            let endpoint = url.unwrap_or_else(|| "http://localhost:50051".to_string());
+            info!("Initializing session at {}", endpoint);
+
+            // Check gRPC server health via reflection
+            match executor.execute(aspens::health::check_grpc_server(endpoint.clone())) {
+                Ok(services) => {
+                    if services.is_empty() {
+                        info!("⚠️  Connected to server but no services found (reflection may not be enabled)");
+                    } else {
+                        info!("✓ Successfully connected to gRPC server");
+                        info!("  Found {} service(s)", services.len());
+                    }
+                }
+                Err(e) => {
+                    info!("✗ Failed to connect to gRPC server: {}", e);
+                    info!("  Please check that the server is running at {}", endpoint);
+                }
+            }
         }
         #[cfg(feature = "admin")]
         Commands::GetConfig => {
@@ -138,23 +173,19 @@ async fn main() -> Result<()> {
             amount,
         } => {
             info!("Depositing {amount:?} {token:?} on {chain:?}");
-            let base_chain_rpc_url = client.get_env("BASE_CHAIN_RPC_URL").unwrap().clone();
-            let base_chain_contract_address = client
-                .get_env("BASE_CHAIN_CONTRACT_ADDRESS")
-                .unwrap()
-                .clone();
-            let base_chain_usdc_token_address = client
-                .get_env("BASE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap()
-                .clone();
+
+            // Resolve chain-specific configuration
+            let rpc_url = client.get_chain_rpc_url(&chain)?;
+            let contract_address = client.get_chain_contract_address(&chain)?;
+            let token_address = client.resolve_token_address(&chain, &token)?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            let chain = alloy_chains::NamedChain::from_str(&chain)?;
+            let chain_type = alloy_chains::NamedChain::from_str(&chain)?;
             let result = executor.execute(deposit::call_deposit(
-                chain,
-                base_chain_rpc_url,
-                base_chain_usdc_token_address,
-                base_chain_contract_address,
+                chain_type,
+                rpc_url,
+                token_address,
+                contract_address,
                 privkey,
                 amount,
             ))?;
@@ -166,23 +197,19 @@ async fn main() -> Result<()> {
             amount,
         } => {
             info!("Withdrawing {amount:?} {token:?} on {chain:?}");
-            let base_chain_rpc_url = client.get_env("BASE_CHAIN_RPC_URL").unwrap().clone();
-            let base_chain_contract_address = client
-                .get_env("BASE_CHAIN_CONTRACT_ADDRESS")
-                .unwrap()
-                .clone();
-            let base_chain_usdc_token_address = client
-                .get_env("BASE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap()
-                .clone();
+
+            // Resolve chain-specific configuration
+            let rpc_url = client.get_chain_rpc_url(&chain)?;
+            let contract_address = client.get_chain_contract_address(&chain)?;
+            let token_address = client.resolve_token_address(&chain, &token)?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            let chain = alloy_chains::NamedChain::from_str(&chain)?;
+            let chain_type = alloy_chains::NamedChain::from_str(&chain)?;
             let result = executor.execute(withdraw::call_withdraw(
-                chain,
-                base_chain_rpc_url,
-                base_chain_usdc_token_address,
-                base_chain_contract_address,
+                chain_type,
+                rpc_url,
+                token_address,
+                contract_address,
                 privkey,
                 amount,
             ));
@@ -191,9 +218,10 @@ async fn main() -> Result<()> {
         Commands::Buy {
             amount,
             limit_price,
+            market,
         } => {
-            info!("Sending BUY order for {amount:?} at limit price {limit_price:?}");
-            let market_id = client.get_env("MARKET_ID_1").unwrap().clone();
+            let market_id = market.unwrap_or_else(|| client.get_env("MARKET_ID_1").unwrap().clone());
+            info!("Sending BUY order for {amount:?} at limit price {limit_price:?} on market {market_id}");
             let pubkey = client.get_env("EVM_TESTNET_PUBKEY").unwrap().clone();
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
@@ -215,16 +243,18 @@ async fn main() -> Result<()> {
                 for formatted_hash in result.get_formatted_transaction_hashes() {
                     info!("  {}", formatted_hash);
                 }
+                info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
 
-            info!("Order sent");
+            info!("✓ Buy order sent successfully");
         }
         Commands::Sell {
             amount,
             limit_price,
+            market,
         } => {
-            info!("Sending SELL order for {amount:?} at limit price {limit_price:?}");
-            let market_id = client.get_env("MARKET_ID_1").unwrap().clone();
+            let market_id = market.unwrap_or_else(|| client.get_env("MARKET_ID_1").unwrap().clone());
+            info!("Sending SELL order for {amount:?} at limit price {limit_price:?} on market {market_id}");
             let pubkey = client.get_env("EVM_TESTNET_PUBKEY").unwrap().clone();
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
@@ -246,17 +276,10 @@ async fn main() -> Result<()> {
                 for formatted_hash in result.get_formatted_transaction_hashes() {
                     info!("  {}", formatted_hash);
                 }
+                info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
 
-            info!("Order sent");
-        }
-        Commands::GetOrders => {
-            info!("Getting orders...");
-            info!("TODO: Implement this");
-        }
-        Commands::CancelOrder { order_id } => {
-            info!("Order canceled: {order_id:?}");
-            info!("TODO: Implement this");
+            info!("✓ Sell order sent successfully");
         }
         Commands::Balance => {
             info!("Getting balance");
@@ -291,9 +314,15 @@ async fn main() -> Result<()> {
             ))?;
             info!("Balance result: {result:?}");
         }
-        Commands::GetOrderbook { market_id } => {
-            info!("Getting orderbook: {market_id:?}");
-            info!("TODO: Implement this");
+        Commands::Status => {
+            info!("Configuration Status:");
+            info!("  Environment: {}", client.environment());
+            info!("  Server URL: {}", client.url());
+            info!("  Market ID 1: {}", client.get_env("MARKET_ID_1").unwrap_or(&"not set".to_string()));
+            info!("  Market ID 2: {}", client.get_env("MARKET_ID_2").unwrap_or(&"not set".to_string()));
+            info!("  Base Chain RPC: {}", client.get_env("BASE_CHAIN_RPC_URL").unwrap_or(&"not set".to_string()));
+            info!("  Quote Chain RPC: {}", client.get_env("QUOTE_CHAIN_RPC_URL").unwrap_or(&"not set".to_string()));
+            info!("  Public Key: {}", client.get_env("EVM_TESTNET_PUBKEY").unwrap_or(&"not set".to_string()));
         }
         #[cfg(feature = "admin")]
         Commands::DownloadConfig { path } => {
