@@ -15,8 +15,8 @@ repository = "https://github.com/aspensprotocol/sdk"
 [workspace.dependencies]
 # Blockchain & Ethereum
 alloy = { version = "1.1.0", default-features = false, features = ["contract", "network", "providers", "reqwest", "signer-local", "signers"] }
-alloy-chains = "0.2.7"
-alloy-contract = "1.1.0"
+alloy-chains = "0.2.20"
+alloy-contract = "1.1.2"
 alloy-sol-types = { version = "1.4.1", features = ["json"] }
 
 # gRPC & Protobuf
@@ -36,7 +36,7 @@ serde_json = "1.0"
 toml = "0.9.8"
 
 # CLI (only for binaries)
-clap = { version = "4.5.51", features = ["derive"] }
+clap = { version = "4.5.53", features = ["derive"] }
 clap-repl = "0.3.2"
 clap-verbosity = "2.1.0"
 
