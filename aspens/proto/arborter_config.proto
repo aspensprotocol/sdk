@@ -6,6 +6,8 @@ option optimize_for = SPEED;
 
 // The Configuration service definition
 service ConfigService {
+  // rpc service to set the manager address
+  rpc UpdateManager(UpdateManagerRequest) returns (UpdateManagerResponse) {}
   // rpc service to deploy a contract on the base and quote chains
   rpc DeployContract(DeployContractRequest) returns (DeployContractResponse) {}
   // rpc service to add a chain to the configuration
@@ -28,6 +30,16 @@ service ConfigService {
   rpc DeleteChain(DeleteChainRequest) returns (DeleteChainResponse) {}
   // rpc service to delete a trade contract
   rpc DeleteTradeContract(DeleteTradeContractRequest) returns (DeleteTradeContractResponse) {}
+}
+
+message UpdateManagerRequest {
+  // The address to set for admin management operations 
+  string manager_address = 1;
+}
+
+message UpdateManagerResponse {
+  // The address that has been set for admin management operations 
+  string manager_address = 1;
 }
 
 message DeployContractRequest {

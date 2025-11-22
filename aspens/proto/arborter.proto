@@ -12,7 +12,7 @@ service ArborterService {
   rpc AddOrderbook(AddOrderbookRequest) returns (AddOrderbookResponse) {}
   rpc RemoveOrderbook(RemoveOrderbookRequest) returns (RemoveOrderbookResponse) {}
   rpc UnNormalizeDecimals(UnNormalizeDecimalsRequest) returns (UnNormalizeDecimalsResponse);
-  rpc GetStrongholdPublicKey(GetStrongholdPublicKeyRequest) returns (GetStrongholdPublicKeyResponse);
+  rpc GetSignerPublicKey(GetSignerPublicKeyRequest) returns (GetSignerPublicKeyResponse);
 }
 
 message Empty {}
@@ -243,13 +243,13 @@ message UnNormalizeDecimalsResponse {
   uint32 pair_decimals = 5;
 }
 
-// Request to get the stronghold signer public key
-message GetStrongholdPublicKeyRequest {
+// Request to get the signer public key
+message GetSignerPublicKeyRequest {
   // Empty request - no parameters needed
 }
 
-// Response containing the stronghold signer public key
-message GetStrongholdPublicKeyResponse {
+// Response containing the signer public key
+message GetSignerPublicKeyResponse {
   // The base chain public key (address)
   string base_chain_public_key = 1;
   // The quote chain public key (address)
