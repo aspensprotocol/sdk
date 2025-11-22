@@ -28,12 +28,6 @@ struct Cli {
 
 #[derive(Debug, Parser)]
 enum Commands {
-    /// Initialize a new trading session with optional gRPC endpoint URL
-    Initialize {
-        /// gRPC endpoint URL (defaults to http://0.0.0.0:50051)
-        #[arg(value_name = "URL")]
-        url: Option<String>,
-    },
     /// Fetch the current configuration from the arborter server
     #[cfg(feature = "admin")]
     GetConfig,
@@ -143,27 +137,6 @@ async fn main() -> Result<()> {
     let executor = DirectExecutor;
 
     match cli.command {
-        Commands::Initialize { url } => {
-            // Use provided URL or default to localhost:50051
-            let endpoint = url.unwrap_or_else(|| "http://localhost:50051".to_string());
-            info!("Initializing session at {}", endpoint);
-
-            // Check gRPC server health via reflection
-            match executor.execute(aspens::health::check_grpc_server(endpoint.clone())) {
-                Ok(services) => {
-                    if services.is_empty() {
-                        info!("⚠️  Connected to server but no services found (reflection may not be enabled)");
-                    } else {
-                        info!("✓ Successfully connected to gRPC server");
-                        info!("  Found {} service(s)", services.len());
-                    }
-                }
-                Err(e) => {
-                    info!("✗ Failed to connect to gRPC server: {}", e);
-                    info!("  Please check that the server is running at {}", endpoint);
-                }
-            }
-        }
         #[cfg(feature = "admin")]
         Commands::GetConfig => {
             use aspens::commands::config;

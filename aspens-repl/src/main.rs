@@ -7,7 +7,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
-use url::Url;
 
 struct AppState {
     client: Arc<Mutex<AspensClient>>,
@@ -18,18 +17,6 @@ impl AppState {
         Self {
             client: Arc::new(Mutex::new(client)),
         }
-    }
-
-    fn with_url(&mut self, url: Url) {
-        let mut guard = self.client.lock().unwrap();
-        // Rebuild client with new URL
-        let new_client = AspensClient::builder()
-            .with_url(url.to_string())
-            .unwrap()
-            .with_environment(guard.environment())
-            .build()
-            .unwrap();
-        *guard = new_client;
     }
 
     fn url(&self) -> String {
@@ -70,12 +57,6 @@ struct ReplCli {
 #[derive(Debug, Parser)]
 #[command(name = "", author, version, about, long_about = None)]
 enum ReplCommand {
-    /// Initialize a new trading session with optional gRPC endpoint URL
-    Initialize {
-        /// gRPC endpoint URL (defaults to http://localhost:50051)
-        #[arg(short, long, default_value_t = Url::parse("http://localhost:50051").unwrap())]
-        url: Url,
-    },
     /// Fetch the current configuration from the arborter server
     #[cfg(feature = "admin")]
     GetConfig,
@@ -154,7 +135,7 @@ fn main() {
         .build()
         .expect("Failed to build AspensClient");
 
-    let mut app_state = AppState::new(client);
+    let app_state = AppState::new(client);
     let executor = BlockingExecutor::new();
 
     let prompt = DefaultPrompt {
@@ -172,26 +153,6 @@ fn main() {
         .build();
 
     rl.repl(|command| match command {
-        ReplCommand::Initialize { url } => {
-            app_state.with_url(url.clone());
-            info!("Initializing session at {}", url);
-
-            // Check gRPC server health via reflection
-            match executor.execute(aspens::health::check_grpc_server(url.to_string())) {
-                Ok(services) => {
-                    if services.is_empty() {
-                        info!("⚠️  Connected to server but no services found (reflection may not be enabled)");
-                    } else {
-                        info!("✓ Successfully connected to gRPC server");
-                        info!("  Found {} service(s)", services.len());
-                    }
-                }
-                Err(e) => {
-                    info!("✗ Failed to connect to gRPC server: {}", e);
-                    info!("  Please check that the server is running at {}", url);
-                }
-            }
-        }
         #[cfg(feature = "admin")]
         ReplCommand::GetConfig => {
             use aspens::commands::config;
