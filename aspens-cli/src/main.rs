@@ -11,9 +11,9 @@ use url::Url;
 #[command(name = "aspens-cli")]
 #[command(about = "Aspens CLI for trading operations")]
 struct Cli {
-    /// The URL of the arborter server
-    #[arg(short, long)]
-    url: Option<Url>,
+    /// The Aspens stack URL
+    #[arg(short = 's', long = "stack")]
+    stack_url: Option<Url>,
 
     /// Environment configuration to use
     #[arg(short, long, default_value = "anvil")]
@@ -29,10 +29,8 @@ struct Cli {
 #[derive(Debug, Parser)]
 enum Commands {
     /// Fetch the current configuration from the arborter server
-    #[cfg(feature = "admin")]
     GetConfig,
     /// Download configuration to a file at the specified path
-    #[cfg(feature = "admin")]
     DownloadConfig {
         /// Path to save the configuration file
         #[arg(short, long)]
@@ -129,7 +127,7 @@ async fn main() -> Result<()> {
     // Build the client
     let mut builder = AspensClient::builder().with_environment(&cli.env);
 
-    if let Some(url) = cli.url {
+    if let Some(url) = cli.stack_url {
         builder = builder.with_url(url.to_string())?;
     }
 

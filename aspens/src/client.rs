@@ -5,7 +5,7 @@ use url::Url;
 /// Main client for interacting with Aspens trading platform
 pub struct AspensClient {
     /// URL of the Arborter server
-    pub(crate) url: Url,
+    pub(crate) stack_url: Url,
     /// Environment configuration name (e.g., "anvil", "testnet")
     pub(crate) environment: String,
     /// Environment variables loaded from config
@@ -19,8 +19,8 @@ impl AspensClient {
     }
 
     /// Get the Arborter server URL
-    pub fn url(&self) -> &Url {
-        &self.url
+    pub fn stack_url(&self) -> &Url {
+        &self.stack_url
     }
 
     /// Get the environment name
@@ -121,7 +121,7 @@ impl AspensClient {
 /// Builder for AspensClient
 #[derive(Default)]
 pub struct AspensClientBuilder {
-    url: Option<Url>,
+    stack_url: Option<Url>,
     environment: Option<String>,
     env_file_path: Option<String>,
 }
@@ -130,7 +130,7 @@ impl AspensClientBuilder {
     /// Set the Arborter server URL
     pub fn with_url(mut self, url: impl Into<String>) -> Result<Self> {
         let url_str = url.into();
-        self.url = Some(Url::parse(&url_str).context("Invalid URL")?);
+        self.stack_url = Some(Url::parse(&url_str).context("Invalid URL")?);
         Ok(self)
     }
 
@@ -160,8 +160,8 @@ impl AspensClientBuilder {
 
         let env_vars = load_env_file(&env_file)?;
 
-        let url = self
-            .url
+        let stack_url = self
+            .stack_url
             .or_else(|| {
                 env_vars
                     .get("ARBORTER_URL")
@@ -170,7 +170,7 @@ impl AspensClientBuilder {
             .unwrap_or_else(|| Url::parse("http://0.0.0.0:50051").unwrap());
 
         Ok(AspensClient {
-            url,
+            stack_url,
             environment,
             env_vars,
         })
@@ -237,7 +237,7 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        assert_eq!(client.url().as_str(), "http://example.com:8080/");
+        assert_eq!(client.stack_url().as_str(), "http://example.com:8080/");
     }
 
     #[test]
