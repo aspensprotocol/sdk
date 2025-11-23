@@ -135,10 +135,9 @@ async fn main() -> Result<()> {
     let executor = DirectExecutor;
 
     match cli.command {
-        #[cfg(feature = "admin")]
         Commands::GetConfig => {
             use aspens::commands::config;
-            let result = executor.execute(config::get_config(client.url().to_string()));
+            let result = executor.execute(config::get_config(client.stack_url().to_string()));
             info!("GetConfig result: {result:?}");
         }
         Commands::Deposit {
@@ -201,7 +200,7 @@ async fn main() -> Result<()> {
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
             let result = executor.execute(send_order::call_send_order(
-                client.url().to_string(),
+                client.stack_url().to_string(),
                 1, // Buy side
                 amount,
                 limit_price,
@@ -235,7 +234,7 @@ async fn main() -> Result<()> {
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
             let result = executor.execute(send_order::call_send_order(
-                client.url().to_string(),
+                client.stack_url().to_string(),
                 2, // Sell side
                 amount,
                 limit_price,
@@ -293,7 +292,7 @@ async fn main() -> Result<()> {
         Commands::Status => {
             info!("Configuration Status:");
             info!("  Environment: {}", client.environment());
-            info!("  Server URL: {}", client.url());
+            info!("  Stack URL: {}", client.stack_url());
             info!(
                 "  Market ID 1: {}",
                 client
@@ -325,22 +324,24 @@ async fn main() -> Result<()> {
                     .unwrap_or(&"not set".to_string())
             );
         }
-        #[cfg(feature = "admin")]
         Commands::DownloadConfig { path } => {
             use aspens::commands::config;
-            let result = executor.execute(config::download_config(client.url().to_string(), path));
+            let result = executor.execute(config::download_config(
+                client.stack_url().to_string(),
+                path,
+            ));
             info!("DownloadConfig result: {result:?}");
         }
         Commands::Config { output_file } => {
             use aspens::commands::config;
 
-            info!("Fetching configuration from {}", client.url());
-            let config = executor.execute(config::get_config(client.url().to_string()))?;
+            info!("Fetching configuration from {}", client.stack_url());
+            let config = executor.execute(config::get_config(client.stack_url().to_string()))?;
 
             // If output_file is provided, save to file
             if let Some(path) = output_file {
                 executor.execute(config::download_config(
-                    client.url().to_string(),
+                    client.stack_url().to_string(),
                     path.clone(),
                 ))?;
                 info!("Configuration saved to: {}", path);
