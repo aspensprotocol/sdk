@@ -293,4 +293,4 @@ All order quantities and prices must be in pair decimal format when sent to the 
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
