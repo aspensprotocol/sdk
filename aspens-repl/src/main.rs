@@ -351,35 +351,24 @@ fn main() {
             }
         }
         ReplCommand::Balance => {
-            info!("Getting balance");
-            let base_chain_rpc_url = app_state.get_env("BASE_CHAIN_RPC_URL").unwrap();
-            let base_chain_usdc_token_address = app_state
-                .get_env("BASE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap();
-            let quote_chain_rpc_url = app_state.get_env("QUOTE_CHAIN_RPC_URL").unwrap();
-            let quote_chain_usdc_token_address = app_state
-                .get_env("QUOTE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap();
-            let base_chain_contract_address =
-                app_state.get_env("BASE_CHAIN_CONTRACT_ADDRESS").unwrap();
-            let quote_chain_contract_address = app_state
-                .get_env("QUOTE_CHAIN_CONTRACT_ADDRESS")
-                .unwrap();
-            let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
+            use aspens::commands::config;
 
-            if let Err(e) = executor.execute(balance::balance(
-                base_chain_rpc_url,
-                base_chain_usdc_token_address,
-                quote_chain_rpc_url,
-                quote_chain_usdc_token_address,
-                base_chain_contract_address,
-                quote_chain_contract_address,
-                privkey,
-            )) {
-                info!("Failed to get balance: {e:?}");
-                info!("Hint: Check your RPC URLs with 'status' command");
-                info!("Hint: Ensure your private key is correctly configured");
-                info!("Hint: Verify the contract addresses are correct");
+            info!("Fetching balances for all tokens across all chains");
+            let stack_url = app_state.stack_url();
+            match executor.execute(config::get_config(stack_url.clone())) {
+                Ok(config) => {
+                    let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
+                    if let Err(e) = executor.execute(balance::balance_from_config(config, privkey)) {
+                        info!("Failed to get balances: {e:?}");
+                        info!("Hint: Check your RPC URLs with 'status' command");
+                        info!("Hint: Ensure your private key is correctly configured");
+                        info!("Hint: Verify the contract addresses are correct");
+                    }
+                }
+                Err(e) => {
+                    info!("Failed to fetch configuration: {e:?}");
+                    info!("Hint: Verify server connection with 'status' command");
+                }
             }
         }
         ReplCommand::Status => {

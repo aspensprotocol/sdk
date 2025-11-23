@@ -244,37 +244,14 @@ async fn main() -> Result<()> {
             info!("✓ Sell order sent successfully");
         }
         Commands::Balance => {
-            info!("Getting balance");
-            let base_chain_rpc_url = client.get_env("BASE_CHAIN_RPC_URL").unwrap().clone();
-            let base_chain_usdc_token_address = client
-                .get_env("BASE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap()
-                .clone();
-            let quote_chain_rpc_url = client.get_env("QUOTE_CHAIN_RPC_URL").unwrap().clone();
-            let quote_chain_usdc_token_address = client
-                .get_env("QUOTE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap()
-                .clone();
-            let base_chain_contract_address = client
-                .get_env("BASE_CHAIN_CONTRACT_ADDRESS")
-                .unwrap()
-                .clone();
-            let quote_chain_contract_address = client
-                .get_env("QUOTE_CHAIN_CONTRACT_ADDRESS")
-                .unwrap()
-                .clone();
+            use aspens::commands::config;
+
+            info!("Fetching balances for all tokens across all chains");
+            let stack_url = client.stack_url().to_string();
+            let config = executor.execute(config::get_config(stack_url))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            executor.execute(balance::balance(
-                base_chain_rpc_url,
-                base_chain_usdc_token_address,
-                quote_chain_rpc_url,
-                quote_chain_usdc_token_address,
-                base_chain_contract_address,
-                quote_chain_contract_address,
-                privkey,
-            ))?;
-            info!("Balance call was successful");
+            executor.execute(balance::balance_from_config(config, privkey))?;
         }
         Commands::Status => {
             info!("Configuration Status:");
