@@ -19,9 +19,9 @@ impl AppState {
         }
     }
 
-    fn url(&self) -> String {
+    fn stack_url(&self) -> String {
         let guard = self.client.lock().unwrap();
-        guard.url().to_string()
+        guard.stack_url().to_string()
     }
 
     fn get_env(&self, key: &str) -> Option<String> {
@@ -57,16 +57,6 @@ struct ReplCli {
 #[derive(Debug, Parser)]
 #[command(name = "", author, version, about, long_about = None)]
 enum ReplCommand {
-    /// Fetch the current configuration from the arborter server
-    #[cfg(feature = "admin")]
-    GetConfig,
-    /// Download configuration to a file at the specified path
-    #[cfg(feature = "admin")]
-    DownloadConfig {
-        /// Path to save the configuration file
-        #[arg(short, long)]
-        path: String,
-    },
     /// Fetch and display the configuration from the server
     Config {
         /// Optional path to save the configuration file (supports .json or .toml)
@@ -153,32 +143,17 @@ fn main() {
         .build();
 
     rl.repl(|command| match command {
-        #[cfg(feature = "admin")]
-        ReplCommand::GetConfig => {
-            use aspens::commands::config;
-            if let Ok(result) = executor.execute(config::get_config(app_state.url())) {
-                info!("GetConfig result: {result:#?}");
-            } else {
-                info!("GetConfigResponse did not contain a configuration");
-            }
-        }
-        #[cfg(feature = "admin")]
-        ReplCommand::DownloadConfig { path } => {
-            use aspens::commands::config;
-            if let Err(e) = executor.execute(config::download_config(app_state.url(), path)) {
-                info!("Failed to download config: {e:?}");
-            }
-        }
         ReplCommand::Config { output_file } => {
             use aspens::commands::config;
 
-            info!("Fetching configuration from {}", app_state.url());
-            match executor.execute(config::get_config(app_state.url())) {
+            let stack_url = app_state.stack_url();
+            info!("Fetching configuration from {}", stack_url);
+            match executor.execute(config::get_config(stack_url.clone())) {
                 Ok(config) => {
                     // If output_file is provided, save to file
                     if let Some(path) = output_file {
                         if let Err(e) =
-                            executor.execute(config::download_config(app_state.url(), path.clone()))
+                            executor.execute(config::download_config(stack_url.clone(), path.clone()))
                         {
                             info!("Failed to save configuration: {e:?}");
                         } else {
@@ -308,7 +283,7 @@ fn main() {
             let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
 
             match executor.execute(send_order::call_send_order(
-                app_state.url(),
+                app_state.stack_url(),
                 1, // Buy side
                 amount,
                 limit_price,
@@ -347,7 +322,7 @@ fn main() {
             let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
 
             match executor.execute(send_order::call_send_order(
-                app_state.url(),
+                app_state.stack_url(),
                 2, // Sell side
                 amount,
                 limit_price,
@@ -410,7 +385,7 @@ fn main() {
         ReplCommand::Status => {
             info!("Configuration Status:");
             info!("  Environment: {}", app_state.client.lock().unwrap().environment());
-            info!("  Server URL: {}", app_state.url());
+            info!("  Server URL: {}", app_state.stack_url());
             info!("  Market ID 1: {}", app_state.get_env("MARKET_ID_1").unwrap_or("not set".to_string()));
             info!("  Market ID 2: {}", app_state.get_env("MARKET_ID_2").unwrap_or("not set".to_string()));
             info!("  Base Chain RPC: {}", app_state.get_env("BASE_CHAIN_RPC_URL").unwrap_or("not set".to_string()));

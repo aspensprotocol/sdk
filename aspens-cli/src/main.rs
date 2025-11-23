@@ -28,14 +28,6 @@ struct Cli {
 
 #[derive(Debug, Parser)]
 enum Commands {
-    /// Fetch the current configuration from the arborter server
-    GetConfig,
-    /// Download configuration to a file at the specified path
-    DownloadConfig {
-        /// Path to save the configuration file
-        #[arg(short, long)]
-        path: String,
-    },
     /// Fetch and display the configuration from the server
     Config {
         /// Optional path to save the configuration file (supports .json or .toml)
@@ -135,11 +127,6 @@ async fn main() -> Result<()> {
     let executor = DirectExecutor;
 
     match cli.command {
-        Commands::GetConfig => {
-            use aspens::commands::config;
-            let result = executor.execute(config::get_config(client.stack_url().to_string()));
-            info!("GetConfig result: {result:?}");
-        }
         Commands::Deposit {
             chain,
             token,
@@ -324,24 +311,17 @@ async fn main() -> Result<()> {
                     .unwrap_or(&"not set".to_string())
             );
         }
-        Commands::DownloadConfig { path } => {
-            use aspens::commands::config;
-            let result = executor.execute(config::download_config(
-                client.stack_url().to_string(),
-                path,
-            ));
-            info!("DownloadConfig result: {result:?}");
-        }
         Commands::Config { output_file } => {
             use aspens::commands::config;
 
-            info!("Fetching configuration from {}", client.stack_url());
-            let config = executor.execute(config::get_config(client.stack_url().to_string()))?;
+            let stack_url = client.stack_url().to_string();
+            info!("Fetching configuration from {stack_url}");
+            let config = executor.execute(config::get_config(stack_url.clone()))?;
 
             // If output_file is provided, save to file
             if let Some(path) = output_file {
                 executor.execute(config::download_config(
-                    client.stack_url().to_string(),
+                    stack_url.clone(),
                     path.clone(),
                 ))?;
                 info!("Configuration saved to: {}", path);
