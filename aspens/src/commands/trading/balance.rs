@@ -170,29 +170,73 @@ fn format_balance_with_decimals(balance_str: &str, decimals: i32) -> String {
     }
 }
 
-/// Display a single token's balances across all chains
-fn display_token_balance(token_balance: &TokenBalance) -> String {
+/// Display all token balances in a single table with tokens as rows
+fn display_all_token_balances(all_token_balances: &[TokenBalance]) -> String {
+    if all_token_balances.is_empty() {
+        return String::new();
+    }
+
+    // Collect all unique chain networks across all tokens
+    let mut all_chains: Vec<String> = Vec::new();
+    for token_balance in all_token_balances {
+        for chain_balance in &token_balance.chain_balances {
+            if !all_chains.contains(&chain_balance.chain_network) {
+                all_chains.push(chain_balance.chain_network.clone());
+            }
+        }
+    }
+    all_chains.sort();
+
     let mut output = String::new();
+    output.push('\n');
 
-    // Header
     output.push_str("═══════════════════════════════════════════════════════════\n");
-    output.push_str(&format!("  {} ({})\n", token_balance.token_info.symbol, token_balance.token_info.name));
+    output.push_str("                      BALANCES\n");
     output.push_str("═══════════════════════════════════════════════════════════\n");
 
-    // Create table
     let mut table = Table::new();
-    table.load_preset(UTF8_BORDERS_ONLY)
-        .set_header(vec!["Chain", "Wallet", "Available", "Locked"]);
+    table.load_preset(UTF8_BORDERS_ONLY);
 
-    // Add rows for each chain
-    for chain_balance in &token_balance.chain_balances {
-        let decimals = token_balance.token_info.decimals;
-        table.add_row(vec![
-            &chain_balance.chain_network,
-            &format_balance_with_decimals(&chain_balance.wallet_balance, decimals),
-            &format_balance_with_decimals(&chain_balance.available_balance, decimals),
-            &format_balance_with_decimals(&chain_balance.locked_balance, decimals),
-        ]);
+    // Build header with two rows: chain name on first row, balance type on second row
+    let mut header: Vec<String> = vec!["Symbol".to_string(), "Token Name".to_string()];
+    for chain in &all_chains {
+        header.push(format!("{}\nWallet", chain));
+        header.push(format!("{}\nAvailable", chain));
+        header.push(format!("{}\nLocked", chain));
+    }
+    table.set_header(header);
+
+    // Add row for each token
+    for token_balance in all_token_balances {
+        let mut row: Vec<String> = Vec::new();
+
+        // Token symbol
+        row.push(token_balance.token_info.symbol.clone());
+
+        // Token name
+        row.push(token_balance.token_info.name.clone());
+
+        // For each chain, add Wallet, Available, and Locked columns
+        for chain in &all_chains {
+            // Find the balance for this chain
+            if let Some(chain_balance) = token_balance
+                .chain_balances
+                .iter()
+                .find(|cb| cb.chain_network == *chain)
+            {
+                let decimals = token_balance.token_info.decimals;
+                row.push(format_balance_with_decimals(&chain_balance.wallet_balance, decimals));
+                row.push(format_balance_with_decimals(&chain_balance.available_balance, decimals));
+                row.push(format_balance_with_decimals(&chain_balance.locked_balance, decimals));
+            } else {
+                // Token doesn't exist on this chain
+                row.push("-".to_string());
+                row.push("-".to_string());
+                row.push("-".to_string());
+            }
+        }
+
+        table.add_row(row);
     }
 
     output.push_str(&table.to_string());
@@ -240,12 +284,7 @@ pub async fn balance_from_config(
     all_token_balances.sort_by(|a, b| a.token_info.symbol.cmp(&b.token_info.symbol));
 
     // Display all token balances
-    let mut output = String::new();
-    output.push('\n');
-    for token_balance in &all_token_balances {
-        output.push_str(&display_token_balance(token_balance));
-    }
-
+    let output = display_all_token_balances(&all_token_balances);
     info!("{}", output);
 
     Ok(())
