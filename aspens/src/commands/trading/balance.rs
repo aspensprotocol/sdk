@@ -53,29 +53,33 @@ fn extract_all_tokens_from_config(config: &Configuration) -> HashMap<String, Tok
     for chain in &config.chains {
         let chain_id = chain.chain_id;
         let chain_network = chain.network.clone();
-        let contract_address = chain.trade_contract.as_ref()
+        let contract_address = chain
+            .trade_contract
+            .as_ref()
             .map(|tc| tc.address.clone())
             .unwrap_or_default();
         let rpc_url = chain.rpc_url.clone();
 
         // Iterate through all tokens on this chain
         for (symbol, token) in &chain.tokens {
-            tokens.entry(symbol.clone()).or_insert_with(|| TokenInfo {
-                symbol: symbol.clone(),
-                name: token.name.clone(),
-                decimals: token.decimals,
-                chain_locations: HashMap::new(),
-            })
-            .chain_locations
-            .insert(
-                chain_id,
-                ChainLocation {
-                    network: chain_network.clone(),
-                    token_address: token.address.clone(),
-                    contract_address: contract_address.clone(),
-                    rpc_url: rpc_url.clone(),
-                },
-            );
+            tokens
+                .entry(symbol.clone())
+                .or_insert_with(|| TokenInfo {
+                    symbol: symbol.clone(),
+                    name: token.name.clone(),
+                    decimals: token.decimals,
+                    chain_locations: HashMap::new(),
+                })
+                .chain_locations
+                .insert(
+                    chain_id,
+                    ChainLocation {
+                        network: chain_network.clone(),
+                        token_address: token.address.clone(),
+                        contract_address: contract_address.clone(),
+                        rpc_url: rpc_url.clone(),
+                    },
+                );
         }
     }
 
@@ -91,8 +95,7 @@ async fn query_token_balance_on_chain(
     let chain_network = location.network.clone();
 
     // Try to parse chain as NamedChain, fallback to a default if it fails
-    let named_chain = NamedChain::try_from(chain_id as u64)
-        .unwrap_or(NamedChain::BaseSepolia);
+    let named_chain = NamedChain::try_from(chain_id as u64).unwrap_or(NamedChain::BaseSepolia);
 
     // Query wallet balance
     let wallet_balance = call_get_erc20_balance(
@@ -121,7 +124,10 @@ async fn query_token_balance_on_chain(
     .await
     .map_or_else(
         |e| {
-            warn!("Failed to get available balance on {}: {}", chain_network, e);
+            warn!(
+                "Failed to get available balance on {}: {}",
+                chain_network, e
+            );
             "error".to_string()
         },
         |v| v.to_string(),
@@ -164,7 +170,12 @@ fn format_balance_with_decimals(balance_str: &str, decimals: i32) -> String {
             let fractional_part = balance % divisor;
 
             // Format with proper decimal places
-            format!("{}.{:0width$}", integer_part, fractional_part, width = decimals as usize)
+            format!(
+                "{}.{:0width$}",
+                integer_part,
+                fractional_part,
+                width = decimals as usize
+            )
         }
         Err(_) => balance_str.to_string(),
     }
@@ -225,9 +236,18 @@ fn display_all_token_balances(all_token_balances: &[TokenBalance]) -> String {
                 .find(|cb| cb.chain_network == *chain)
             {
                 let decimals = token_balance.token_info.decimals;
-                row.push(format_balance_with_decimals(&chain_balance.wallet_balance, decimals));
-                row.push(format_balance_with_decimals(&chain_balance.available_balance, decimals));
-                row.push(format_balance_with_decimals(&chain_balance.locked_balance, decimals));
+                row.push(format_balance_with_decimals(
+                    &chain_balance.wallet_balance,
+                    decimals,
+                ));
+                row.push(format_balance_with_decimals(
+                    &chain_balance.available_balance,
+                    decimals,
+                ));
+                row.push(format_balance_with_decimals(
+                    &chain_balance.locked_balance,
+                    decimals,
+                ));
             } else {
                 // Token doesn't exist on this chain
                 row.push("-".to_string());
@@ -246,11 +266,10 @@ fn display_all_token_balances(all_token_balances: &[TokenBalance]) -> String {
 }
 
 /// New config-driven balance function
-pub async fn balance_from_config(
-    config: GetConfigResponse,
-    privkey: String,
-) -> Result<()> {
-    let configuration = config.config.ok_or_else(|| eyre::eyre!("No configuration found in response"))?;
+pub async fn balance_from_config(config: GetConfigResponse, privkey: String) -> Result<()> {
+    let configuration = config
+        .config
+        .ok_or_else(|| eyre::eyre!("No configuration found in response"))?;
 
     // Extract all unique tokens from configuration
     let tokens = extract_all_tokens_from_config(&configuration);

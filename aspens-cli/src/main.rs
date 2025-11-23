@@ -297,10 +297,7 @@ async fn main() -> Result<()> {
 
             // If output_file is provided, save to file
             if let Some(path) = output_file {
-                executor.execute(config::download_config(
-                    stack_url.clone(),
-                    path.clone(),
-                ))?;
+                executor.execute(config::download_config(stack_url.clone(), path.clone()))?;
                 info!("Configuration saved to: {}", path);
             } else {
                 // Display config as JSON
