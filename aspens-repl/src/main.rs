@@ -7,7 +7,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
-use url::Url;
 
 struct AppState {
     client: Arc<Mutex<AspensClient>>,
@@ -20,21 +19,9 @@ impl AppState {
         }
     }
 
-    fn with_url(&mut self, url: Url) {
-        let mut guard = self.client.lock().unwrap();
-        // Rebuild client with new URL
-        let new_client = AspensClient::builder()
-            .with_url(url.to_string())
-            .unwrap()
-            .with_environment(guard.environment())
-            .build()
-            .unwrap();
-        *guard = new_client;
-    }
-
-    fn url(&self) -> String {
+    fn stack_url(&self) -> String {
         let guard = self.client.lock().unwrap();
-        guard.url().to_string()
+        guard.stack_url().to_string()
     }
 
     fn get_env(&self, key: &str) -> Option<String> {
@@ -70,22 +57,6 @@ struct ReplCli {
 #[derive(Debug, Parser)]
 #[command(name = "", author, version, about, long_about = None)]
 enum ReplCommand {
-    /// Initialize a new trading session with optional gRPC endpoint URL
-    Initialize {
-        /// gRPC endpoint URL (defaults to http://localhost:50051)
-        #[arg(short, long, default_value_t = Url::parse("http://localhost:50051").unwrap())]
-        url: Url,
-    },
-    /// Fetch the current configuration from the arborter server
-    #[cfg(feature = "admin")]
-    GetConfig,
-    /// Download configuration to a file at the specified path
-    #[cfg(feature = "admin")]
-    DownloadConfig {
-        /// Path to save the configuration file
-        #[arg(short, long)]
-        path: String,
-    },
     /// Fetch and display the configuration from the server
     Config {
         /// Optional path to save the configuration file (supports .json or .toml)
@@ -154,7 +125,7 @@ fn main() {
         .build()
         .expect("Failed to build AspensClient");
 
-    let mut app_state = AppState::new(client);
+    let app_state = AppState::new(client);
     let executor = BlockingExecutor::new();
 
     let prompt = DefaultPrompt {
@@ -172,52 +143,17 @@ fn main() {
         .build();
 
     rl.repl(|command| match command {
-        ReplCommand::Initialize { url } => {
-            app_state.with_url(url.clone());
-            info!("Initializing session at {}", url);
-
-            // Check gRPC server health via reflection
-            match executor.execute(aspens::health::check_grpc_server(url.to_string())) {
-                Ok(services) => {
-                    if services.is_empty() {
-                        info!("⚠️  Connected to server but no services found (reflection may not be enabled)");
-                    } else {
-                        info!("✓ Successfully connected to gRPC server");
-                        info!("  Found {} service(s)", services.len());
-                    }
-                }
-                Err(e) => {
-                    info!("✗ Failed to connect to gRPC server: {}", e);
-                    info!("  Please check that the server is running at {}", url);
-                }
-            }
-        }
-        #[cfg(feature = "admin")]
-        ReplCommand::GetConfig => {
-            use aspens::commands::config;
-            if let Ok(result) = executor.execute(config::get_config(app_state.url())) {
-                info!("GetConfig result: {result:#?}");
-            } else {
-                info!("GetConfigResponse did not contain a configuration");
-            }
-        }
-        #[cfg(feature = "admin")]
-        ReplCommand::DownloadConfig { path } => {
-            use aspens::commands::config;
-            if let Err(e) = executor.execute(config::download_config(app_state.url(), path)) {
-                info!("Failed to download config: {e:?}");
-            }
-        }
         ReplCommand::Config { output_file } => {
             use aspens::commands::config;
 
-            info!("Fetching configuration from {}", app_state.url());
-            match executor.execute(config::get_config(app_state.url())) {
+            let stack_url = app_state.stack_url();
+            info!("Fetching configuration from {}", stack_url);
+            match executor.execute(config::get_config(stack_url.clone())) {
                 Ok(config) => {
                     // If output_file is provided, save to file
                     if let Some(path) = output_file {
                         if let Err(e) =
-                            executor.execute(config::download_config(app_state.url(), path.clone()))
+                            executor.execute(config::download_config(stack_url.clone(), path.clone()))
                         {
                             info!("Failed to save configuration: {e:?}");
                         } else {
@@ -347,7 +283,7 @@ fn main() {
             let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
 
             match executor.execute(send_order::call_send_order(
-                app_state.url(),
+                app_state.stack_url(),
                 1, // Buy side
                 amount,
                 limit_price,
@@ -386,7 +322,7 @@ fn main() {
             let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
 
             match executor.execute(send_order::call_send_order(
-                app_state.url(),
+                app_state.stack_url(),
                 2, // Sell side
                 amount,
                 limit_price,
@@ -415,41 +351,30 @@ fn main() {
             }
         }
         ReplCommand::Balance => {
-            info!("Getting balance");
-            let base_chain_rpc_url = app_state.get_env("BASE_CHAIN_RPC_URL").unwrap();
-            let base_chain_usdc_token_address = app_state
-                .get_env("BASE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap();
-            let quote_chain_rpc_url = app_state.get_env("QUOTE_CHAIN_RPC_URL").unwrap();
-            let quote_chain_usdc_token_address = app_state
-                .get_env("QUOTE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap();
-            let base_chain_contract_address =
-                app_state.get_env("BASE_CHAIN_CONTRACT_ADDRESS").unwrap();
-            let quote_chain_contract_address = app_state
-                .get_env("QUOTE_CHAIN_CONTRACT_ADDRESS")
-                .unwrap();
-            let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
+            use aspens::commands::config;
 
-            if let Err(e) = executor.execute(balance::balance(
-                base_chain_rpc_url,
-                base_chain_usdc_token_address,
-                quote_chain_rpc_url,
-                quote_chain_usdc_token_address,
-                base_chain_contract_address,
-                quote_chain_contract_address,
-                privkey,
-            )) {
-                info!("Failed to get balance: {e:?}");
-                info!("Hint: Check your RPC URLs with 'status' command");
-                info!("Hint: Ensure your private key is correctly configured");
-                info!("Hint: Verify the contract addresses are correct");
+            info!("Fetching balances for all tokens across all chains");
+            let stack_url = app_state.stack_url();
+            match executor.execute(config::get_config(stack_url.clone())) {
+                Ok(config) => {
+                    let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
+                    if let Err(e) = executor.execute(balance::balance_from_config(config, privkey)) {
+                        info!("Failed to get balances: {e:?}");
+                        info!("Hint: Check your RPC URLs with 'status' command");
+                        info!("Hint: Ensure your private key is correctly configured");
+                        info!("Hint: Verify the contract addresses are correct");
+                    }
+                }
+                Err(e) => {
+                    info!("Failed to fetch configuration: {e:?}");
+                    info!("Hint: Verify server connection with 'status' command");
+                }
             }
         }
         ReplCommand::Status => {
             info!("Configuration Status:");
             info!("  Environment: {}", app_state.client.lock().unwrap().environment());
-            info!("  Server URL: {}", app_state.url());
+            info!("  Server URL: {}", app_state.stack_url());
             info!("  Market ID 1: {}", app_state.get_env("MARKET_ID_1").unwrap_or("not set".to_string()));
             info!("  Market ID 2: {}", app_state.get_env("MARKET_ID_2").unwrap_or("not set".to_string()));
             info!("  Base Chain RPC: {}", app_state.get_env("BASE_CHAIN_RPC_URL").unwrap_or("not set".to_string()));

@@ -11,9 +11,9 @@ use url::Url;
 #[command(name = "aspens-cli")]
 #[command(about = "Aspens CLI for trading operations")]
 struct Cli {
-    /// The URL of the arborter server
-    #[arg(short, long)]
-    url: Option<Url>,
+    /// The Aspens stack URL
+    #[arg(short = 's', long = "stack")]
+    stack_url: Option<Url>,
 
     /// Environment configuration to use
     #[arg(short, long, default_value = "anvil")]
@@ -28,22 +28,6 @@ struct Cli {
 
 #[derive(Debug, Parser)]
 enum Commands {
-    /// Initialize a new trading session with optional gRPC endpoint URL
-    Initialize {
-        /// gRPC endpoint URL (defaults to http://0.0.0.0:50051)
-        #[arg(value_name = "URL")]
-        url: Option<String>,
-    },
-    /// Fetch the current configuration from the arborter server
-    #[cfg(feature = "admin")]
-    GetConfig,
-    /// Download configuration to a file at the specified path
-    #[cfg(feature = "admin")]
-    DownloadConfig {
-        /// Path to save the configuration file
-        #[arg(short, long)]
-        path: String,
-    },
     /// Fetch and display the configuration from the server
     Config {
         /// Optional path to save the configuration file (supports .json or .toml)
@@ -135,7 +119,7 @@ async fn main() -> Result<()> {
     // Build the client
     let mut builder = AspensClient::builder().with_environment(&cli.env);
 
-    if let Some(url) = cli.url {
+    if let Some(url) = cli.stack_url {
         builder = builder.with_url(url.to_string())?;
     }
 
@@ -143,33 +127,6 @@ async fn main() -> Result<()> {
     let executor = DirectExecutor;
 
     match cli.command {
-        Commands::Initialize { url } => {
-            // Use provided URL or default to localhost:50051
-            let endpoint = url.unwrap_or_else(|| "http://localhost:50051".to_string());
-            info!("Initializing session at {}", endpoint);
-
-            // Check gRPC server health via reflection
-            match executor.execute(aspens::health::check_grpc_server(endpoint.clone())) {
-                Ok(services) => {
-                    if services.is_empty() {
-                        info!("⚠️  Connected to server but no services found (reflection may not be enabled)");
-                    } else {
-                        info!("✓ Successfully connected to gRPC server");
-                        info!("  Found {} service(s)", services.len());
-                    }
-                }
-                Err(e) => {
-                    info!("✗ Failed to connect to gRPC server: {}", e);
-                    info!("  Please check that the server is running at {}", endpoint);
-                }
-            }
-        }
-        #[cfg(feature = "admin")]
-        Commands::GetConfig => {
-            use aspens::commands::config;
-            let result = executor.execute(config::get_config(client.url().to_string()));
-            info!("GetConfig result: {result:?}");
-        }
         Commands::Deposit {
             chain,
             token,
@@ -230,7 +187,7 @@ async fn main() -> Result<()> {
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
             let result = executor.execute(send_order::call_send_order(
-                client.url().to_string(),
+                client.stack_url().to_string(),
                 1, // Buy side
                 amount,
                 limit_price,
@@ -264,7 +221,7 @@ async fn main() -> Result<()> {
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
             let result = executor.execute(send_order::call_send_order(
-                client.url().to_string(),
+                client.stack_url().to_string(),
                 2, // Sell side
                 amount,
                 limit_price,
@@ -287,42 +244,19 @@ async fn main() -> Result<()> {
             info!("✓ Sell order sent successfully");
         }
         Commands::Balance => {
-            info!("Getting balance");
-            let base_chain_rpc_url = client.get_env("BASE_CHAIN_RPC_URL").unwrap().clone();
-            let base_chain_usdc_token_address = client
-                .get_env("BASE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap()
-                .clone();
-            let quote_chain_rpc_url = client.get_env("QUOTE_CHAIN_RPC_URL").unwrap().clone();
-            let quote_chain_usdc_token_address = client
-                .get_env("QUOTE_CHAIN_USDC_TOKEN_ADDRESS")
-                .unwrap()
-                .clone();
-            let base_chain_contract_address = client
-                .get_env("BASE_CHAIN_CONTRACT_ADDRESS")
-                .unwrap()
-                .clone();
-            let quote_chain_contract_address = client
-                .get_env("QUOTE_CHAIN_CONTRACT_ADDRESS")
-                .unwrap()
-                .clone();
+            use aspens::commands::config;
+
+            info!("Fetching balances for all tokens across all chains");
+            let stack_url = client.stack_url().to_string();
+            let config = executor.execute(config::get_config(stack_url))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            executor.execute(balance::balance(
-                base_chain_rpc_url,
-                base_chain_usdc_token_address,
-                quote_chain_rpc_url,
-                quote_chain_usdc_token_address,
-                base_chain_contract_address,
-                quote_chain_contract_address,
-                privkey,
-            ))?;
-            info!("Balance call was successful");
+            executor.execute(balance::balance_from_config(config, privkey))?;
         }
         Commands::Status => {
             info!("Configuration Status:");
             info!("  Environment: {}", client.environment());
-            info!("  Server URL: {}", client.url());
+            info!("  Stack URL: {}", client.stack_url());
             info!(
                 "  Market ID 1: {}",
                 client
@@ -354,24 +288,16 @@ async fn main() -> Result<()> {
                     .unwrap_or(&"not set".to_string())
             );
         }
-        #[cfg(feature = "admin")]
-        Commands::DownloadConfig { path } => {
-            use aspens::commands::config;
-            let result = executor.execute(config::download_config(client.url().to_string(), path));
-            info!("DownloadConfig result: {result:?}");
-        }
         Commands::Config { output_file } => {
             use aspens::commands::config;
 
-            info!("Fetching configuration from {}", client.url());
-            let config = executor.execute(config::get_config(client.url().to_string()))?;
+            let stack_url = client.stack_url().to_string();
+            info!("Fetching configuration from {stack_url}");
+            let config = executor.execute(config::get_config(stack_url.clone()))?;
 
             // If output_file is provided, save to file
             if let Some(path) = output_file {
-                executor.execute(config::download_config(
-                    client.url().to_string(),
-                    path.clone(),
-                ))?;
+                executor.execute(config::download_config(stack_url.clone(), path.clone()))?;
                 info!("Configuration saved to: {}", path);
             } else {
                 // Display config as JSON

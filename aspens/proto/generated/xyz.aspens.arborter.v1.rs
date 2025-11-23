@@ -268,14 +268,14 @@ pub struct UnNormalizeDecimalsResponse {
     #[prost(uint32, tag = "5")]
     pub pair_decimals: u32,
 }
-/// Request to get the stronghold signer public key
+/// Request to get the signer public key
 ///
 /// Empty request - no parameters needed
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetStrongholdPublicKeyRequest {}
-/// Response containing the stronghold signer public key
+pub struct GetSignerPublicKeyRequest {}
+/// Response containing the signer public key
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetStrongholdPublicKeyResponse {
+pub struct GetSignerPublicKeyResponse {
     /// The base chain public key (address)
     #[prost(string, tag = "1")]
     pub base_chain_public_key: ::prost::alloc::string::String,
@@ -704,11 +704,11 @@ pub mod arborter_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        pub async fn get_stronghold_public_key(
+        pub async fn get_signer_public_key(
             &mut self,
-            request: impl tonic::IntoRequest<super::GetStrongholdPublicKeyRequest>,
+            request: impl tonic::IntoRequest<super::GetSignerPublicKeyRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::GetStrongholdPublicKeyResponse>,
+            tonic::Response<super::GetSignerPublicKeyResponse>,
             tonic::Status,
         > {
             self.inner
@@ -721,14 +721,14 @@ pub mod arborter_service_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/xyz.aspens.arborter.v1.ArborterService/GetStrongholdPublicKey",
+                "/xyz.aspens.arborter.v1.ArborterService/GetSignerPublicKey",
             );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(
                     GrpcMethod::new(
                         "xyz.aspens.arborter.v1.ArborterService",
-                        "GetStrongholdPublicKey",
+                        "GetSignerPublicKey",
                     ),
                 );
             self.inner.unary(req, path, codec).await

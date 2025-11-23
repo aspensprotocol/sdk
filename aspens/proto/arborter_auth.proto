@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package xyz.aspens.arborter_auth.v1;
+
+option optimize_for = SPEED;
+
+// The Authentication service definition
+// This service does NOT require JWT authentication (it's used to obtain JWT tokens)
+service AuthService {
+  // Initialize the first manager (only works when no manager exists)
+  // Returns a JWT token for the newly created manager
+  rpc InitializeManager(InitializeManagerRequest) returns (InitializeManagerResponse) {}
+
+  // Authenticate with EIP-712 signature to obtain a JWT token
+  // Only works if the address is already a manager
+  rpc AuthenticateWithSignature(AuthRequest) returns (AuthResponse) {}
+}
+
+message AuthRequest {
+  // The Ethereum address requesting authentication
+  string address = 1;
+  // Unix timestamp when the message was created (in seconds)
+  uint64 timestamp = 2;
+  // Random nonce to prevent replay attacks
+  string nonce = 3;
+  // Hex-encoded EIP-712 signature (with or without 0x prefix)
+  string signature = 4;
+}
+
+message AuthResponse {
+  // JWT token for authenticated requests
+  string jwt_token = 1;
+  // Unix timestamp when the token expires (in seconds)
+  uint64 expires_at = 2;
+  // The address that was authenticated
+  string address = 3;
+}
+
+message InitializeManagerRequest {
+  // The Ethereum address to set as the initial manager
+  string address = 1;
+}
+
+message InitializeManagerResponse {
+  // JWT token for authenticated requests
+  string jwt_token = 1;
+  // Unix timestamp when the token expires (in seconds)
+  uint64 expires_at = 2;
+  // The address that was set as manager
+  string address = 3;
+  // Success message
+  string message = 4;
+}

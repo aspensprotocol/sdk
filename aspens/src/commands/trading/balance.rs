@@ -4,10 +4,310 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
 use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
 use eyre::Result;
-use tracing::info;
+use std::collections::HashMap;
+use tracing::{info, warn};
 use url::Url;
 
 use super::{MidribV2, IERC20};
+use crate::commands::config::config_pb::{Configuration, GetConfigResponse};
+
+/// Represents a unique token across all chains
+#[derive(Debug, Clone)]
+struct TokenInfo {
+    symbol: String,
+    name: String,
+    decimals: i32,
+    /// Map of chain_id -> (chain_network, token_address, contract_address)
+    chain_locations: HashMap<i32, ChainLocation>,
+}
+
+#[derive(Debug, Clone)]
+struct ChainLocation {
+    network: String,
+    token_address: String,
+    contract_address: String,
+    rpc_url: String,
+}
+
+/// Balance information for a token on a specific chain
+#[derive(Debug)]
+struct ChainBalance {
+    chain_network: String,
+    wallet_balance: String,
+    available_balance: String,
+    locked_balance: String,
+}
+
+/// Aggregated balance for a single token across all chains
+#[derive(Debug)]
+struct TokenBalance {
+    token_info: TokenInfo,
+    chain_balances: Vec<ChainBalance>,
+}
+
+/// Extract all unique tokens from configuration chains
+fn extract_all_tokens_from_config(config: &Configuration) -> HashMap<String, TokenInfo> {
+    let mut tokens: HashMap<String, TokenInfo> = HashMap::new();
+
+    // Iterate through all chains
+    for chain in &config.chains {
+        let chain_id = chain.chain_id;
+        let chain_network = chain.network.clone();
+        let contract_address = chain
+            .trade_contract
+            .as_ref()
+            .map(|tc| tc.address.clone())
+            .unwrap_or_default();
+        let rpc_url = chain.rpc_url.clone();
+
+        // Iterate through all tokens on this chain
+        for (symbol, token) in &chain.tokens {
+            tokens
+                .entry(symbol.clone())
+                .or_insert_with(|| TokenInfo {
+                    symbol: symbol.clone(),
+                    name: token.name.clone(),
+                    decimals: token.decimals,
+                    chain_locations: HashMap::new(),
+                })
+                .chain_locations
+                .insert(
+                    chain_id,
+                    ChainLocation {
+                        network: chain_network.clone(),
+                        token_address: token.address.clone(),
+                        contract_address: contract_address.clone(),
+                        rpc_url: rpc_url.clone(),
+                    },
+                );
+        }
+    }
+
+    tokens
+}
+
+/// Query all balance types for a token on a specific chain
+async fn query_token_balance_on_chain(
+    chain_id: i32,
+    location: &ChainLocation,
+    privkey: &str,
+) -> ChainBalance {
+    let chain_network = location.network.clone();
+
+    // Try to parse chain as NamedChain, fallback to a default if it fails
+    let named_chain = NamedChain::try_from(chain_id as u64).unwrap_or(NamedChain::BaseSepolia);
+
+    // Query wallet balance
+    let wallet_balance = call_get_erc20_balance(
+        named_chain,
+        &location.rpc_url,
+        &location.token_address,
+        privkey,
+    )
+    .await
+    .map_or_else(
+        |e| {
+            warn!("Failed to get wallet balance on {}: {}", chain_network, e);
+            "error".to_string()
+        },
+        |v| v.to_string(),
+    );
+
+    // Query available balance
+    let available_balance = call_get_balance(
+        named_chain,
+        &location.rpc_url,
+        &location.token_address,
+        &location.contract_address,
+        privkey,
+    )
+    .await
+    .map_or_else(
+        |e| {
+            warn!(
+                "Failed to get available balance on {}: {}",
+                chain_network, e
+            );
+            "error".to_string()
+        },
+        |v| v.to_string(),
+    );
+
+    // Query locked balance
+    let locked_balance = call_get_locked_balance(
+        &location.rpc_url,
+        &location.token_address,
+        &location.contract_address,
+        privkey,
+    )
+    .await
+    .map_or_else(
+        |e| {
+            warn!("Failed to get locked balance on {}: {}", chain_network, e);
+            "error".to_string()
+        },
+        |v| v.to_string(),
+    );
+
+    ChainBalance {
+        chain_network,
+        wallet_balance,
+        available_balance,
+        locked_balance,
+    }
+}
+
+/// Format balance with decimals for human-readable display
+fn format_balance_with_decimals(balance_str: &str, decimals: i32) -> String {
+    if balance_str == "error" {
+        return "error".to_string();
+    }
+
+    match balance_str.parse::<u128>() {
+        Ok(balance) => {
+            let divisor = 10_u128.pow(decimals as u32);
+            let integer_part = balance / divisor;
+            let fractional_part = balance % divisor;
+
+            // Format with proper decimal places
+            format!(
+                "{}.{:0width$}",
+                integer_part,
+                fractional_part,
+                width = decimals as usize
+            )
+        }
+        Err(_) => balance_str.to_string(),
+    }
+}
+
+/// Display all token balances in a single table with tokens as rows
+fn display_all_token_balances(all_token_balances: &[TokenBalance]) -> String {
+    if all_token_balances.is_empty() {
+        return String::new();
+    }
+
+    // Collect all unique chain networks across all tokens
+    let mut all_chains: Vec<String> = Vec::new();
+    for token_balance in all_token_balances {
+        for chain_balance in &token_balance.chain_balances {
+            if !all_chains.contains(&chain_balance.chain_network) {
+                all_chains.push(chain_balance.chain_network.clone());
+            }
+        }
+    }
+    all_chains.sort();
+
+    let mut output = String::new();
+    output.push('\n');
+
+    output.push_str("═══════════════════════════════════════════════════════════\n");
+    output.push_str("                      BALANCES\n");
+    output.push_str("═══════════════════════════════════════════════════════════\n");
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_BORDERS_ONLY);
+
+    // Build header with two rows: chain name on first row, balance type on second row
+    let mut header: Vec<String> = vec!["Symbol".to_string(), "Token Name".to_string()];
+    for chain in &all_chains {
+        header.push(format!("{}\nWallet", chain));
+        header.push(format!("{}\nAvailable", chain));
+        header.push(format!("{}\nLocked", chain));
+    }
+    table.set_header(header);
+
+    // Add row for each token
+    for token_balance in all_token_balances {
+        let mut row: Vec<String> = Vec::new();
+
+        // Token symbol
+        row.push(token_balance.token_info.symbol.clone());
+
+        // Token name
+        row.push(token_balance.token_info.name.clone());
+
+        // For each chain, add Wallet, Available, and Locked columns
+        for chain in &all_chains {
+            // Find the balance for this chain
+            if let Some(chain_balance) = token_balance
+                .chain_balances
+                .iter()
+                .find(|cb| cb.chain_network == *chain)
+            {
+                let decimals = token_balance.token_info.decimals;
+                row.push(format_balance_with_decimals(
+                    &chain_balance.wallet_balance,
+                    decimals,
+                ));
+                row.push(format_balance_with_decimals(
+                    &chain_balance.available_balance,
+                    decimals,
+                ));
+                row.push(format_balance_with_decimals(
+                    &chain_balance.locked_balance,
+                    decimals,
+                ));
+            } else {
+                // Token doesn't exist on this chain
+                row.push("-".to_string());
+                row.push("-".to_string());
+                row.push("-".to_string());
+            }
+        }
+
+        table.add_row(row);
+    }
+
+    output.push_str(&table.to_string());
+    output.push('\n');
+
+    output
+}
+
+/// New config-driven balance function
+pub async fn balance_from_config(config: GetConfigResponse, privkey: String) -> Result<()> {
+    let configuration = config
+        .config
+        .ok_or_else(|| eyre::eyre!("No configuration found in response"))?;
+
+    // Extract all unique tokens from configuration
+    let tokens = extract_all_tokens_from_config(&configuration);
+
+    if tokens.is_empty() {
+        info!("No tokens found in configuration");
+        return Ok(());
+    }
+
+    info!("Found {} unique token(s) across all chains", tokens.len());
+
+    // Query balances for all tokens across all chains
+    let mut all_token_balances: Vec<TokenBalance> = Vec::new();
+
+    for (_symbol, token_info) in tokens {
+        let mut chain_balances = Vec::new();
+
+        // Query balance on each chain where this token exists
+        for (chain_id, location) in &token_info.chain_locations {
+            let chain_balance = query_token_balance_on_chain(*chain_id, location, &privkey).await;
+            chain_balances.push(chain_balance);
+        }
+
+        all_token_balances.push(TokenBalance {
+            token_info: token_info.clone(),
+            chain_balances,
+        });
+    }
+
+    // Sort tokens by symbol for consistent display
+    all_token_balances.sort_by(|a, b| a.token_info.symbol.cmp(&b.token_info.symbol));
+
+    // Display all token balances
+    let output = display_all_token_balances(&all_token_balances);
+    info!("{}", output);
+
+    Ok(())
+}
 
 pub async fn balance(
     base_chain_rpc_url: String,
