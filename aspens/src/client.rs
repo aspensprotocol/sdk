@@ -1,6 +1,9 @@
 use eyre::{Context, Result};
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use url::Url;
+
+use crate::commands::config::config_pb::{Chain, GetConfigResponse, Token};
 
 /// Main client for interacting with Aspens trading platform
 pub struct AspensClient {
@@ -10,6 +13,8 @@ pub struct AspensClient {
     pub(crate) environment: String,
     /// Environment variables loaded from config
     pub(crate) env_vars: HashMap<String, String>,
+    /// Cached configuration from the server
+    pub(crate) config: Arc<RwLock<Option<GetConfigResponse>>>,
 }
 
 impl AspensClient {
@@ -33,88 +38,94 @@ impl AspensClient {
         self.env_vars.get(key)
     }
 
-    /// Normalize chain identifier to environment variable prefix
-    ///
-    /// Maps chain identifiers (like "base", "BaseSepolia", "84532") to
-    /// environment variable prefixes ("BASE", "QUOTE")
-    pub fn normalize_chain_identifier(&self, chain: &str) -> Result<String> {
-        let chain_lower = chain.to_lowercase();
+    /// Fetch configuration from the server and cache it
+    pub async fn fetch_config(&self) -> Result<()> {
+        let config = crate::commands::config::call_get_config(self.stack_url.to_string()).await?;
+        let mut guard = self.config.write().unwrap();
+        *guard = Some(config);
+        Ok(())
+    }
 
-        // Direct matches
-        if chain_lower == "base" || chain_lower.contains("base") {
-            return Ok("BASE".to_string());
-        }
-        if chain_lower == "quote"
-            || chain_lower.contains("optimism")
-            || chain_lower.contains("sepolia")
-            || chain_lower == "ethereum"
+    /// Get the cached configuration, fetching it if necessary
+    pub async fn get_config(&self) -> Result<GetConfigResponse> {
+        // Check if we have a cached config
         {
-            return Ok("QUOTE".to_string());
-        }
-
-        // Try to match by chain ID from RPC URLs
-        if let Some(base_rpc) = self.get_env("BASE_CHAIN_RPC_URL") {
-            if base_rpc.contains(&chain_lower) {
-                return Ok("BASE".to_string());
-            }
-        }
-        if let Some(quote_rpc) = self.get_env("QUOTE_CHAIN_RPC_URL") {
-            if quote_rpc.contains(&chain_lower) {
-                return Ok("QUOTE".to_string());
+            let guard = self.config.read().unwrap();
+            if let Some(config) = guard.as_ref() {
+                return Ok(config.clone());
             }
         }
 
-        // Default to BASE if no match
-        eyre::bail!("Unable to determine chain type for '{}'. Expected 'base' or 'quote', or a known chain name like 'BaseSepolia' or 'OptimismSepolia'", chain)
+        // No cached config, fetch it
+        self.fetch_config().await?;
+
+        // Return the newly fetched config
+        let guard = self.config.read().unwrap();
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| eyre::eyre!("Failed to fetch configuration"))
     }
 
-    /// Resolve token address for a given chain and token symbol
-    ///
-    /// Looks up token addresses using the pattern: {CHAIN}_CHAIN_{TOKEN}_TOKEN_ADDRESS
-    /// For example: BASE_CHAIN_USDC_TOKEN_ADDRESS or QUOTE_CHAIN_WETH_TOKEN_ADDRESS
-    pub fn resolve_token_address(&self, chain: &str, token: &str) -> Result<String> {
-        let token_upper = token.to_uppercase();
-        let chain_normalized = self.normalize_chain_identifier(chain)?;
-
-        // Try pattern: {CHAIN}_CHAIN_{TOKEN}_TOKEN_ADDRESS
-        let key = format!("{}_CHAIN_{}_TOKEN_ADDRESS", chain_normalized, token_upper);
-
-        self.get_env(&key).cloned().ok_or_else(|| {
+    /// Get chain information by network name
+    pub async fn get_chain_info(&self, network: &str) -> Result<Chain> {
+        let config = self.get_config().await?;
+        config.get_chain(network).cloned().ok_or_else(|| {
             eyre::eyre!(
-                "Token address not found for {} on {}. Expected environment variable: {}",
-                token,
-                chain,
-                key
+                "Chain '{}' not found in configuration. Available chains: {}",
+                network,
+                config
+                    .config
+                    .as_ref()
+                    .map(|c| c
+                        .chains
+                        .iter()
+                        .map(|ch| ch.network.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "))
+                    .unwrap_or_default()
             )
         })
     }
 
-    /// Get RPC URL for a given chain
-    pub fn get_chain_rpc_url(&self, chain: &str) -> Result<String> {
-        let chain_normalized = self.normalize_chain_identifier(chain)?;
-        let key = format!("{}_CHAIN_RPC_URL", chain_normalized);
+    /// Get token information by network and symbol
+    pub async fn get_token_info(&self, network: &str, symbol: &str) -> Result<Token> {
+        let config = self.get_config().await?;
+        config.get_token(network, symbol).cloned().ok_or_else(|| {
+            let available_tokens = config
+                .get_chain(network)
+                .map(|chain| {
+                    chain
+                        .tokens
+                        .keys()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_else(|| "none".to_string());
 
-        self.get_env(&key).cloned().ok_or_else(|| {
             eyre::eyre!(
-                "RPC URL not found for chain {}. Expected environment variable: {}",
-                chain,
-                key
+                "Token '{}' not found on chain '{}'. Available tokens: {}",
+                symbol,
+                network,
+                available_tokens
             )
         })
     }
 
-    /// Get contract address for a given chain
-    pub fn get_chain_contract_address(&self, chain: &str) -> Result<String> {
-        let chain_normalized = self.normalize_chain_identifier(chain)?;
-        let key = format!("{}_CHAIN_CONTRACT_ADDRESS", chain_normalized);
-
-        self.get_env(&key).cloned().ok_or_else(|| {
-            eyre::eyre!(
-                "Contract address not found for chain {}. Expected environment variable: {}",
-                chain,
-                key
-            )
-        })
+    /// Get trade contract address for a given network
+    pub async fn get_trade_contract_address(&self, network: &str) -> Result<String> {
+        let chain = self.get_chain_info(network).await?;
+        chain
+            .trade_contract
+            .as_ref()
+            .map(|tc| tc.address.clone())
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "Trade contract not found for chain '{}'. Please ensure the contract is deployed.",
+                    network
+                )
+            })
     }
 }
 
@@ -173,6 +184,7 @@ impl AspensClientBuilder {
             stack_url,
             environment,
             env_vars,
+            config: Arc::new(RwLock::new(None)),
         })
     }
 }

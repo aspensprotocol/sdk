@@ -1,5 +1,5 @@
 use alloy::network::EthereumWallet;
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{Address, U160, U256};
 use alloy::providers::ProviderBuilder;
 use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
@@ -7,38 +7,127 @@ use eyre::Result;
 use url::Url;
 
 use super::{MidribV2, IERC20};
+use crate::commands::config::config_pb::GetConfigResponse;
 
-pub async fn call_deposit(
-    chain: NamedChain,
-    rpc_url: String,
-    token_address: String,
-    contract_address: String,
-    privkey: String,
+/// Deposit tokens using configuration from the server
+///
+/// This is the recommended way to deposit tokens. It uses the configuration
+/// fetched from the server to determine RPC URLs, contract addresses, and token addresses.
+///
+/// # Arguments
+/// * `network` - The network name (e.g., "anvil-1", "base-sepolia")
+/// * `token_symbol` - The token symbol (e.g., "USDC", "WETH")
+/// * `amount` - The amount to deposit (in token's smallest unit)
+/// * `privkey` - The private key of the user's wallet
+/// * `config` - The configuration response from the server
+pub async fn call_deposit_from_config(
+    network: String,
+    token_symbol: String,
     amount: u64,
+    privkey: String,
+    config: GetConfigResponse,
 ) -> Result<()> {
+    // Look up chain info
+    let chain = config.get_chain(&network).ok_or_else(|| {
+        let available_chains = config
+            .config
+            .as_ref()
+            .map(|c| {
+                c.chains
+                    .iter()
+                    .map(|ch| ch.network.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        eyre::eyre!(
+            "Chain '{}' not found in configuration. Available chains: {}",
+            network,
+            available_chains
+        )
+    })?;
+
+    // Look up token info
+    let token = config.get_token(&network, &token_symbol).ok_or_else(|| {
+        let available_tokens = chain
+            .tokens
+            .keys()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        eyre::eyre!(
+            "Token '{}' not found on chain '{}'. Available tokens: {}",
+            token_symbol,
+            network,
+            available_tokens
+        )
+    })?;
+
+    // Get trade contract address
+    let contract_address = chain
+        .trade_contract
+        .as_ref()
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "Trade contract not found for chain '{}'. Please ensure the contract is deployed.",
+                network
+            )
+        })?
+        .address
+        .clone();
+
+    // Derive NamedChain from chain_id
+    let chain_type = match chain.chain_id {
+        1 => NamedChain::Mainnet,
+        5 => NamedChain::Goerli,
+        11155111 => NamedChain::Sepolia,
+        8453 => NamedChain::Base,
+        84531 => NamedChain::BaseGoerli,
+        84532 => NamedChain::BaseSepolia,
+        10 => NamedChain::Optimism,
+        420 => NamedChain::OptimismGoerli,
+        11155420 => NamedChain::OptimismSepolia,
+        _ => {
+            tracing::warn!(
+                "Unknown chain ID {}, using chain ID directly",
+                chain.chain_id
+            );
+            NamedChain::try_from(chain.chain_id as u64)?
+        }
+    };
+
+    tracing::info!(
+        "Depositing {} {} on {} (chain_id: {}, rpc: {})",
+        amount,
+        token_symbol,
+        network,
+        chain.chain_id,
+        chain.rpc_url
+    );
+
+    // Perform the deposit
     let allowance_amount = U256::from(amount.saturating_add(1000));
-    let deposit_amount = U256::from(amount);
-    let contract_address: Address = Address::parse_checksummed(&contract_address, None)?;
-    let token_addr: Address = token_address.parse()?;
+    let deposit_amount = U160::from(amount);
+    let contract_addr: Address = Address::parse_checksummed(&contract_address, None)?;
+    let token_addr: Address = token.address.parse()?;
     let signer = privkey.parse::<PrivateKeySigner>()?;
-    tracing::debug!("{:?}", &signer);
     let signer_address = signer.address();
     let wallet = EthereumWallet::new(signer);
-    let rpc_url = Url::parse(&rpc_url)?;
+    let rpc_url = Url::parse(&chain.rpc_url)?;
 
     // Set up the provider
     let provider = ProviderBuilder::new()
-        .with_chain(chain)
+        .with_chain(chain_type)
         .wallet(wallet)
         .connect_http(rpc_url);
 
     // Get an instance of the contract
-    let contract = MidribV2::new(contract_address, &provider);
+    let contract = MidribV2::new(contract_addr, &provider);
 
     let erc20 = IERC20::new(token_addr, &provider);
     // Get the allowance
     let allowance_result = erc20
-        .allowance(signer_address, signer_address)
+        .allowance(signer_address, contract_addr)
         .call()
         .await?;
 
@@ -46,7 +135,7 @@ pub async fn call_deposit(
 
     // Set the allowance
     let approve_result = erc20
-        .approve(contract_address, allowance_amount)
+        .approve(contract_addr, allowance_amount)
         .send()
         .await?
         .watch()
@@ -55,7 +144,7 @@ pub async fn call_deposit(
     tracing::info!("Set allowance result: {approve_result:?}");
 
     // Call the contract function
-    tracing::info!("Attempting deposit of {deposit_amount} tokens to contract {contract_address}");
+    tracing::info!("Attempting deposit of {deposit_amount} tokens to contract {contract_addr}");
 
     let deposit_tx = contract.deposit(token_addr, deposit_amount);
 

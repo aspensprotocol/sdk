@@ -3,7 +3,6 @@ use aspens::{AspensClient, AsyncExecutor, BlockingExecutor};
 use clap::Parser;
 use clap_repl::reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory};
 use clap_repl::ClapEditor;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -29,19 +28,16 @@ impl AppState {
         guard.get_env(key).cloned()
     }
 
-    fn resolve_token_address(&self, chain: &str, token: &str) -> eyre::Result<String> {
+    fn get_config_sync(
+        &self,
+    ) -> eyre::Result<aspens::commands::config::config_pb::GetConfigResponse> {
         let guard = self.client.lock().unwrap();
-        guard.resolve_token_address(chain, token)
-    }
+        let url = guard.stack_url().to_string();
+        drop(guard); // Release lock before async call
 
-    fn get_chain_rpc_url(&self, chain: &str) -> eyre::Result<String> {
-        let guard = self.client.lock().unwrap();
-        guard.get_chain_rpc_url(chain)
-    }
-
-    fn get_chain_contract_address(&self, chain: &str) -> eyre::Result<String> {
-        let guard = self.client.lock().unwrap();
-        guard.get_chain_contract_address(chain)
+        // Use tokio runtime to block on async operation
+        tokio::runtime::Runtime::new()?
+            .block_on(async { aspens::commands::config::call_get_config(url).await })
     }
 }
 
@@ -63,19 +59,19 @@ enum ReplCommand {
         #[arg(short, long)]
         output_file: Option<String>,
     },
-    /// Deposit tokens to make them available for trading (requires chain, token, amount)
+    /// Deposit tokens to make them available for trading (requires network, token, amount)
     Deposit {
-        /// The chain network to deposit to
-        chain: String,
+        /// The network name to deposit to (e.g., anvil-1, base-sepolia)
+        network: String,
         /// Token symbol to deposit (e.g., USDC, WETH, WBTC)
         token: String,
         /// Amount to deposit
         amount: u64,
     },
-    /// Withdraw tokens to a local wallet (requires chain, token, amount)
+    /// Withdraw tokens to a local wallet (requires network, token, amount)
     Withdraw {
-        /// The chain network to withdraw from
-        chain: String,
+        /// The network name to withdraw from (e.g., anvil-1, base-sepolia)
+        network: String,
         /// Token symbol to withdraw (e.g., USDC, WETH, WBTC)
         token: String,
         /// Amount to withdraw
@@ -173,103 +169,82 @@ fn main() {
             }
         }
         ReplCommand::Deposit {
-            chain,
+            network,
             token,
             amount,
         } => {
-            info!("Depositing {amount:?} {token:?} on {chain:?}");
+            info!("Depositing {amount} {token} on {network}");
 
-            // Resolve chain-specific configuration
-            let rpc_url = match app_state.get_chain_rpc_url(&chain) {
-                Ok(url) => url,
+            // Fetch configuration from server
+            let config = match app_state.get_config_sync() {
+                Ok(cfg) => cfg,
                 Err(e) => {
-                    info!("Failed to resolve chain RPC URL: {e:?}");
+                    info!("Failed to fetch config: {e:?}");
+                    info!("Hint: Ensure the Aspens server is running and accessible");
                     return;
                 }
             };
-            let contract_address = match app_state.get_chain_contract_address(&chain) {
-                Ok(addr) => addr,
-                Err(e) => {
-                    info!("Failed to resolve chain contract address: {e:?}");
-                    return;
-                }
-            };
-            let token_address = match app_state.resolve_token_address(&chain, &token) {
-                Ok(addr) => addr,
-                Err(e) => {
-                    info!("Failed to resolve token address: {e:?}");
-                    info!("Hint: Ensure {} has a configured token address for {}", chain, token);
-                    return;
-                }
-            };
-            let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
 
-            let chain_type = alloy_chains::NamedChain::from_str(&chain).unwrap_or_else(|_| {
-                info!("Invalid chain name: {}, using BaseGoerli as default", chain);
-                alloy_chains::NamedChain::BaseGoerli
-            });
-            if let Err(e) = executor.execute(deposit::call_deposit(
-                chain_type,
-                rpc_url,
-                token_address,
-                contract_address,
-                privkey,
+            let privkey = match app_state.get_env("EVM_TESTNET_PRIVKEY") {
+                Some(key) => key,
+                None => {
+                    info!("EVM_TESTNET_PRIVKEY not found in environment");
+                    return;
+                }
+            };
+
+            if let Err(e) = executor.execute(deposit::call_deposit_from_config(
+                network,
+                token,
                 amount,
+                privkey,
+                config,
             )) {
                 info!("Failed to deposit: {e:?}");
                 info!("Hint: Check your balance with the 'balance' command");
-                info!("Hint: Verify server connection with 'initialize'");
+                info!("Hint: Verify server connection and configuration");
                 info!("Hint: Ensure you have sufficient token balance in your wallet");
+            } else {
+                info!("Deposit successful");
             }
         }
         ReplCommand::Withdraw {
-            chain,
+            network,
             token,
             amount,
         } => {
-            info!("Withdrawing {amount:?} {token:?} on {chain:?}");
+            info!("Withdrawing {amount} {token} from {network}");
 
-            // Resolve chain-specific configuration
-            let rpc_url = match app_state.get_chain_rpc_url(&chain) {
-                Ok(url) => url,
+            // Fetch configuration from server
+            let config = match app_state.get_config_sync() {
+                Ok(cfg) => cfg,
                 Err(e) => {
-                    info!("Failed to resolve chain RPC URL: {e:?}");
+                    info!("Failed to fetch config: {e:?}");
+                    info!("Hint: Ensure the Aspens server is running and accessible");
                     return;
                 }
             };
-            let contract_address = match app_state.get_chain_contract_address(&chain) {
-                Ok(addr) => addr,
-                Err(e) => {
-                    info!("Failed to resolve chain contract address: {e:?}");
-                    return;
-                }
-            };
-            let token_address = match app_state.resolve_token_address(&chain, &token) {
-                Ok(addr) => addr,
-                Err(e) => {
-                    info!("Failed to resolve token address: {e:?}");
-                    info!("Hint: Ensure {} has a configured token address for {}", chain, token);
-                    return;
-                }
-            };
-            let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
 
-            let chain_type = alloy_chains::NamedChain::from_str(&chain).unwrap_or_else(|_| {
-                info!("Invalid chain name: {}, using BaseGoerli as default", chain);
-                alloy_chains::NamedChain::BaseGoerli
-            });
-            if let Err(e) = executor.execute(withdraw::call_withdraw(
-                chain_type,
-                rpc_url,
-                token_address,
-                contract_address,
-                privkey,
+            let privkey = match app_state.get_env("EVM_TESTNET_PRIVKEY") {
+                Some(key) => key,
+                None => {
+                    info!("EVM_TESTNET_PRIVKEY not found in environment");
+                    return;
+                }
+            };
+
+            if let Err(e) = executor.execute(withdraw::call_withdraw_from_config(
+                network,
+                token,
                 amount,
+                privkey,
+                config,
             )) {
                 info!("Failed to withdraw: {e:?}");
-                info!("Hint: Check your available balance with the 'balance' command");
-                info!("Hint: Ensure you have sufficient balance in the contract");
-                info!("Hint: Verify server connection with 'initialize'");
+                info!("Hint: Check your balance with the 'balance' command");
+                info!("Hint: Verify server connection and configuration");
+            } else {
+                info!("Withdraw successful");
             }
         }
         ReplCommand::Buy {

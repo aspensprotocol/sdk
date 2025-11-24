@@ -2,7 +2,6 @@ use aspens::commands::trading::{balance, deposit, send_order, withdraw};
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use clap::{Parser, ValueEnum};
 use eyre::Result;
-use std::str::FromStr;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use url::Url;
@@ -34,19 +33,19 @@ enum Commands {
         #[arg(short, long)]
         output_file: Option<String>,
     },
-    /// Deposit tokens to make them available for trading (requires CHAIN TOKEN AMOUNT)
+    /// Deposit tokens to make them available for trading (requires NETWORK TOKEN AMOUNT)
     Deposit {
-        /// The chain network to deposit to
-        chain: String,
+        /// The network name to deposit to (e.g., anvil-1, base-sepolia)
+        network: String,
         /// Token symbol to deposit (e.g., USDC, WETH, WBTC)
         token: String,
         /// Amount to deposit
         amount: u64,
     },
-    /// Withdraw tokens to a local wallet (requires CHAIN TOKEN AMOUNT)
+    /// Withdraw tokens to a local wallet (requires NETWORK TOKEN AMOUNT)
     Withdraw {
-        /// The chain network to withdraw from
-        chain: String,
+        /// The network name to withdraw from (e.g., anvil-1, base-sepolia)
+        network: String,
         /// Token symbol to withdraw (e.g., USDC, WETH, WBTC)
         token: String,
         /// Amount to withdraw
@@ -128,52 +127,38 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Deposit {
-            chain,
+            network,
             token,
             amount,
         } => {
-            info!("Depositing {amount:?} {token:?} on {chain:?}");
+            info!("Depositing {amount} {token} on {network}");
 
-            // Resolve chain-specific configuration
-            let rpc_url = client.get_chain_rpc_url(&chain)?;
-            let contract_address = client.get_chain_contract_address(&chain)?;
-            let token_address = client.resolve_token_address(&chain, &token)?;
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config = executor.execute(aspens::commands::config::call_get_config(stack_url))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            let chain_type = alloy_chains::NamedChain::from_str(&chain)?;
-            executor.execute(deposit::call_deposit(
-                chain_type,
-                rpc_url,
-                token_address,
-                contract_address,
-                privkey,
-                amount,
+            executor.execute(deposit::call_deposit_from_config(
+                network, token, amount, privkey, config,
             ))?;
-            info!("Deposit was successfuly");
+            info!("Deposit was successful");
         }
         Commands::Withdraw {
-            chain,
+            network,
             token,
             amount,
         } => {
-            info!("Withdrawing {amount:?} {token:?} on {chain:?}");
+            info!("Withdrawing {amount} {token} from {network}");
 
-            // Resolve chain-specific configuration
-            let rpc_url = client.get_chain_rpc_url(&chain)?;
-            let contract_address = client.get_chain_contract_address(&chain)?;
-            let token_address = client.resolve_token_address(&chain, &token)?;
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config = executor.execute(aspens::commands::config::call_get_config(stack_url))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            let chain_type = alloy_chains::NamedChain::from_str(&chain)?;
-            let result = executor.execute(withdraw::call_withdraw(
-                chain_type,
-                rpc_url,
-                token_address,
-                contract_address,
-                privkey,
-                amount,
-            ));
-            info!("Withdraw result: {result:?}");
+            executor.execute(withdraw::call_withdraw_from_config(
+                network, token, amount, privkey, config,
+            ))?;
+            info!("Withdraw was successful");
         }
         Commands::Buy {
             amount,
