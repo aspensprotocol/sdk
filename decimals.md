@@ -101,12 +101,12 @@ onchain_quantity = normalize_decimals(pair_quantity, pair_decimals, base_token_d
 # Quantity: 1.5 * 10^18 = 1,500,000,000,000,000,000
 # Price: 2500.0 * 10^18 = 2,500,000,000,000,000,000,000,000,000
 
-aspens-cli buy <market_id> 1500000000000000000 --limit-price 2500000000000000000000000000000000000
+aspens-cli buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
 ```
 
 **REPL Command:**
 ```bash
-aspens> buy <market_id> 1500000000000000000 --limit-price 2500000000000000000000000000000000000
+aspens> buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
 ```
 
 **What happens:**
@@ -128,7 +128,7 @@ aspens> buy <market_id> 1500000000000000000 --limit-price 2500000000000000000000
 # Quantity: 0.5 * 10^8 = 50,000,000
 # Price: 45000.0 * 10^8 = 4,500,000,000,000
 
-aspens> sell <market_id> 50000000 --limit-price 4500000000000
+aspens> sell-limit <market_id> 50000000 4500000000000
 ```
 
 **What happens:**
@@ -150,7 +150,7 @@ aspens> sell <market_id> 50000000 --limit-price 4500000000000
 # Quantity: 1000.0 * 10^12 = 1,000,000,000,000,000
 # Price: 1.001 * 10^12 = 1,001,000,000,000
 
-aspens-cli buy <market_id> 1000000000000000 --limit-price 1001000000000
+aspens-cli buy-limit <market_id> 1000000000000000 1001000000000
 ```
 
 **What happens:**
@@ -172,14 +172,12 @@ aspens-cli buy <market_id> 1000000000000000 --limit-price 1001000000000
 # Quantity: 0.75 * 10^10 = 7,500,000,000
 # No price specified (market order)
 
-aspens-cli buy <market_id> 7500000000
+aspens-cli buy-market <market_id> 7500000000
 ```
 
 **REPL Command:**
 ```bash
-aspens> buy <market_id> 7500000000
-# REPL will prompt for price if not specified
-At what price? 50000
+aspens> buy-market <market_id> 7500000000
 ```
 
 ## Setting Up Trading Environment
@@ -209,8 +207,8 @@ aspens-cli --admin get-config
 aspens-cli deposit base-goerli USDC 1000000
 
 # Place orders (use actual market_id from config)
-aspens-cli buy <market_id> 1500000000000000000 --limit-price 2500000000000000000000000000000000000
-aspens-cli sell <market_id> 50000000 --limit-price 4500000000000
+aspens-cli buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
+aspens-cli sell-limit <market_id> 50000000 4500000000000
 
 # Check balance
 aspens-cli balance
@@ -231,8 +229,8 @@ aspens> config
 aspens> deposit base-goerli USDC 1000000
 
 # Place orders (use actual market_id from config)
-aspens> buy <market_id> 1500000000000000000 --limit-price 2500000000000000000000000000000000000
-aspens> sell <market_id> 50000000 --limit-price 4500000000000
+aspens> buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
+aspens> sell-limit <market_id> 50000000 4500000000000
 
 # Check balance
 aspens> balance

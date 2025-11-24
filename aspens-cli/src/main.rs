@@ -51,25 +51,37 @@ enum Commands {
         /// Amount to withdraw
         amount: u64,
     },
-    /// Send a BUY order with amount and optional limit price
-    Buy {
+    /// Send a market BUY order (executes at best available price)
+    BuyMarket {
         /// Market ID to trade on
         market: String,
         /// Amount to buy
         amount: String,
-        /// Optional limit price for the order
-        #[arg(short, long)]
-        limit_price: Option<String>,
     },
-    /// Send a SELL order with amount and optional limit price
-    Sell {
+    /// Send a limit BUY order (executes at specified price or better)
+    BuyLimit {
+        /// Market ID to trade on
+        market: String,
+        /// Amount to buy
+        amount: String,
+        /// Limit price for the order
+        price: String,
+    },
+    /// Send a market SELL order (executes at best available price)
+    SellMarket {
         /// Market ID to trade on
         market: String,
         /// Amount to sell
         amount: String,
-        /// Optional limit price for the order
-        #[arg(short, long)]
-        limit_price: Option<String>,
+    },
+    /// Send a limit SELL order (executes at specified price or better)
+    SellLimit {
+        /// Market ID to trade on
+        market: String,
+        /// Amount to sell
+        amount: String,
+        /// Limit price for the order
+        price: String,
     },
     /// Fetch the current balances across all chains
     Balance,
@@ -158,12 +170,8 @@ async fn main() -> Result<()> {
             ))?;
             info!("Withdraw was successful");
         }
-        Commands::Buy {
-            market,
-            amount,
-            limit_price,
-        } => {
-            info!("Sending BUY order for {amount:?} at limit price {limit_price:?} on market {market}");
+        Commands::BuyMarket { market, amount } => {
+            info!("Sending market BUY order for {amount} on market {market}");
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
@@ -175,7 +183,7 @@ async fn main() -> Result<()> {
                 market,
                 1, // Buy side
                 amount,
-                limit_price,
+                None, // No limit price (market order)
                 privkey,
                 config,
             ))?;
@@ -190,14 +198,44 @@ async fn main() -> Result<()> {
                 info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
 
-            info!("✓ Buy order sent successfully");
+            info!("✓ Market buy order sent successfully");
         }
-        Commands::Sell {
+        Commands::BuyLimit {
             market,
             amount,
-            limit_price,
+            price,
         } => {
-            info!("Sending SELL order for {amount:?} at limit price {limit_price:?} on market {market}");
+            info!("Sending limit BUY order for {amount} at price {price} on market {market}");
+
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config = executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
+            let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
+
+            let result = executor.execute(send_order::call_send_order_from_config(
+                stack_url,
+                market,
+                1, // Buy side
+                amount,
+                Some(price),
+                privkey,
+                config,
+            ))?;
+            info!("SendOrder result: {result:?}");
+
+            // Log transaction hashes if available
+            if !result.transaction_hashes.is_empty() {
+                info!("Transaction hashes:");
+                for formatted_hash in result.get_formatted_transaction_hashes() {
+                    info!("  {}", formatted_hash);
+                }
+                info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
+            }
+
+            info!("✓ Limit buy order sent successfully");
+        }
+        Commands::SellMarket { market, amount } => {
+            info!("Sending market SELL order for {amount} on market {market}");
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
@@ -209,7 +247,7 @@ async fn main() -> Result<()> {
                 market,
                 2, // Sell side
                 amount,
-                limit_price,
+                None, // No limit price (market order)
                 privkey,
                 config,
             ))?;
@@ -224,7 +262,41 @@ async fn main() -> Result<()> {
                 info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
 
-            info!("✓ Sell order sent successfully");
+            info!("✓ Market sell order sent successfully");
+        }
+        Commands::SellLimit {
+            market,
+            amount,
+            price,
+        } => {
+            info!("Sending limit SELL order for {amount} at price {price} on market {market}");
+
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config = executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
+            let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
+
+            let result = executor.execute(send_order::call_send_order_from_config(
+                stack_url,
+                market,
+                2, // Sell side
+                amount,
+                Some(price),
+                privkey,
+                config,
+            ))?;
+            info!("SendOrder result: {result:?}");
+
+            // Log transaction hashes if available
+            if !result.transaction_hashes.is_empty() {
+                info!("Transaction hashes:");
+                for formatted_hash in result.get_formatted_transaction_hashes() {
+                    info!("  {}", formatted_hash);
+                }
+                info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
+            }
+
+            info!("✓ Limit sell order sent successfully");
         }
         Commands::Balance => {
             use aspens::commands::config;

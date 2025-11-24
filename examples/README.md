@@ -20,14 +20,14 @@ This directory contains practical examples demonstrating how to use the Aspens C
 
 2. **Run Individual Examples**
    ```bash
-   # ETH/USDC trading
-   aspens-cli buy 1500000000000000000 --limit-price 2500000000000000000000000000000000000
-   
-   # BTC/USDT trading
-   aspens-cli sell 50000000 --limit-price 4500000000000
-   
-   # USDC/DAI trading
-   aspens-cli buy 1000000000000000 --limit-price 1001000000000
+   # ETH/USDC limit buy order
+   aspens-cli buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
+
+   # BTC/USDT limit sell order
+   aspens-cli sell-limit <market_id> 50000000 4500000000000
+
+   # USDC/DAI limit buy order
+   aspens-cli buy-limit <market_id> 1000000000000000 1001000000000
    ```
 
 ## Key Concepts Explained
@@ -45,42 +45,41 @@ pair_amount = human_amount * 10^pair_decimals
 #### 1. ETH/USDC (18/6 decimals, pair_decimals=18)
 - **Human**: 1.5 ETH at $2,500 USDC
 - **Pair**: 1,500,000,000,000,000,000 at 2,500,000,000,000,000,000,000,000,000,000,000
-- **CLI**: `aspens-cli buy 1500000000000000000 --limit-price 2500000000000000000000000000000000000`
+- **CLI**: `aspens-cli buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000`
 
 #### 2. BTC/USDT (8/6 decimals, pair_decimals=8)
 - **Human**: 0.5 BTC at $45,000 USDT
 - **Pair**: 50,000,000 at 4,500,000,000,000
-- **CLI**: `aspens-cli sell 50000000 --limit-price 4500000000000`
+- **CLI**: `aspens-cli sell-limit <market_id> 50000000 4500000000000`
 
 #### 3. USDC/DAI (6/18 decimals, pair_decimals=12)
 - **Human**: 1,000 USDC at 1.001 DAI
 - **Pair**: 1,000,000,000,000,000 at 1,001,000,000,000
-- **CLI**: `aspens-cli buy 1000000000000000 --limit-price 1001000000000`
+- **CLI**: `aspens-cli buy-limit <market_id> 1000000000000000 1001000000000`
 
 ## Common Patterns
 
 ### Market Orders (No Price)
 ```bash
 # Buy 0.75 WBTC at market price
-aspens-cli buy 7500000000
+aspens-cli buy-market <market_id> 7500000000
 
 # Sell 0.25 WBTC at market price
-aspens-cli sell 2500000000
+aspens-cli sell-market <market_id> 2500000000
 ```
 
 ### Small Amount Trading
 ```bash
 # Buy 1,000,000 SHIB at $0.00001 USDT
-aspens-cli buy 1000000000000 --limit-price 10
+aspens-cli buy-limit <market_id> 1000000000000 10
 ```
 
 ### REPL Interactive Trading
 ```bash
 aspens-repl
-aspens> initialize --url http://localhost:50051
-aspens> buy 1500000000000000000 --limit-price 2500000000000000000000000000000000000
-aspens> sell 50000000
-At what price? 4500000000000
+aspens> config
+aspens> buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
+aspens> sell-market <market_id> 50000000
 aspens> balance
 aspens> quit
 ```
@@ -102,7 +101,7 @@ just stream-orderbook "your-market-id"
 ### 3. Test Small Orders
 ```bash
 # Always test with small amounts first
-aspens-cli buy 100000000000000000 --limit-price 100000000000000000000000000000000000
+aspens-cli buy-limit <market_id> 100000000000000000 100000000000000000000000000000000000
 ```
 
 ## Troubleshooting
@@ -159,8 +158,8 @@ ETH_AMOUNT=$(echo "scale=0; 1.5 * 10^18 / 1" | bc)
 ETH_PRICE=$(echo "scale=0; 2500.0 * 10^18 / 1" | bc)
 
 # Place orders
-aspens-cli buy $ETH_AMOUNT --limit-price $ETH_PRICE
-aspens-cli sell $ETH_AMOUNT --limit-price $ETH_PRICE
+aspens-cli buy-limit <market_id> $ETH_AMOUNT $ETH_PRICE
+aspens-cli sell-limit <market_id> $ETH_AMOUNT $ETH_PRICE
 ```
 
 ## References
