@@ -22,22 +22,12 @@ This directory contains practical examples demonstrating how to use the Aspens C
    ```bash
    # Arborter server URL
    ARBORTER_URL=http://localhost:50051
-   
-   # Market configuration
-   MARKET_ID_1=1::0x1234567890123456789012345678901234567890::1::0x0987654321098765432109876543210987654321
-   
-   # Wallet configuration
-   EVM_TESTNET_PUBKEY=0x9bdbb2d6fb90a54f90e8bfee32157a081b0a907f
+
+   # Wallet configuration (only private key needed - public key derived automatically)
    EVM_TESTNET_PRIVKEY=0x1234567890123456789012345678901234567890123456789012345678901234
-   
-   # Chain configuration
-   BASE_CHAIN_RPC_URL=http://localhost:8545
-   QUOTE_CHAIN_RPC_URL=http://localhost:8546
-   BASE_CHAIN_USDC_TOKEN_ADDRESS=0x1234567890123456789012345678901234567890
-   QUOTE_CHAIN_USDC_TOKEN_ADDRESS=0x0987654321098765432109876543210987654321
-   BASE_CHAIN_CONTRACT_ADDRESS=0x1111111111111111111111111111111111111111
-   QUOTE_CHAIN_CONTRACT_ADDRESS=0x2222222222222222222222222222222222222222
    ```
+
+   **Note:** All chain, token, contract, and market configuration is now fetched automatically from the server. The SDK uses a config-driven architecture that eliminates the need for manually specifying RPC URLs, token addresses, and contract addresses in environment variables.
 
 3. **Build Aspens CLI and REPL**
    ```bash

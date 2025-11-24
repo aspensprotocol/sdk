@@ -53,25 +53,23 @@ enum Commands {
     },
     /// Send a BUY order with amount and optional limit price
     Buy {
+        /// Market ID to trade on
+        market: String,
         /// Amount to buy
         amount: String,
         /// Optional limit price for the order
         #[arg(short, long)]
         limit_price: Option<String>,
-        /// Market ID to trade on (defaults to MARKET_ID_1 from environment)
-        #[arg(short, long)]
-        market: Option<String>,
     },
     /// Send a SELL order with amount and optional limit price
     Sell {
+        /// Market ID to trade on
+        market: String,
         /// Amount to sell
         amount: String,
         /// Optional limit price for the order
         #[arg(short, long)]
         limit_price: Option<String>,
-        /// Market ID to trade on (defaults to MARKET_ID_1 from environment)
-        #[arg(short, long)]
-        market: Option<String>,
     },
     /// Fetch the current balances across all chains
     Balance,
@@ -161,25 +159,25 @@ async fn main() -> Result<()> {
             info!("Withdraw was successful");
         }
         Commands::Buy {
+            market,
             amount,
             limit_price,
-            market,
         } => {
-            let market_id =
-                market.unwrap_or_else(|| client.get_env("MARKET_ID_1").unwrap().clone());
-            info!("Sending BUY order for {amount:?} at limit price {limit_price:?} on market {market_id}");
-            let pubkey = client.get_env("EVM_TESTNET_PUBKEY").unwrap().clone();
+            info!("Sending BUY order for {amount:?} at limit price {limit_price:?} on market {market}");
+
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config = executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            let result = executor.execute(send_order::call_send_order(
-                client.stack_url().to_string(),
+            let result = executor.execute(send_order::call_send_order_from_config(
+                stack_url,
+                market,
                 1, // Buy side
                 amount,
                 limit_price,
-                market_id,
-                pubkey.clone(),
-                pubkey,
                 privkey,
+                config,
             ))?;
             info!("SendOrder result: {result:?}");
 
@@ -195,25 +193,25 @@ async fn main() -> Result<()> {
             info!("✓ Buy order sent successfully");
         }
         Commands::Sell {
+            market,
             amount,
             limit_price,
-            market,
         } => {
-            let market_id =
-                market.unwrap_or_else(|| client.get_env("MARKET_ID_1").unwrap().clone());
-            info!("Sending SELL order for {amount:?} at limit price {limit_price:?} on market {market_id}");
-            let pubkey = client.get_env("EVM_TESTNET_PUBKEY").unwrap().clone();
+            info!("Sending SELL order for {amount:?} at limit price {limit_price:?} on market {market}");
+
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config = executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            let result = executor.execute(send_order::call_send_order(
-                client.stack_url().to_string(),
+            let result = executor.execute(send_order::call_send_order_from_config(
+                stack_url,
+                market,
                 2, // Sell side
                 amount,
                 limit_price,
-                market_id,
-                pubkey.clone(),
-                pubkey,
                 privkey,
+                config,
             ))?;
             info!("SendOrder result: {result:?}");
 
@@ -242,36 +240,6 @@ async fn main() -> Result<()> {
             info!("Configuration Status:");
             info!("  Environment: {}", client.environment());
             info!("  Stack URL: {}", client.stack_url());
-            info!(
-                "  Market ID 1: {}",
-                client
-                    .get_env("MARKET_ID_1")
-                    .unwrap_or(&"not set".to_string())
-            );
-            info!(
-                "  Market ID 2: {}",
-                client
-                    .get_env("MARKET_ID_2")
-                    .unwrap_or(&"not set".to_string())
-            );
-            info!(
-                "  Base Chain RPC: {}",
-                client
-                    .get_env("BASE_CHAIN_RPC_URL")
-                    .unwrap_or(&"not set".to_string())
-            );
-            info!(
-                "  Quote Chain RPC: {}",
-                client
-                    .get_env("QUOTE_CHAIN_RPC_URL")
-                    .unwrap_or(&"not set".to_string())
-            );
-            info!(
-                "  Public Key: {}",
-                client
-                    .get_env("EVM_TESTNET_PUBKEY")
-                    .unwrap_or(&"not set".to_string())
-            );
         }
         Commands::Config { output_file } => {
             use aspens::commands::config;

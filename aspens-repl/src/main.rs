@@ -79,25 +79,23 @@ enum ReplCommand {
     },
     /// Send a BUY order with amount and optional limit price
     Buy {
+        /// Market ID to trade on
+        market: String,
         /// Amount to buy
         amount: String,
         /// Optional limit price for the order
         #[arg(short, long)]
         limit_price: Option<String>,
-        /// Market ID to trade on (defaults to MARKET_ID_1 from environment)
-        #[arg(short, long)]
-        market: Option<String>,
     },
     /// Send a SELL order with amount and optional limit price
     Sell {
+        /// Market ID to trade on
+        market: String,
         /// Amount to sell
         amount: String,
         /// Optional limit price for the order
         #[arg(short, long)]
         limit_price: Option<String>,
-        /// Market ID to trade on (defaults to MARKET_ID_1 from environment)
-        #[arg(short, long)]
-        market: Option<String>,
     },
     /// Fetch the current balances across all chains
     Balance,
@@ -248,24 +246,38 @@ fn main() {
             }
         }
         ReplCommand::Buy {
+            market,
             amount,
             limit_price,
-            market,
         } => {
-            let market_id = market.unwrap_or_else(|| app_state.get_env("MARKET_ID_1").unwrap());
-            info!("Sending BUY order for {amount:?} at limit price {limit_price:?} on market {market_id}");
-            let pubkey = app_state.get_env("EVM_TESTNET_PUBKEY").unwrap();
-            let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
+            info!("Sending BUY order for {amount:?} at limit price {limit_price:?} on market {market}");
 
-            match executor.execute(send_order::call_send_order(
+            // Fetch configuration from server
+            let config = match app_state.get_config_sync() {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    info!("Failed to fetch config: {e:?}");
+                    info!("Hint: Ensure the Aspens server is running and accessible");
+                    return;
+                }
+            };
+
+            let privkey = match app_state.get_env("EVM_TESTNET_PRIVKEY") {
+                Some(key) => key,
+                None => {
+                    info!("EVM_TESTNET_PRIVKEY not found in environment");
+                    return;
+                }
+            };
+
+            match executor.execute(send_order::call_send_order_from_config(
                 app_state.stack_url(),
+                market,
                 1, // Buy side
                 amount,
                 limit_price,
-                market_id,
-                pubkey.clone(),
-                pubkey,
                 privkey,
+                config,
             )) {
                 Ok(result) => {
                     info!("✓ Buy order sent successfully");
@@ -281,30 +293,43 @@ fn main() {
                     info!("Failed to send buy order: {e:?}");
                     info!("Hint: Check your balance with the 'balance' command");
                     info!("Hint: Ensure you have sufficient quote token for the buy");
-                    info!("Hint: Verify server connection with 'initialize'");
-                    info!("Hint: Check market status with 'status' command");
+                    info!("Hint: Verify server connection with 'status' command");
                 }
             }
         }
         ReplCommand::Sell {
+            market,
             amount,
             limit_price,
-            market,
         } => {
-            let market_id = market.unwrap_or_else(|| app_state.get_env("MARKET_ID_1").unwrap());
-            info!("Sending SELL order for {amount:?} at limit price {limit_price:?} on market {market_id}");
-            let pubkey = app_state.get_env("EVM_TESTNET_PUBKEY").unwrap();
-            let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
+            info!("Sending SELL order for {amount:?} at limit price {limit_price:?} on market {market}");
 
-            match executor.execute(send_order::call_send_order(
+            // Fetch configuration from server
+            let config = match app_state.get_config_sync() {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    info!("Failed to fetch config: {e:?}");
+                    info!("Hint: Ensure the Aspens server is running and accessible");
+                    return;
+                }
+            };
+
+            let privkey = match app_state.get_env("EVM_TESTNET_PRIVKEY") {
+                Some(key) => key,
+                None => {
+                    info!("EVM_TESTNET_PRIVKEY not found in environment");
+                    return;
+                }
+            };
+
+            match executor.execute(send_order::call_send_order_from_config(
                 app_state.stack_url(),
+                market,
                 2, // Sell side
                 amount,
                 limit_price,
-                market_id,
-                pubkey.clone(),
-                pubkey,
                 privkey,
+                config,
             )) {
                 Ok(result) => {
                     info!("✓ Sell order sent successfully");
@@ -320,8 +345,7 @@ fn main() {
                     info!("Failed to send sell order: {e:?}");
                     info!("Hint: Check your balance with the 'balance' command");
                     info!("Hint: Ensure you have sufficient base token for the sell");
-                    info!("Hint: Verify server connection with 'initialize'");
-                    info!("Hint: Check market status with 'status' command");
+                    info!("Hint: Verify server connection with 'status' command");
                 }
             }
         }
@@ -350,11 +374,6 @@ fn main() {
             info!("Configuration Status:");
             info!("  Environment: {}", app_state.client.lock().unwrap().environment());
             info!("  Server URL: {}", app_state.stack_url());
-            info!("  Market ID 1: {}", app_state.get_env("MARKET_ID_1").unwrap_or("not set".to_string()));
-            info!("  Market ID 2: {}", app_state.get_env("MARKET_ID_2").unwrap_or("not set".to_string()));
-            info!("  Base Chain RPC: {}", app_state.get_env("BASE_CHAIN_RPC_URL").unwrap_or("not set".to_string()));
-            info!("  Quote Chain RPC: {}", app_state.get_env("QUOTE_CHAIN_RPC_URL").unwrap_or("not set".to_string()));
-            info!("  Public Key: {}", app_state.get_env("EVM_TESTNET_PUBKEY").unwrap_or("not set".to_string()));
         }
         ReplCommand::Quit => {
             info!("goodbye");
