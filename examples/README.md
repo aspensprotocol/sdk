@@ -1,6 +1,6 @@
 # Aspens Decimal Conversion Examples
 
-This directory contains practical examples demonstrating how to use the Aspens CLI and REPL with proper decimal conversions for cross-chain trading.
+This directory contains practical examples demonstrating how to use the Aspens CLI and REPL with proper decimal conversions for crosschain trading.
 
 ## Files
 

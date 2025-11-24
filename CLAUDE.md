@@ -225,9 +225,6 @@ let client = AspensClient::builder()
     .with_environment("testnet")
     .build()?;
 
-// Access environment variables
-let market_id = client.get_env("MARKET_ID_1").unwrap();
-
 // Use executor for async operations
 let executor = DirectExecutor;
 let result = executor.execute(some_async_function())?;
