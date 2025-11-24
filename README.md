@@ -233,18 +233,6 @@ just lint
 just clean
 ```
 
-## Configuration
-
-The SDK uses environment variables for configuration. Key variables include:
-
-- `ARBORTER_URL` - Arborter server endpoint
-- `MARKET_ID_*` - Market identifiers for trading pairs
-- `*_RPC_URL` - Blockchain RPC endpoints
-- `*_CONTRACT_ADDRESS` - Smart contract addresses
-- `PRIVATE_KEY_*` - Wallet private keys (use test accounts only!)
-
-Environment-specific configuration files follow the pattern `.env.{environment}.local` (e.g., `.env.testnet.local`, `.env.anvil.local`).
-
 ## Architecture
 
 ### Core Library (`aspens/`)
@@ -253,7 +241,7 @@ The core library provides:
 - **AspensClient** - Main client with builder pattern for configuration
 - **Trading operations** - Deposit, withdraw, buy, sell, balance queries
 - **Executor pattern** - Async/sync execution strategies
-- **gRPC client** - Protocol buffer communication with Arborter server
+- **gRPC client** - Protocol buffer communication with an Aspens Market Stack
 - **Smart contract integration** - Alloy-based Ethereum interactions
 
 ### CLI Binary (`aspens-cli/`)

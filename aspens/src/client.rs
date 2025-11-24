@@ -7,7 +7,7 @@ use crate::commands::config::config_pb::{Chain, GetConfigResponse, Token};
 
 /// Main client for interacting with Aspens trading platform
 pub struct AspensClient {
-    /// URL of the Arborter server
+    /// URL of the Aspens Market Stack 
     pub(crate) stack_url: Url,
     /// Environment configuration name (e.g., "anvil", "testnet")
     pub(crate) environment: String,
@@ -23,7 +23,7 @@ impl AspensClient {
         AspensClientBuilder::default()
     }
 
-    /// Get the Arborter server URL
+    /// Get the Aspens Market Stack URL
     pub fn stack_url(&self) -> &Url {
         &self.stack_url
     }
@@ -138,7 +138,7 @@ pub struct AspensClientBuilder {
 }
 
 impl AspensClientBuilder {
-    /// Set the Arborter server URL
+    /// Set the Aspens Market Stack Url
     pub fn with_url(mut self, url: impl Into<String>) -> Result<Self> {
         let url_str = url.into();
         self.stack_url = Some(Url::parse(&url_str).context("Invalid URL")?);

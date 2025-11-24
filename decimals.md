@@ -188,23 +188,16 @@ At what price? 50000
 Create a `.env.anvil.local` file with your configuration:
 
 ```bash
-# Arborter server URL
-ARBORTER_URL=http://localhost:50051
+# Aspens Market Stack URL
+ASPENS_MARKET_STACK_URL=http://localhost:50051
 
-# Wallet configuration (only private key needed - public key derived automatically)
+# Wallet configuration (only private key needed - public key is derived automatically)
 EVM_TESTNET_PRIVKEY=0x1234567890123456789012345678901234567890123456789012345678901234
 ```
 
-**Note:** All chain, token, contract, and market configuration is now fetched automatically from the server. The SDK uses a config-driven architecture that eliminates the need for manually specifying RPC URLs, token addresses, and contract addresses in environment variables.
+**Note:** All chain, token, contract, and market configuration is fetched automatically from the Aspens Market Stack.
 
-### 2. Starting Arborter Server
-```bash
-# From arborter directory
-cd arborter
-just run
-```
-
-### 3. Using the CLI
+### 2. Using the CLI
 ```bash
 # Initialize session
 aspens-cli initialize
@@ -223,16 +216,16 @@ aspens-cli sell <market_id> 50000000 --limit-price 4500000000000
 aspens-cli balance
 ```
 
-### 4. Using the REPL
+### 3. Using the REPL
 ```bash
 # Start REPL
 aspens-repl
 
 # Initialize session
-aspens> initialize --url http://localhost:50051
+aspens> initialize --url https://ams-instance-url:50051
 
 # Get configuration
-aspens> get-config
+aspens> config
 
 # Deposit funds
 aspens> deposit base-goerli USDC 1000000
@@ -305,16 +298,6 @@ Very large amounts may overflow u64:
 5. **Verify on-chain amounts** match your expectations
 
 ## Testing Your Orders
-
-### Using Arborter's Test Suite
-```bash
-# From arborter directory
-cd arborter
-just test
-
-# Run specific decimal conversion tests
-cd app && cargo test test_eth_usdc_standard_pair_decimals_integration
-```
 
 ### Using gRPC Commands
 ```bash

@@ -173,7 +173,7 @@ async fn sign_transaction(msg_bytes: &[u8], privkey: &str) -> Result<Signature> 
 /// fetched from the server to look up the market and derive account addresses.
 ///
 /// # Arguments
-/// * `url` - The Arborter server URL
+/// * `url` - The Aspens Market Stack URL
 /// * `market_id` - The market identifier from config
 /// * `side` - Order side (1 for BUY, 2 for SELL)
 /// * `quantity` - The quantity to trade (in pair decimals)

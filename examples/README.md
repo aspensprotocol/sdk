@@ -9,32 +9,6 @@ This directory contains practical examples demonstrating how to use the Aspens C
 
 ## Quick Start
 
-### Prerequisites
-
-1. **Arborter Server Running**
-   ```bash
-   cd arborter
-   just run
-   ```
-
-2. **Environment Configuration**
-   Create a `.env.anvil.local` file in the aspens directory:
-   ```bash
-   # Arborter server URL
-   ARBORTER_URL=http://localhost:50051
-
-   # Wallet configuration (only private key needed - public key derived automatically)
-   EVM_TESTNET_PRIVKEY=0x1234567890123456789012345678901234567890123456789012345678901234
-   ```
-
-   **Note:** All chain, token, contract, and market configuration is now fetched automatically from the server. The SDK uses a config-driven architecture that eliminates the need for manually specifying RPC URLs, token addresses, and contract addresses in environment variables.
-
-3. **Build Aspens CLI and REPL**
-   ```bash
-   cd aspens/wrappers
-   cargo build --release
-   ```
-
 ### Running the Examples
 
 1. **View the Examples**
@@ -113,10 +87,10 @@ aspens> quit
 
 ## Testing Your Setup
 
-### 1. Check Arborter Status
+### 1. Check the Aspens Market Stack Configuration & Status
 ```bash
-# From arborter directory
-just get-config
+aspens-repl
+aspens> config
 ```
 
 ### 2. Stream Orderbook
@@ -145,15 +119,11 @@ aspens-cli buy 100000000000000000 --limit-price 10000000000000000000000000000000
 
 3. **"Order not found" errors**
    - Verify your market ID is correct
-   - Check that Arborter is running and configured
+   - Check that Aspens Market Stack running and configured and reachable
 
 ### Debug Commands
 
 ```bash
-# Check Arborter logs
-cd arborter
-just run
-
 # View orderbook in real-time
 just stream-orderbook "your-market-id"
 
@@ -196,9 +166,8 @@ aspens-cli sell $ETH_AMOUNT --limit-price $ETH_PRICE
 ## References
 
 - [Main Decimal Documentation](../decimals.md) - Comprehensive guide to decimal conversions
-- [Arborter Decimal Guide](../../arborter/decimals.md) - Technical details of the conversion system
-- [CLI Documentation](../wrappers/src/bin/cli.rs) - CLI command reference
-- [REPL Documentation](../wrappers/src/bin/repl.rs) - REPL command reference
+- [CLI Documentation](../aspens-cli/src/main.rs) - CLI command reference
+- [REPL Documentation](../aspens-repl/src/main.rs) - REPL command reference
 
 ## Support
 
@@ -206,4 +175,4 @@ For issues or questions:
 1. Check the troubleshooting section above
 2. Review the main decimal documentation
 3. Test with the provided examples
-4. Check Arborter logs for detailed error messages 
+4. Check logs for detailed error messages 
