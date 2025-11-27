@@ -175,17 +175,14 @@ async fn main() -> Result<()> {
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
-            let config = executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
+            let config =
+                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
             let result = executor.execute(send_order::call_send_order_from_config(
-                stack_url,
-                market,
-                1, // Buy side
-                amount,
-                None, // No limit price (market order)
-                privkey,
-                config,
+                stack_url, market, 1, // Buy side
+                amount, None, // No limit price (market order)
+                privkey, config,
             ))?;
             info!("SendOrder result: {result:?}");
 
@@ -209,7 +206,8 @@ async fn main() -> Result<()> {
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
-            let config = executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
+            let config =
+                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
             let result = executor.execute(send_order::call_send_order_from_config(
@@ -239,17 +237,14 @@ async fn main() -> Result<()> {
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
-            let config = executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
+            let config =
+                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
             let result = executor.execute(send_order::call_send_order_from_config(
-                stack_url,
-                market,
-                2, // Sell side
-                amount,
-                None, // No limit price (market order)
-                privkey,
-                config,
+                stack_url, market, 2, // Sell side
+                amount, None, // No limit price (market order)
+                privkey, config,
             ))?;
             info!("SendOrder result: {result:?}");
 
@@ -273,7 +268,8 @@ async fn main() -> Result<()> {
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
-            let config = executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
+            let config =
+                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
             let result = executor.execute(send_order::call_send_order_from_config(

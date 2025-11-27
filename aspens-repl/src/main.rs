@@ -158,8 +158,8 @@ fn main() {
                 Ok(config) => {
                     // If output_file is provided, save to file
                     if let Some(path) = output_file {
-                        if let Err(e) =
-                            executor.execute(config::download_config(stack_url.clone(), path.clone()))
+                        if let Err(e) = executor
+                            .execute(config::download_config(stack_url.clone(), path.clone()))
                         {
                             info!("Failed to save configuration: {e:?}");
                         } else {
@@ -204,11 +204,7 @@ fn main() {
             };
 
             if let Err(e) = executor.execute(deposit::call_deposit_from_config(
-                network,
-                token,
-                amount,
-                privkey,
-                config,
+                network, token, amount, privkey, config,
             )) {
                 info!("Failed to deposit: {e:?}");
                 info!("Hint: Check your balance with the 'balance' command");
@@ -244,11 +240,7 @@ fn main() {
             };
 
             if let Err(e) = executor.execute(withdraw::call_withdraw_from_config(
-                network,
-                token,
-                amount,
-                privkey,
-                config,
+                network, token, amount, privkey, config,
             )) {
                 info!("Failed to withdraw: {e:?}");
                 info!("Hint: Check your balance with the 'balance' command");
@@ -465,7 +457,8 @@ fn main() {
             match executor.execute(config::get_config(stack_url.clone())) {
                 Ok(config) => {
                     let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
-                    if let Err(e) = executor.execute(balance::balance_from_config(config, privkey)) {
+                    if let Err(e) = executor.execute(balance::balance_from_config(config, privkey))
+                    {
                         info!("Failed to get balances: {e:?}");
                         info!("Hint: Check your RPC URLs with 'status' command");
                         info!("Hint: Ensure your private key is correctly configured");
@@ -480,7 +473,10 @@ fn main() {
         }
         ReplCommand::Status => {
             info!("Configuration Status:");
-            info!("  Environment: {}", app_state.client.lock().unwrap().environment());
+            info!(
+                "  Environment: {}",
+                app_state.client.lock().unwrap().environment()
+            );
             info!("  Server URL: {}", app_state.stack_url());
         }
         ReplCommand::Quit => {

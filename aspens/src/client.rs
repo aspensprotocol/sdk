@@ -7,7 +7,7 @@ use crate::commands::config::config_pb::{Chain, GetConfigResponse, Token};
 
 /// Main client for interacting with Aspens trading platform
 pub struct AspensClient {
-    /// URL of the Aspens Market Stack 
+    /// URL of the Aspens Market Stack
     pub(crate) stack_url: Url,
     /// Environment configuration name (e.g., "anvil", "testnet")
     pub(crate) environment: String,
