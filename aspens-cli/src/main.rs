@@ -2,7 +2,6 @@ use aspens::commands::trading::{balance, deposit, send_order, withdraw};
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use clap::{Parser, ValueEnum};
 use eyre::Result;
-use std::str::FromStr;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use url::Url;
@@ -34,45 +33,55 @@ enum Commands {
         #[arg(short, long)]
         output_file: Option<String>,
     },
-    /// Deposit tokens to make them available for trading (requires CHAIN TOKEN AMOUNT)
+    /// Deposit tokens to make them available for trading (requires NETWORK TOKEN AMOUNT)
     Deposit {
-        /// The chain network to deposit to
-        chain: String,
+        /// The network name to deposit to (e.g., anvil-1, base-sepolia)
+        network: String,
         /// Token symbol to deposit (e.g., USDC, WETH, WBTC)
         token: String,
         /// Amount to deposit
         amount: u64,
     },
-    /// Withdraw tokens to a local wallet (requires CHAIN TOKEN AMOUNT)
+    /// Withdraw tokens to a local wallet (requires NETWORK TOKEN AMOUNT)
     Withdraw {
-        /// The chain network to withdraw from
-        chain: String,
+        /// The network name to withdraw from (e.g., anvil-1, base-sepolia)
+        network: String,
         /// Token symbol to withdraw (e.g., USDC, WETH, WBTC)
         token: String,
         /// Amount to withdraw
         amount: u64,
     },
-    /// Send a BUY order with amount and optional limit price
-    Buy {
+    /// Send a market BUY order (executes at best available price)
+    BuyMarket {
+        /// Market ID to trade on
+        market: String,
         /// Amount to buy
         amount: String,
-        /// Optional limit price for the order
-        #[arg(short, long)]
-        limit_price: Option<String>,
-        /// Market ID to trade on (defaults to MARKET_ID_1 from environment)
-        #[arg(short, long)]
-        market: Option<String>,
     },
-    /// Send a SELL order with amount and optional limit price
-    Sell {
+    /// Send a limit BUY order (executes at specified price or better)
+    BuyLimit {
+        /// Market ID to trade on
+        market: String,
+        /// Amount to buy
+        amount: String,
+        /// Limit price for the order
+        price: String,
+    },
+    /// Send a market SELL order (executes at best available price)
+    SellMarket {
+        /// Market ID to trade on
+        market: String,
         /// Amount to sell
         amount: String,
-        /// Optional limit price for the order
-        #[arg(short, long)]
-        limit_price: Option<String>,
-        /// Market ID to trade on (defaults to MARKET_ID_1 from environment)
-        #[arg(short, long)]
-        market: Option<String>,
+    },
+    /// Send a limit SELL order (executes at specified price or better)
+    SellLimit {
+        /// Market ID to trade on
+        market: String,
+        /// Amount to sell
+        amount: String,
+        /// Limit price for the order
+        price: String,
     },
     /// Fetch the current balances across all chains
     Balance,
@@ -128,73 +137,87 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Deposit {
-            chain,
+            network,
             token,
             amount,
         } => {
-            info!("Depositing {amount:?} {token:?} on {chain:?}");
+            info!("Depositing {amount} {token} on {network}");
 
-            // Resolve chain-specific configuration
-            let rpc_url = client.get_chain_rpc_url(&chain)?;
-            let contract_address = client.get_chain_contract_address(&chain)?;
-            let token_address = client.resolve_token_address(&chain, &token)?;
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config = executor.execute(aspens::commands::config::call_get_config(stack_url))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            let chain_type = alloy_chains::NamedChain::from_str(&chain)?;
-            executor.execute(deposit::call_deposit(
-                chain_type,
-                rpc_url,
-                token_address,
-                contract_address,
-                privkey,
-                amount,
+            executor.execute(deposit::call_deposit_from_config(
+                network, token, amount, privkey, config,
             ))?;
-            info!("Deposit was successfuly");
+            info!("Deposit was successful");
         }
         Commands::Withdraw {
-            chain,
+            network,
             token,
             amount,
         } => {
-            info!("Withdrawing {amount:?} {token:?} on {chain:?}");
+            info!("Withdrawing {amount} {token} from {network}");
 
-            // Resolve chain-specific configuration
-            let rpc_url = client.get_chain_rpc_url(&chain)?;
-            let contract_address = client.get_chain_contract_address(&chain)?;
-            let token_address = client.resolve_token_address(&chain, &token)?;
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config = executor.execute(aspens::commands::config::call_get_config(stack_url))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            let chain_type = alloy_chains::NamedChain::from_str(&chain)?;
-            let result = executor.execute(withdraw::call_withdraw(
-                chain_type,
-                rpc_url,
-                token_address,
-                contract_address,
-                privkey,
-                amount,
-            ));
-            info!("Withdraw result: {result:?}");
+            executor.execute(withdraw::call_withdraw_from_config(
+                network, token, amount, privkey, config,
+            ))?;
+            info!("Withdraw was successful");
         }
-        Commands::Buy {
-            amount,
-            limit_price,
-            market,
-        } => {
-            let market_id =
-                market.unwrap_or_else(|| client.get_env("MARKET_ID_1").unwrap().clone());
-            info!("Sending BUY order for {amount:?} at limit price {limit_price:?} on market {market_id}");
-            let pubkey = client.get_env("EVM_TESTNET_PUBKEY").unwrap().clone();
+        Commands::BuyMarket { market, amount } => {
+            info!("Sending market BUY order for {amount} on market {market}");
+
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config =
+                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            let result = executor.execute(send_order::call_send_order(
-                client.stack_url().to_string(),
+            let result = executor.execute(send_order::call_send_order_from_config(
+                stack_url, market, 1, // Buy side
+                amount, None, // No limit price (market order)
+                privkey, config,
+            ))?;
+            info!("SendOrder result: {result:?}");
+
+            // Log transaction hashes if available
+            if !result.transaction_hashes.is_empty() {
+                info!("Transaction hashes:");
+                for formatted_hash in result.get_formatted_transaction_hashes() {
+                    info!("  {}", formatted_hash);
+                }
+                info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
+            }
+
+            info!("✓ Market buy order sent successfully");
+        }
+        Commands::BuyLimit {
+            market,
+            amount,
+            price,
+        } => {
+            info!("Sending limit BUY order for {amount} at price {price} on market {market}");
+
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config =
+                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
+            let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
+
+            let result = executor.execute(send_order::call_send_order_from_config(
+                stack_url,
+                market,
                 1, // Buy side
                 amount,
-                limit_price,
-                market_id,
-                pubkey.clone(),
-                pubkey,
+                Some(price),
                 privkey,
+                config,
             ))?;
             info!("SendOrder result: {result:?}");
 
@@ -207,28 +230,21 @@ async fn main() -> Result<()> {
                 info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
 
-            info!("✓ Buy order sent successfully");
+            info!("✓ Limit buy order sent successfully");
         }
-        Commands::Sell {
-            amount,
-            limit_price,
-            market,
-        } => {
-            let market_id =
-                market.unwrap_or_else(|| client.get_env("MARKET_ID_1").unwrap().clone());
-            info!("Sending SELL order for {amount:?} at limit price {limit_price:?} on market {market_id}");
-            let pubkey = client.get_env("EVM_TESTNET_PUBKEY").unwrap().clone();
+        Commands::SellMarket { market, amount } => {
+            info!("Sending market SELL order for {amount} on market {market}");
+
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config =
+                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
             let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
 
-            let result = executor.execute(send_order::call_send_order(
-                client.stack_url().to_string(),
-                2, // Sell side
-                amount,
-                limit_price,
-                market_id,
-                pubkey.clone(),
-                pubkey,
-                privkey,
+            let result = executor.execute(send_order::call_send_order_from_config(
+                stack_url, market, 2, // Sell side
+                amount, None, // No limit price (market order)
+                privkey, config,
             ))?;
             info!("SendOrder result: {result:?}");
 
@@ -241,7 +257,42 @@ async fn main() -> Result<()> {
                 info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
 
-            info!("✓ Sell order sent successfully");
+            info!("✓ Market sell order sent successfully");
+        }
+        Commands::SellLimit {
+            market,
+            amount,
+            price,
+        } => {
+            info!("Sending limit SELL order for {amount} at price {price} on market {market}");
+
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config =
+                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
+            let privkey = client.get_env("EVM_TESTNET_PRIVKEY").unwrap().clone();
+
+            let result = executor.execute(send_order::call_send_order_from_config(
+                stack_url,
+                market,
+                2, // Sell side
+                amount,
+                Some(price),
+                privkey,
+                config,
+            ))?;
+            info!("SendOrder result: {result:?}");
+
+            // Log transaction hashes if available
+            if !result.transaction_hashes.is_empty() {
+                info!("Transaction hashes:");
+                for formatted_hash in result.get_formatted_transaction_hashes() {
+                    info!("  {}", formatted_hash);
+                }
+                info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
+            }
+
+            info!("✓ Limit sell order sent successfully");
         }
         Commands::Balance => {
             use aspens::commands::config;
@@ -257,36 +308,6 @@ async fn main() -> Result<()> {
             info!("Configuration Status:");
             info!("  Environment: {}", client.environment());
             info!("  Stack URL: {}", client.stack_url());
-            info!(
-                "  Market ID 1: {}",
-                client
-                    .get_env("MARKET_ID_1")
-                    .unwrap_or(&"not set".to_string())
-            );
-            info!(
-                "  Market ID 2: {}",
-                client
-                    .get_env("MARKET_ID_2")
-                    .unwrap_or(&"not set".to_string())
-            );
-            info!(
-                "  Base Chain RPC: {}",
-                client
-                    .get_env("BASE_CHAIN_RPC_URL")
-                    .unwrap_or(&"not set".to_string())
-            );
-            info!(
-                "  Quote Chain RPC: {}",
-                client
-                    .get_env("QUOTE_CHAIN_RPC_URL")
-                    .unwrap_or(&"not set".to_string())
-            );
-            info!(
-                "  Public Key: {}",
-                client
-                    .get_env("EVM_TESTNET_PUBKEY")
-                    .unwrap_or(&"not set".to_string())
-            );
         }
         Commands::Config { output_file } => {
             use aspens::commands::config;

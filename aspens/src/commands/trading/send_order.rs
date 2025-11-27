@@ -11,6 +11,8 @@ use arborter_pb::{Order, SendOrderRequest, SendOrderResponse, TransactionHash};
 use eyre::Result;
 use prost::Message;
 
+use crate::commands::config::config_pb::GetConfigResponse;
+
 impl fmt::Display for Order {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -163,4 +165,73 @@ async fn sign_transaction(msg_bytes: &[u8], privkey: &str) -> Result<Signature> 
     let signer = privkey.parse::<PrivateKeySigner>()?;
     let signature = signer.sign_message(msg_bytes).await?;
     Ok(signature)
+}
+
+/// Send an order using configuration from the server
+///
+/// This is the recommended way to send orders. It uses the configuration
+/// fetched from the server to look up the market and derive account addresses.
+///
+/// # Arguments
+/// * `url` - The Aspens Market Stack URL
+/// * `market_id` - The market identifier from config
+/// * `side` - Order side (1 for BUY, 2 for SELL)
+/// * `quantity` - The quantity to trade (in pair decimals)
+/// * `price` - Optional limit price (in pair decimals)
+/// * `privkey` - The private key of the user's wallet
+/// * `config` - The configuration response from the server
+pub async fn call_send_order_from_config(
+    url: String,
+    market_id: String,
+    side: i32,
+    quantity: String,
+    price: Option<String>,
+    privkey: String,
+    config: GetConfigResponse,
+) -> Result<SendOrderResponse> {
+    // Look up market info
+    let market = config.get_market_by_id(&market_id).ok_or_else(|| {
+        let available_markets = config
+            .config
+            .as_ref()
+            .map(|c| {
+                c.markets
+                    .iter()
+                    .map(|m| format!("{} ({})", m.name, m.market_id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        eyre::eyre!(
+            "Market '{}' not found in configuration. Available markets: {}",
+            market_id,
+            available_markets
+        )
+    })?;
+
+    // Derive public key (account address) from private key
+    let signer = privkey.parse::<PrivateKeySigner>()?;
+    let account_address = signer.address().to_string();
+
+    tracing::info!(
+        "Sending order: market={}, side={}, quantity={}, price={:?}, account={}",
+        market.name,
+        if side == 1 { "BUY" } else { "SELL" },
+        quantity,
+        price,
+        account_address
+    );
+
+    // Call the low-level send_order function
+    call_send_order(
+        url,
+        side,
+        quantity,
+        price,
+        market_id,
+        account_address.clone(),
+        account_address,
+        privkey,
+    )
+    .await
 }

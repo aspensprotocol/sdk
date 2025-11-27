@@ -96,6 +96,14 @@ impl GetConfigResponse {
             .iter()
             .find(|chain| chain.chain_id.eq(&chain_id))
     }
+
+    pub fn get_market_by_id(&self, market_id: &str) -> Option<&Market> {
+        self.config
+            .as_ref()?
+            .markets
+            .iter()
+            .find(|market| market.market_id == market_id)
+    }
 }
 
 pub async fn call_get_config(url: String) -> Result<GetConfigResponse> {

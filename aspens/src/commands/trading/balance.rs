@@ -398,7 +398,7 @@ pub async fn call_get_balance(
         .connect_http(rpc_url);
     let contract = MidribV2::new(contract_addr, &provider);
     let result = contract
-        .getBalance(depositer_address, token_addr)
+        .tradeBalance(depositer_address, token_addr)
         .call()
         .await?;
     Ok(result)
@@ -418,7 +418,7 @@ pub async fn call_get_locked_balance(
     let provider = ProviderBuilder::new().connect_http(rpc_url);
     let contract = MidribV2::new(contract_addr, &provider);
     let result = contract
-        .getLockedBalance(depositer_address, token_addr)
+        .lockedTradeBalance(depositer_address, token_addr)
         .call()
         .await?;
     Ok(result)

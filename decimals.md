@@ -101,12 +101,12 @@ onchain_quantity = normalize_decimals(pair_quantity, pair_decimals, base_token_d
 # Quantity: 1.5 * 10^18 = 1,500,000,000,000,000,000
 # Price: 2500.0 * 10^18 = 2,500,000,000,000,000,000,000,000,000
 
-aspens-cli buy 1500000000000000000 --limit-price 2500000000000000000000000000000000000
+aspens-cli buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
 ```
 
 **REPL Command:**
 ```bash
-aspens> buy 1500000000000000000 --limit-price 2500000000000000000000000000000000000
+aspens> buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
 ```
 
 **What happens:**
@@ -128,7 +128,7 @@ aspens> buy 1500000000000000000 --limit-price 2500000000000000000000000000000000
 # Quantity: 0.5 * 10^8 = 50,000,000
 # Price: 45000.0 * 10^8 = 4,500,000,000,000
 
-aspens> sell 50000000 --limit-price 4500000000000
+aspens> sell-limit <market_id> 50000000 4500000000000
 ```
 
 **What happens:**
@@ -150,7 +150,7 @@ aspens> sell 50000000 --limit-price 4500000000000
 # Quantity: 1000.0 * 10^12 = 1,000,000,000,000,000
 # Price: 1.001 * 10^12 = 1,001,000,000,000
 
-aspens-cli buy 1000000000000000 --limit-price 1001000000000
+aspens-cli buy-limit <market_id> 1000000000000000 1001000000000
 ```
 
 **What happens:**
@@ -172,14 +172,12 @@ aspens-cli buy 1000000000000000 --limit-price 1001000000000
 # Quantity: 0.75 * 10^10 = 7,500,000,000
 # No price specified (market order)
 
-aspens-cli buy 7500000000
+aspens-cli buy-market <market_id> 7500000000
 ```
 
 **REPL Command:**
 ```bash
-aspens> buy 7500000000
-# REPL will prompt for price if not specified
-At what price? 50000
+aspens> buy-market <market_id> 7500000000
 ```
 
 ## Setting Up Trading Environment
@@ -188,33 +186,16 @@ At what price? 50000
 Create a `.env.anvil.local` file with your configuration:
 
 ```bash
-# Arborter server URL
-ARBORTER_URL=http://localhost:50051
+# Aspens Market Stack URL
+ASPENS_MARKET_STACK_URL=http://localhost:50051
 
-# Market configuration
-MARKET_ID_1=1::0x1234567890123456789012345678901234567890::1::0x0987654321098765432109876543210987654321
-
-# Wallet configuration
-EVM_TESTNET_PUBKEY=0x9bdbb2d6fb90a54f90e8bfee32157a081b0a907f
+# Wallet configuration (only private key needed - public key is derived automatically)
 EVM_TESTNET_PRIVKEY=0x1234567890123456789012345678901234567890123456789012345678901234
-
-# Chain configuration
-BASE_CHAIN_RPC_URL=http://localhost:8545
-QUOTE_CHAIN_RPC_URL=http://localhost:8546
-BASE_CHAIN_USDC_TOKEN_ADDRESS=0x1234567890123456789012345678901234567890
-QUOTE_CHAIN_USDC_TOKEN_ADDRESS=0x0987654321098765432109876543210987654321
-BASE_CHAIN_CONTRACT_ADDRESS=0x1111111111111111111111111111111111111111
-QUOTE_CHAIN_CONTRACT_ADDRESS=0x2222222222222222222222222222222222222222
 ```
 
-### 2. Starting Arborter Server
-```bash
-# From arborter directory
-cd arborter
-just run
-```
+**Note:** All chain, token, contract, and market configuration is fetched automatically from the Aspens Market Stack.
 
-### 3. Using the CLI
+### 2. Using the CLI
 ```bash
 # Initialize session
 aspens-cli initialize
@@ -225,32 +206,31 @@ aspens-cli --admin get-config
 # Deposit funds
 aspens-cli deposit base-goerli USDC 1000000
 
-# Place orders
-aspens-cli buy 1500000000000000000 --limit-price 2500000000000000000000000000000000000
-aspens-cli sell 50000000 --limit-price 4500000000000
+# Place orders (use actual market_id from config)
+aspens-cli buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
+aspens-cli sell-limit <market_id> 50000000 4500000000000
 
 # Check balance
 aspens-cli balance
 ```
 
-### 4. Using the REPL
+### 3. Using the REPL
 ```bash
 # Start REPL
 aspens-repl
 
 # Initialize session
-aspens> initialize --url http://localhost:50051
+aspens> initialize --url https://ams-instance-url:50051
 
 # Get configuration
-aspens> get-config
+aspens> config
 
 # Deposit funds
 aspens> deposit base-goerli USDC 1000000
 
-# Place orders (REPL will prompt for price if not specified)
-aspens> buy 1500000000000000000 --limit-price 2500000000000000000000000000000000000
-aspens> sell 50000000
-At what price? 4500000000000
+# Place orders (use actual market_id from config)
+aspens> buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
+aspens> sell-limit <market_id> 50000000 4500000000000
 
 # Check balance
 aspens> balance
@@ -316,16 +296,6 @@ Very large amounts may overflow u64:
 5. **Verify on-chain amounts** match your expectations
 
 ## Testing Your Orders
-
-### Using Arborter's Test Suite
-```bash
-# From arborter directory
-cd arborter
-just test
-
-# Run specific decimal conversion tests
-cd app && cargo test test_eth_usdc_standard_pair_decimals_integration
-```
 
 ### Using gRPC Commands
 ```bash

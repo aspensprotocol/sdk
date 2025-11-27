@@ -89,7 +89,7 @@ The core library is a pure Rust library with NO CLI dependencies. It provides:
 **Public API:**
 - **`AspensClient`** - Main client with builder pattern for configuration
   - `AspensClient::builder()` - Create a new client builder
-  - `.with_url()` - Set Arborter server URL
+  - `.with_url()` - Set Aspen Market Stack RL
   - `.with_environment()` - Set environment name (anvil, testnet, etc.)
   - `.with_env_file()` - Set custom .env file path
   - `.build()` - Build the client
@@ -224,9 +224,6 @@ let client = AspensClient::builder()
     .with_url("https://<aspens-stack-url.com>")?
     .with_environment("testnet")
     .build()?;
-
-// Access environment variables
-let market_id = client.get_env("MARKET_ID_1").unwrap();
 
 // Use executor for async operations
 let executor = DirectExecutor;
