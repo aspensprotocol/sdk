@@ -327,7 +327,8 @@ async fn main() -> Result<()> {
         Commands::UpdateManager { address } => {
             let jwt = get_jwt()?;
             info!("Updating manager to: {}", address);
-            let result = executor.execute(admin::update_manager(stack_url.clone(), jwt, address))?;
+            let result =
+                executor.execute(admin::update_manager(stack_url.clone(), jwt, address))?;
             println!(
                 "Manager updated successfully to: {}",
                 result.manager_address
@@ -376,7 +377,8 @@ async fn main() -> Result<()> {
         Commands::DeleteChain { network } => {
             let jwt = get_jwt()?;
             info!("Deleting chain: {}", network);
-            let result = executor.execute(admin::delete_chain(stack_url.clone(), jwt, network.clone()))?;
+            let result =
+                executor.execute(admin::delete_chain(stack_url.clone(), jwt, network.clone()))?;
             if result.success {
                 println!("Chain '{}' deleted successfully!", network);
             } else {
@@ -408,8 +410,12 @@ async fn main() -> Result<()> {
                 trade_precision,
             };
 
-            let result =
-                executor.execute(admin::add_token(stack_url.clone(), jwt, network.clone(), token))?;
+            let result = executor.execute(admin::add_token(
+                stack_url.clone(),
+                jwt,
+                network.clone(),
+                token,
+            ))?;
             if result.success {
                 println!("Token '{}' added to '{}' successfully!", symbol, network);
             } else {
@@ -427,7 +433,10 @@ async fn main() -> Result<()> {
                 symbol.clone(),
             ))?;
             if result.success {
-                println!("Token '{}' deleted from '{}' successfully!", symbol, network);
+                println!(
+                    "Token '{}' deleted from '{}' successfully!",
+                    symbol, network
+                );
             } else {
                 println!("Failed to delete token");
             }
@@ -479,8 +488,11 @@ async fn main() -> Result<()> {
         Commands::DeleteMarket { market_id } => {
             let jwt = get_jwt()?;
             info!("Deleting market: {}", market_id);
-            let result =
-                executor.execute(admin::delete_market(stack_url.clone(), jwt, market_id.clone()))?;
+            let result = executor.execute(admin::delete_market(
+                stack_url.clone(),
+                jwt,
+                market_id.clone(),
+            ))?;
             if result.success {
                 println!("Market '{}' deleted successfully!", market_id);
             } else {
@@ -494,19 +506,14 @@ async fn main() -> Result<()> {
         Commands::DeployContract { network } => {
             let jwt = get_jwt()?;
             info!("Deploying trade contract on: {}", network);
-            let result = executor.execute(admin::deploy_contract(stack_url.clone(), jwt, network))?;
-            println!(
-                "Trade contract deployed at: {}",
-                result.contract_address
-            );
+            let result =
+                executor.execute(admin::deploy_contract(stack_url.clone(), jwt, network))?;
+            println!("Trade contract deployed at: {}", result.contract_address);
         }
 
         Commands::AddTradeContract { address, chain_id } => {
             let jwt = get_jwt()?;
-            info!(
-                "Adding trade contract {} to chain {}",
-                address, chain_id
-            );
+            info!("Adding trade contract {} to chain {}", address, chain_id);
             let result = executor.execute(admin::add_trade_contract(
                 stack_url.clone(),
                 jwt,
@@ -523,8 +530,11 @@ async fn main() -> Result<()> {
         Commands::DeleteTradeContract { chain_id } => {
             let jwt = get_jwt()?;
             info!("Deleting trade contract from chain {}", chain_id);
-            let result =
-                executor.execute(admin::delete_trade_contract(stack_url.clone(), jwt, chain_id))?;
+            let result = executor.execute(admin::delete_trade_contract(
+                stack_url.clone(),
+                jwt,
+                chain_id,
+            ))?;
             if result.success {
                 println!(
                     "Trade contract deleted from chain {} successfully!",

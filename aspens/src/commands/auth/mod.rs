@@ -89,9 +89,7 @@ pub async fn authenticate_with_signature(
     let address = signer.address();
 
     // Generate timestamp and nonce
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_secs();
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let nonce = generate_nonce();
 
     // Create and sign the EIP-712 message

@@ -11,11 +11,11 @@ pub mod config_pb {
 use config_pb::config_service_client::ConfigServiceClient;
 use config_pb::{
     AddChainRequest, AddChainResponse, AddMarketRequest, AddMarketResponse, AddTokenRequest,
-    AddTokenResponse, AddTradeContractRequest, AddTradeContractResponse,
-    DeleteChainRequest, DeleteChainResponse, DeleteMarketRequest, DeleteMarketResponse,
-    DeleteTokenRequest, DeleteTokenResponse, DeleteTradeContractRequest,
-    DeleteTradeContractResponse, DeployContractRequest, DeployContractResponse, Empty,
-    UpdateManagerRequest, UpdateManagerResponse, VersionInfo,
+    AddTokenResponse, AddTradeContractRequest, AddTradeContractResponse, DeleteChainRequest,
+    DeleteChainResponse, DeleteMarketRequest, DeleteMarketResponse, DeleteTokenRequest,
+    DeleteTokenResponse, DeleteTradeContractRequest, DeleteTradeContractResponse,
+    DeployContractRequest, DeployContractResponse, Empty, UpdateManagerRequest,
+    UpdateManagerResponse, VersionInfo,
 };
 use eyre::Result;
 use tonic::metadata::MetadataValue;
@@ -34,9 +34,7 @@ fn authenticated_request<T>(jwt: &str, payload: T) -> Request<T> {
 
 /// Create a gRPC channel from URL
 async fn create_channel(url: String) -> Result<Channel> {
-    let channel = Channel::from_shared(url)?
-        .connect()
-        .await?;
+    let channel = Channel::from_shared(url)?.connect().await?;
     Ok(channel)
 }
 
@@ -254,7 +252,11 @@ pub struct AddMarketParams {
 /// * `url` - The Aspens stack gRPC URL
 /// * `jwt` - Valid JWT token
 /// * `params` - Market parameters
-pub async fn add_market(url: String, jwt: String, params: AddMarketParams) -> Result<AddMarketResponse> {
+pub async fn add_market(
+    url: String,
+    jwt: String,
+    params: AddMarketParams,
+) -> Result<AddMarketResponse> {
     let channel = create_channel(url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
