@@ -891,7 +891,6 @@ dependencies = [
  "clap",
  "clap-verbosity",
  "eyre",
- "log",
  "serde_json",
  "tokio",
  "tracing",

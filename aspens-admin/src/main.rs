@@ -9,7 +9,8 @@ use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use clap::{Parser, Subcommand};
 use eyre::Result;
 use std::collections::HashMap;
-use tracing::{info, Level};
+use tracing::info;
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::FmtSubscriber;
 use url::Url;
 
@@ -246,17 +247,19 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Configure log level
+    // Configure log level - convert from clap-verbosity's log::LevelFilter to tracing's LevelFilter
     let log_level = if cli.verbose.is_silent() {
-        Level::ERROR
+        LevelFilter::ERROR
     } else {
-        match cli.verbose.log_level_filter() {
-            log::LevelFilter::Off => Level::ERROR,
-            log::LevelFilter::Error => Level::ERROR,
-            log::LevelFilter::Warn => Level::WARN,
-            log::LevelFilter::Info => Level::INFO,
-            log::LevelFilter::Debug => Level::DEBUG,
-            log::LevelFilter::Trace => Level::TRACE,
+        // clap-verbosity uses log crate's LevelFilter, convert to tracing's
+        match cli.verbose.log_level_filter().as_str() {
+            "OFF" => LevelFilter::OFF,
+            "ERROR" => LevelFilter::ERROR,
+            "WARN" => LevelFilter::WARN,
+            "INFO" => LevelFilter::INFO,
+            "DEBUG" => LevelFilter::DEBUG,
+            "TRACE" => LevelFilter::TRACE,
+            _ => LevelFilter::ERROR,
         }
     };
 
