@@ -25,6 +25,22 @@ fn build_protos() -> Result<()> {
         .build_server(false)
         .build_client(true)
         .out_dir("proto/generated")
+        .type_attribute(
+            "xyz.aspens.arborter_auth.v1.AuthRequest",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "xyz.aspens.arborter_auth.v1.AuthResponse",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "xyz.aspens.arborter_auth.v1.InitializeManagerRequest",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "xyz.aspens.arborter_auth.v1.InitializeManagerResponse",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
         .compile_protos(&["proto/arborter_auth.proto"], &["proto"])?;
 
     // build arborter_config API

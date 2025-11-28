@@ -884,6 +884,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "aspens-admin"
+version = "0.3.0"
+dependencies = [
+ "aspens",
+ "clap",
+ "clap-verbosity",
+ "eyre",
+ "log",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "aspens-cli"
 version = "0.3.0"
 dependencies = [
