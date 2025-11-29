@@ -281,13 +281,16 @@ async fn main() -> Result<()> {
     let executor = DirectExecutor;
     let stack_url = client.stack_url().to_string();
 
-    // Helper to get JWT (from CLI arg, env var, or error)
+    // Helper to get JWT (from CLI arg, env var, or .env file)
     let get_jwt = || -> Result<String> {
-        cli.jwt.clone().ok_or_else(|| {
-            eyre::eyre!(
-                "JWT token required. Use --jwt flag, set ASPENS_JWT env var, or run 'aspens-admin login' first"
-            )
-        })
+        cli.jwt
+            .clone()
+            .or_else(|| client.get_env("ASPENS_JWT").cloned())
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "JWT token required. Use --jwt flag, set ASPENS_JWT in .env, or run 'aspens-admin login' first"
+                )
+            })
     };
 
     match cli.command {
