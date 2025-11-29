@@ -1,6 +1,6 @@
 //! Aspens Admin CLI
 //!
-//! Administrative command-line interface for managing Aspens stack configuration.
+//! Administrative command-line interface for managing Aspens Market Stacks  configuration.
 //! Requires authentication via EIP-712 signature to perform admin operations.
 
 use aspens::commands::admin::{self, AddMarketParams, Chain, Token};
@@ -16,16 +16,12 @@ use url::Url;
 
 #[derive(Debug, Parser)]
 #[command(name = "aspens-admin")]
-#[command(about = "Admin CLI for Aspens trading platform configuration")]
+#[command(about = "Admin CLI for Aspens Markets Stacks configuration")]
 #[command(version)]
 struct Cli {
     /// The Aspens stack URL
     #[arg(short = 's', long = "stack")]
     stack_url: Option<Url>,
-
-    /// Environment configuration to use
-    #[arg(short, long, default_value = "anvil")]
-    env: String,
 
     /// JWT token for authentication (can also be set via ASPENS_JWT env var)
     #[arg(long, env = "ASPENS_JWT")]
@@ -267,7 +263,7 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
 
     // Build the client
-    let mut builder = AspensClient::builder().with_environment(&cli.env);
+    let mut builder = AspensClient::builder();
 
     if let Some(url) = cli.stack_url {
         builder = builder.with_url(url.to_string())?;
@@ -565,7 +561,6 @@ async fn main() -> Result<()> {
 
         Commands::Status => {
             info!("Configuration Status:");
-            println!("Environment: {}", client.environment());
             println!("Stack URL: {}", client.stack_url());
             if client.is_jwt_valid() {
                 println!("JWT: Valid");

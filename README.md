@@ -1,16 +1,17 @@
 # Aspens SDK
 
-A comprehensive SDK and CLI tools for interacting with Aspens Markets Stack, providing cross-chain trading capabilities with proper decimal handling and market operations.
+A comprehensive SDK and CLI tools for interacting with an [Aspens Markets Stack](https://docs.aspens.xyz).
 
 ## Project Structure
 
-This is a Cargo workspace with three main components:
+This is a Cargo workspace with four main components:
 
 - **`aspens/`** - Core Rust library crate with trading logic and gRPC client
 - **`aspens-cli/`** - Command-line interface binary for scripted operations
 - **`aspens-repl/`** - Interactive REPL binary for manual trading
+- **`aspens-admin/`** - Administrative CLI for stack configuration (chains, tokens, markets)
 - **`examples/`** - Practical examples and decimal conversion guides
-- **`scripts/`** - Utility scripts for environment management and testing
+- **`scripts/`** - Utility scripts for testing
 
 ## Prerequisites
 

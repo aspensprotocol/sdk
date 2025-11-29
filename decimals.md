@@ -2,7 +2,7 @@
 
 ## Overview
 
-Aspens is a cross-chain trading platform that handles tokens with different decimal places across multiple blockchains. This document explains how decimal conversions work in the Aspens ecosystem, how to properly format orders using the CLI and REPL, and provides real-world examples.
+Aspens is a crosschain trading platform that handles tokens with different decimal places across multiple blockchains. This document explains how decimal conversions work in the Aspens ecosystem, how to properly format orders using the CLI and REPL, and provides real-world examples.
 
 ## Key Concepts
 

@@ -1,6 +1,6 @@
 use aspens::commands::trading::{balance, deposit, send_order, withdraw};
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use eyre::Result;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -10,13 +10,9 @@ use url::Url;
 #[command(name = "aspens-cli")]
 #[command(about = "Aspens CLI for trading operations")]
 struct Cli {
-    /// The Aspens stack URL
+    /// The Aspens stack URL (overrides ASPENS_MARKET_STACK_URL from .env)
     #[arg(short = 's', long = "stack")]
     stack_url: Option<Url>,
-
-    /// Environment configuration to use
-    #[arg(short, long, default_value = "anvil")]
-    env: String,
 
     #[command(flatten)]
     verbose: clap_verbosity::Verbosity,
@@ -89,21 +85,6 @@ enum Commands {
     Status,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-enum BaseOrQuote {
-    Base,
-    Quote,
-}
-
-impl std::fmt::Display for BaseOrQuote {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BaseOrQuote::Base => write!(f, "base"),
-            BaseOrQuote::Quote => write!(f, "quote"),
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -126,7 +107,7 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
 
     // Build the client
-    let mut builder = AspensClient::builder().with_environment(&cli.env);
+    let mut builder = AspensClient::builder();
 
     if let Some(url) = cli.stack_url {
         builder = builder.with_url(url.to_string())?;
@@ -306,7 +287,6 @@ async fn main() -> Result<()> {
         }
         Commands::Status => {
             info!("Configuration Status:");
-            info!("  Environment: {}", client.environment());
             info!("  Stack URL: {}", client.stack_url());
         }
         Commands::Config { output_file } => {

@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Aspens SDK is a cross-chain trading platform SDK written in Rust, organized as a Cargo workspace with four main components:
+Aspens SDK is a crosschain trading platform SDK written in Rust, organized as a Cargo workspace with four main components:
 
 - **`aspens/`** - Core library crate with trading logic and gRPC client implementation
 - **`aspens-cli/`** - Command-line interface binary for scripted trading operations
 - **`aspens-repl/`** - Interactive REPL binary for manual trading
 - **`aspens-admin/`** - Administrative CLI for stack configuration (chains, tokens, markets)
 - **`examples/`** - Practical examples and decimal conversion guides
-- **`scripts/`** - Utility scripts for environment management (`env-switch.sh`) and testing (`ammit.sh`)
+- **`scripts/`** - Utility scripts for testing (`ammit.sh`)
 
 ## Build Commands
 
@@ -187,10 +187,9 @@ All order quantities and prices must be in pair decimal format when sent to the 
 
 ### Environment Configuration
 
-The project uses environment-specific `.env` files:
-- `.env.sample` - Template with required variables
-- `.env.anvil.local` - Local Anvil configuration
-- `.env.testnet.local` - Testnet configuration
+The project uses a single `.env` file for configuration:
+- `.env.sample` - Template with required variables (copy to `.env`)
+- `.env` - Your local configuration (not committed to git)
 
 **Required Environment Variables:**
 
@@ -199,15 +198,13 @@ The project uses environment-specific `.env` files:
 | `TRADER_PRIVKEY` | aspens-cli, aspens-repl | Wallet for trading operations (deposit, withdraw, buy, sell, balance) |
 | `ADMIN_PRIVKEY` | aspens-admin | Wallet for admin authentication (EIP-712 login) |
 | `ASPENS_JWT` | aspens-admin | JWT token for authenticated admin operations |
+| `ASPENS_MARKET_STACK_URL` | all | Aspens Market Stack URL (e.g., `http://localhost:50051`) |
 
 **Optional Environment Variables:**
 - `MARKET_ID` - Format: `chain_id::token_address::chain_id::token_address`
 - Hedera keys (for Hedera chain support)
-- RPC URLs and contract addresses (usually fetched from server config)
 
-The `AspensClient` automatically loads the appropriate `.env.{environment}.local` file based on the environment parameter.
-
-Use `scripts/env-switch.sh` to switch between environments (or `just env-switch <env>`).
+The `AspensClient` automatically loads `.env` from the current directory. Use `.with_env_file()` on the builder to specify a custom path.
 
 ## Development Workflow
 
