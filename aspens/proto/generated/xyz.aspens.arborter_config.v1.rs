@@ -101,8 +101,8 @@ pub struct AddTradeContractRequest {
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
     /// The chain ID to associate the trade contract with
-    #[prost(int32, tag = "2")]
-    pub chain_id: i32,
+    #[prost(uint32, tag = "2")]
+    pub chain_id: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AddTradeContractResponse {
@@ -159,8 +159,8 @@ pub struct Chain {
     #[prost(string, tag = "3")]
     pub network: ::prost::alloc::string::String,
     /// The chain ID (e.g., Ethereum = 1)
-    #[prost(int32, tag = "4")]
-    pub chain_id: i32,
+    #[prost(uint32, tag = "4")]
+    pub chain_id: u32,
     /// Pubkey address of the owner of the deployed trade contract
     #[prost(string, tag = "5")]
     pub contract_owner_address: ::prost::alloc::string::String,
@@ -296,8 +296,8 @@ pub struct DeleteChainResponse {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteTradeContractRequest {
     /// The chain ID to delete the trade contract from
-    #[prost(int32, tag = "1")]
-    pub chain_id: i32,
+    #[prost(uint32, tag = "1")]
+    pub chain_id: u32,
 }
 /// Delete trade contract response
 #[derive(Clone, PartialEq, ::prost::Message)]

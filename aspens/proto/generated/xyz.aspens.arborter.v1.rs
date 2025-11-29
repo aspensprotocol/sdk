@@ -268,20 +268,33 @@ pub struct UnNormalizeDecimalsResponse {
     #[prost(uint32, tag = "5")]
     pub pair_decimals: u32,
 }
-/// Request to get the signer public key
-///
-/// Empty request - no parameters needed
+/// Request to get signer public key(s)
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetSignerPublicKeyRequest {}
-/// Response containing the signer public key
+pub struct GetSignerPublicKeyRequest {
+    /// Optional: Request specific chain_id
+    /// If omitted, returns all chains
+    #[prost(uint32, optional, tag = "1")]
+    pub chain_id: ::core::option::Option<u32>,
+}
+/// Single chain's public key information
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetSignerPublicKeyResponse {
-    /// The base chain public key (address)
-    #[prost(string, tag = "1")]
-    pub base_chain_public_key: ::prost::alloc::string::String,
-    /// The quote chain public key (address)
+pub struct ChainPublicKey {
+    /// The chain ID
+    #[prost(uint32, tag = "1")]
+    pub chain_id: u32,
+    /// The chain network name (e.g., "anvil-1", "base-sepolia")
     #[prost(string, tag = "2")]
-    pub quote_chain_public_key: ::prost::alloc::string::String,
+    pub chain_network: ::prost::alloc::string::String,
+    /// The signer's public key (address) for this chain
+    #[prost(string, tag = "3")]
+    pub public_key: ::prost::alloc::string::String,
+}
+/// Response with public keys per chain
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetSignerPublicKeyResponse {
+    /// Map of chain_id to public key info
+    #[prost(map = "uint32, message", tag = "1")]
+    pub chain_keys: ::std::collections::HashMap<u32, ChainPublicKey>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
