@@ -2,7 +2,7 @@
 
 ## Overview
 
-Aspens is a cross-chain trading platform that handles tokens with different decimal places across multiple blockchains. This document explains how decimal conversions work in the Aspens ecosystem, how to properly format orders using the CLI and REPL, and provides real-world examples.
+Aspens is a crosschain trading platform that handles tokens with different decimal places across multiple blockchains. This document explains how decimal conversions work in the Aspens ecosystem, how to properly format orders using the CLI and REPL, and provides real-world examples.
 
 ## Key Concepts
 
@@ -190,7 +190,7 @@ Create a `.env.anvil.local` file with your configuration:
 ASPENS_MARKET_STACK_URL=http://localhost:50051
 
 # Wallet configuration (only private key needed - public key is derived automatically)
-EVM_TESTNET_PRIVKEY=0x1234567890123456789012345678901234567890123456789012345678901234
+TRADER_PRIVKEY=0x1234567890123456789012345678901234567890123456789012345678901234
 ```
 
 **Note:** All chain, token, contract, and market configuration is fetched automatically from the Aspens Market Stack.

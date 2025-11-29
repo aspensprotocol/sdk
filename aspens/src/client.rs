@@ -18,9 +18,7 @@ pub struct JwtToken {
 pub struct AspensClient {
     /// URL of the Aspens Market Stack
     pub(crate) stack_url: Url,
-    /// Environment configuration name (e.g., "anvil", "testnet")
-    pub(crate) environment: String,
-    /// Environment variables loaded from config
+    /// Environment variables loaded from .env file
     pub(crate) env_vars: HashMap<String, String>,
     /// Cached configuration from the server
     pub(crate) config: Arc<RwLock<Option<GetConfigResponse>>>,
@@ -37,11 +35,6 @@ impl AspensClient {
     /// Get the Aspens Market Stack URL
     pub fn stack_url(&self) -> &Url {
         &self.stack_url
-    }
-
-    /// Get the environment name
-    pub fn environment(&self) -> &str {
-        &self.environment
     }
 
     /// Get an environment variable value
@@ -194,7 +187,6 @@ impl AspensClient {
 #[derive(Default)]
 pub struct AspensClientBuilder {
     stack_url: Option<Url>,
-    environment: Option<String>,
     env_file_path: Option<String>,
 }
 
@@ -206,13 +198,7 @@ impl AspensClientBuilder {
         Ok(self)
     }
 
-    /// Set the environment name (e.g., "anvil", "testnet")
-    pub fn with_environment(mut self, env: impl Into<String>) -> Self {
-        self.environment = Some(env.into());
-        self
-    }
-
-    /// Set custom environment file path
+    /// Set custom environment file path (defaults to .env)
     pub fn with_env_file(mut self, path: impl Into<String>) -> Self {
         self.env_file_path = Some(path.into());
         self
@@ -220,15 +206,8 @@ impl AspensClientBuilder {
 
     /// Build the AspensClient
     pub fn build(self) -> Result<AspensClient> {
-        let environment = self
-            .environment
-            .or_else(|| std::env::var("ASPENS_ENV").ok())
-            .unwrap_or_else(|| "anvil".to_string());
-
-        // Load environment file
-        let env_file = self
-            .env_file_path
-            .unwrap_or_else(|| format!(".env.{}.local", environment));
+        // Load environment file (defaults to .env)
+        let env_file = self.env_file_path.unwrap_or_else(|| ".env".to_string());
 
         let env_vars = load_env_file(&env_file)?;
 
@@ -236,14 +215,13 @@ impl AspensClientBuilder {
             .stack_url
             .or_else(|| {
                 env_vars
-                    .get("ARBORTER_URL")
+                    .get("ASPENS_MARKET_STACK_URL")
                     .and_then(|u| Url::parse(u).ok())
             })
             .unwrap_or_else(|| Url::parse("http://0.0.0.0:50051").unwrap());
 
         Ok(AspensClient {
             stack_url,
-            environment,
             env_vars,
             config: Arc::new(RwLock::new(None)),
             jwt_token: Arc::new(RwLock::new(None)),
@@ -299,12 +277,6 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_builder_defaults() {
-        let client = AspensClient::builder().build().unwrap();
-        assert_eq!(client.environment(), "anvil");
-    }
-
-    #[test]
     fn test_builder_with_url() {
         let client = AspensClient::builder()
             .with_url("http://example.com:8080")
@@ -312,15 +284,6 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(client.stack_url().as_str(), "http://example.com:8080/");
-    }
-
-    #[test]
-    fn test_builder_with_environment() {
-        let client = AspensClient::builder()
-            .with_environment("testnet")
-            .build()
-            .unwrap();
-        assert_eq!(client.environment(), "testnet");
     }
 
     #[test]

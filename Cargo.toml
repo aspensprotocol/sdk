@@ -47,6 +47,7 @@ dotenv = "0.15.0"
 hex = "0.4.3"
 url = "2.5.7"
 comfy-table = "7.2.1"
+chrono = "0.4"
 
 # Logging
 log = "0.4"

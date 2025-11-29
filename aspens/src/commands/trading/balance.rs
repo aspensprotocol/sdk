@@ -18,7 +18,7 @@ struct TokenInfo {
     name: String,
     decimals: i32,
     /// Map of chain_id -> (chain_network, token_address, contract_address)
-    chain_locations: HashMap<i32, ChainLocation>,
+    chain_locations: HashMap<u32, ChainLocation>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,7 +88,7 @@ fn extract_all_tokens_from_config(config: &Configuration) -> HashMap<String, Tok
 
 /// Query all balance types for a token on a specific chain
 async fn query_token_balance_on_chain(
-    chain_id: i32,
+    chain_id: u32,
     location: &ChainLocation,
     privkey: &str,
 ) -> ChainBalance {

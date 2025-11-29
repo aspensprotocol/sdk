@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Aspens SDK is a cross-chain trading platform SDK written in Rust, organized as a Cargo workspace with three main components:
+Aspens SDK is a crosschain trading platform SDK written in Rust, organized as a Cargo workspace with four main components:
 
 - **`aspens/`** - Core library crate with trading logic and gRPC client implementation
-- **`aspens-cli/`** - Command-line interface binary for scripted operations
+- **`aspens-cli/`** - Command-line interface binary for scripted trading operations
 - **`aspens-repl/`** - Interactive REPL binary for manual trading
+- **`aspens-admin/`** - Administrative CLI for stack configuration (chains, tokens, markets)
 - **`examples/`** - Practical examples and decimal conversion guides
-- **`scripts/`** - Utility scripts for environment management (`env-switch.sh`) and testing (`ammit.sh`)
+- **`scripts/`** - Utility scripts for testing (`ammit.sh`)
 
 ## Build Commands
 
@@ -25,6 +26,7 @@ just release
 just build-lib      # Core library only
 just build-cli      # CLI binary only
 just build-repl     # REPL binary only
+just build-admin    # Admin CLI only
 
 # Run tests
 just test           # All tests
@@ -43,7 +45,7 @@ just lint
 just clean
 ```
 
-## Running CLI and REPL
+## Running CLI, REPL, and Admin
 
 ```bash
 # CLI with specific environment
@@ -54,9 +56,14 @@ just cli-testnet [args]
 just repl-anvil
 just repl-testnet
 
+# Admin CLI with specific environment
+just admin-anvil [args]
+just admin-testnet [args]
+
 # Direct cargo commands
 cargo run -p aspens-cli -- --env anvil [args]
 cargo run -p aspens-repl -- --env testnet
+cargo run -p aspens-admin -- --env testnet [command]
 ```
 
 ## Testing
@@ -78,7 +85,7 @@ just test-testnet
 ### Cargo Workspace Structure
 
 This is a proper Cargo workspace (not separate crates). The root `Cargo.toml` defines:
-- Workspace members: `aspens`, `aspens-cli`, `aspens-repl`
+- Workspace members: `aspens`, `aspens-cli`, `aspens-repl`, `aspens-admin`
 - Shared dependencies across all crates
 - Common workspace metadata (version, edition, license)
 
@@ -105,7 +112,9 @@ The core library is a pure Rust library with NO CLI dependencies. It provides:
   - `deposit.rs` - Deposit tokens to make them available for trading
   - `send_order.rs` - Submit buy/sell orders
   - `withdraw.rs` - Withdraw tokens to local wallets
-- **`commands/config/`**: Configuration fetching and management (admin feature)
+- **`commands/config/`**: Configuration fetching and management
+- **`commands/admin/`**: Admin operations (chains, tokens, markets, contracts)
+- **`commands/auth/`**: Authentication (EIP-712 signatures, JWT tokens)
 - **`proto/`**: gRPC protocol buffer definitions (internal, not exposed)
 
 **Key design principles:**
@@ -129,6 +138,27 @@ Standalone binary for interactive usage. Structure:
 - Uses `clap-repl` for REPL functionality
 - Maintains session state with `AppState`
 - Uses `BlockingExecutor` for synchronous execution in REPL context
+
+### Admin Binary (`aspens-admin/`)
+
+Administrative CLI for managing the Aspens stack configuration. Structure:
+- Single `main.rs` file
+- Uses `clap` for argument parsing with subcommands
+- Requires JWT authentication for most operations
+
+**Commands:**
+- **Authentication**: `init-manager`, `login` (EIP-712 signature auth)
+- **Manager**: `update-manager`
+- **Chains**: `add-chain`, `delete-chain`
+- **Tokens**: `add-token`, `delete-token`
+- **Markets**: `add-market`, `delete-market`
+- **Contracts**: `deploy-contract`, `add-trade-contract`, `delete-trade-contract`
+- **Info**: `version`, `status`
+
+**Authentication Flow:**
+1. First-time setup: `aspens-admin init-manager --address <eth-address>`
+2. Subsequent logins: `aspens-admin login` (signs EIP-712 message with `ADMIN_PRIVKEY`)
+3. Use returned JWT via `--jwt` flag or `ASPENS_JWT` env var for admin commands
 
 ### Smart Contract Integration
 
@@ -157,19 +187,24 @@ All order quantities and prices must be in pair decimal format when sent to the 
 
 ### Environment Configuration
 
-The project uses environment-specific `.env` files:
-- `.env.sample` - Template with required variables
-- `.env.anvil.local` - Local Anvil configuration
-- `.env.testnet.local` - Testnet configuration
+The project uses a single `.env` file for configuration:
+- `.env.sample` - Template with required variables (copy to `.env`)
+- `.env` - Your local configuration (not committed to git)
 
-Environment variables include:
+**Required Environment Variables:**
+
+| Variable | Used By | Purpose |
+|----------|---------|---------|
+| `TRADER_PRIVKEY` | aspens-cli, aspens-repl | Wallet for trading operations (deposit, withdraw, buy, sell, balance) |
+| `ADMIN_PRIVKEY` | aspens-admin | Wallet for admin authentication (EIP-712 login) |
+| `ASPENS_JWT` | aspens-admin | JWT token for authenticated admin operations |
+| `ASPENS_MARKET_STACK_URL` | all | Aspens Market Stack URL (e.g., `http://localhost:50051`) |
+
+**Optional Environment Variables:**
 - `MARKET_ID` - Format: `chain_id::token_address::chain_id::token_address`
-- Private keys for wallet operations (Hedera and EVM accounts)
-- RPC URLs and contract addresses
+- Hedera keys (for Hedera chain support)
 
-The `AspensClient` automatically loads the appropriate `.env.{environment}.local` file based on the environment parameter.
-
-Use `scripts/env-switch.sh` to switch between environments (or `just env-switch <env>`).
+The `AspensClient` automatically loads `.env` from the current directory. Use `.with_env_file()` on the builder to specify a custom path.
 
 ## Development Workflow
 
@@ -182,6 +217,13 @@ Use `scripts/env-switch.sh` to switch between environments (or `just env-switch 
 5. Update both binaries to call the new function
 
 **Note:** The new architecture eliminates the wrapper layer - binaries call library functions directly.
+
+### Adding New Admin Commands
+
+1. Add core logic to `aspens/src/commands/admin/mod.rs` (or `auth/mod.rs` for auth)
+2. Export in `aspens/src/commands/admin/mod.rs`
+3. Add CLI subcommand in `aspens-admin/src/main.rs`
+4. Use `authenticated_request()` helper for JWT-protected endpoints
 
 ### Adding Features to AspensClient
 

@@ -1,11 +1,12 @@
 //! Aspens Admin CLI
 //!
-//! Administrative command-line interface for managing Aspens stack configuration.
+//! Administrative command-line interface for managing Aspens Market Stacks  configuration.
 //! Requires authentication via EIP-712 signature to perform admin operations.
 
 use aspens::commands::admin::{self, AddMarketParams, Chain, Token};
 use aspens::commands::auth;
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use eyre::Result;
 use std::collections::HashMap;
@@ -14,18 +15,21 @@ use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::FmtSubscriber;
 use url::Url;
 
+/// Format a Unix timestamp as a human-readable datetime string
+fn format_expiry(timestamp: u64) -> String {
+    DateTime::<Utc>::from_timestamp(timestamp as i64, 0)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| format!("{} (invalid timestamp)", timestamp))
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "aspens-admin")]
-#[command(about = "Admin CLI for Aspens trading platform configuration")]
+#[command(about = "Admin CLI for Aspens Markets Stacks configuration")]
 #[command(version)]
 struct Cli {
     /// The Aspens stack URL
     #[arg(short = 's', long = "stack")]
     stack_url: Option<Url>,
-
-    /// Environment configuration to use
-    #[arg(short, long, default_value = "anvil")]
-    env: String,
 
     /// JWT token for authentication (can also be set via ASPENS_JWT env var)
     #[arg(long, env = "ASPENS_JWT")]
@@ -85,7 +89,7 @@ enum Commands {
 
         /// Chain ID
         #[arg(long)]
-        chain_id: i32,
+        chain_id: u32,
 
         /// Contract owner address
         #[arg(long)]
@@ -224,13 +228,13 @@ enum Commands {
 
         /// Chain ID to associate with
         #[arg(long)]
-        chain_id: i32,
+        chain_id: u32,
     },
 
     /// Delete a trade contract from a chain
     DeleteTradeContract {
         /// Chain ID to remove contract from
-        chain_id: i32,
+        chain_id: u32,
     },
 
     // ========================================================================
@@ -267,7 +271,7 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
 
     // Build the client
-    let mut builder = AspensClient::builder().with_environment(&cli.env);
+    let mut builder = AspensClient::builder();
 
     if let Some(url) = cli.stack_url {
         builder = builder.with_url(url.to_string())?;
@@ -277,13 +281,16 @@ async fn main() -> Result<()> {
     let executor = DirectExecutor;
     let stack_url = client.stack_url().to_string();
 
-    // Helper to get JWT (from CLI arg, env var, or error)
+    // Helper to get JWT (from CLI arg, env var, or .env file)
     let get_jwt = || -> Result<String> {
-        cli.jwt.clone().ok_or_else(|| {
-            eyre::eyre!(
-                "JWT token required. Use --jwt flag, set ASPENS_JWT env var, or run 'aspens-admin login' first"
-            )
-        })
+        cli.jwt
+            .clone()
+            .or_else(|| client.get_env("ASPENS_JWT").cloned())
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "JWT token required. Use --jwt flag, set ASPENS_JWT in .env, or run 'aspens-admin login' first"
+                )
+            })
     };
 
     match cli.command {
@@ -295,15 +302,15 @@ async fn main() -> Result<()> {
             let result = executor.execute(auth::initialize_manager(stack_url, address))?;
             println!("Manager initialized successfully!");
             println!("JWT Token: {}", result.jwt_token);
-            println!("Expires at: {} (Unix timestamp)", result.expires_at);
+            println!("Expires at: {}", format_expiry(result.expires_at));
             println!("Address: {}", result.address);
             println!("\nTo use this token, set ASPENS_JWT environment variable or use --jwt flag");
         }
 
         Commands::Login { chain_id } => {
             let privkey = client
-                .get_env("EVM_TESTNET_PRIVKEY")
-                .ok_or_else(|| eyre::eyre!("EVM_TESTNET_PRIVKEY not found in environment"))?
+                .get_env("ADMIN_PRIVKEY")
+                .ok_or_else(|| eyre::eyre!("ADMIN_PRIVKEY not found in environment"))?
                 .clone();
 
             info!("Authenticating with EIP-712 signature...");
@@ -315,7 +322,7 @@ async fn main() -> Result<()> {
 
             println!("Authentication successful!");
             println!("JWT Token: {}", result.jwt_token);
-            println!("Expires at: {} (Unix timestamp)", result.expires_at);
+            println!("Expires at: {}", format_expiry(result.expires_at));
             println!("Address: {}", result.address);
             println!("\nTo use this token:");
             println!("  export ASPENS_JWT=\"{}\"", result.jwt_token);
@@ -565,12 +572,11 @@ async fn main() -> Result<()> {
 
         Commands::Status => {
             info!("Configuration Status:");
-            println!("Environment: {}", client.environment());
             println!("Stack URL: {}", client.stack_url());
             if client.is_jwt_valid() {
                 println!("JWT: Valid");
                 if let Some(expiry) = client.get_jwt_expiry() {
-                    println!("JWT Expires: {} (Unix timestamp)", expiry);
+                    println!("JWT Expires: {}", format_expiry(expiry));
                 }
             } else if cli.jwt.is_some() {
                 println!("JWT: Provided (validity not checked until used)");

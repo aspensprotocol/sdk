@@ -110,7 +110,7 @@ message AddTradeContractRequest {
   // The chain address of the trade contract
   string address = 1;
   // The chain ID to associate the trade contract with
-  int32 chain_id = 2;
+  uint32 chain_id = 2;
 }
 
 message AddTradeContractResponse {
@@ -152,7 +152,7 @@ message Chain {
   // The chain network (e.g., op-mainnet, hedera-testnet)
   string network = 3;
   // The chain ID (e.g., Ethereum = 1)
-  int32 chain_id = 4;
+  uint32 chain_id = 4;
   // Pubkey address of the owner of the deployed trade contract
   string contract_owner_address = 5;
   // Optional: URL to the chain explorer
@@ -254,7 +254,7 @@ message DeleteChainResponse {
 // Delete trade contract request
 message DeleteTradeContractRequest {
   // The chain ID to delete the trade contract from
-  int32 chain_id = 1;
+  uint32 chain_id = 1;
 }
 
 // Delete trade contract response

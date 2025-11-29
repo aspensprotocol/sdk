@@ -45,9 +45,9 @@ impl AppState {
 #[command(name = "aspens-repl")]
 #[command(about = "Aspens REPL for interactive trading operations")]
 struct ReplCli {
-    /// Environment configuration to use
-    #[arg(short, long, default_value = "anvil")]
-    env: String,
+    /// The Aspens stack URL (overrides ASPENS_MARKET_STACK_URL from .env)
+    #[arg(short = 's', long = "stack")]
+    stack_url: Option<url::Url>,
 }
 
 #[derive(Debug, Parser)]
@@ -126,10 +126,13 @@ fn main() {
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
 
     // Build the client
-    let client = AspensClient::builder()
-        .with_environment(&cli.env)
-        .build()
-        .expect("Failed to build AspensClient");
+    let mut builder = AspensClient::builder();
+    if let Some(url) = cli.stack_url {
+        builder = builder
+            .with_url(url.to_string())
+            .expect("Invalid stack URL");
+    }
+    let client = builder.build().expect("Failed to build AspensClient");
 
     let app_state = AppState::new(client);
     let executor = BlockingExecutor::new();
@@ -195,10 +198,10 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("EVM_TESTNET_PRIVKEY") {
+            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("EVM_TESTNET_PRIVKEY not found in environment");
+                    info!("TRADER_PRIVKEY not found in environment");
                     return;
                 }
             };
@@ -231,10 +234,10 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("EVM_TESTNET_PRIVKEY") {
+            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("EVM_TESTNET_PRIVKEY not found in environment");
+                    info!("TRADER_PRIVKEY not found in environment");
                     return;
                 }
             };
@@ -262,10 +265,10 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("EVM_TESTNET_PRIVKEY") {
+            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("EVM_TESTNET_PRIVKEY not found in environment");
+                    info!("TRADER_PRIVKEY not found in environment");
                     return;
                 }
             };
@@ -314,10 +317,10 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("EVM_TESTNET_PRIVKEY") {
+            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("EVM_TESTNET_PRIVKEY not found in environment");
+                    info!("TRADER_PRIVKEY not found in environment");
                     return;
                 }
             };
@@ -362,10 +365,10 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("EVM_TESTNET_PRIVKEY") {
+            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("EVM_TESTNET_PRIVKEY not found in environment");
+                    info!("TRADER_PRIVKEY not found in environment");
                     return;
                 }
             };
@@ -414,10 +417,10 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("EVM_TESTNET_PRIVKEY") {
+            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("EVM_TESTNET_PRIVKEY not found in environment");
+                    info!("TRADER_PRIVKEY not found in environment");
                     return;
                 }
             };
@@ -456,7 +459,7 @@ fn main() {
             let stack_url = app_state.stack_url();
             match executor.execute(config::get_config(stack_url.clone())) {
                 Ok(config) => {
-                    let privkey = app_state.get_env("EVM_TESTNET_PRIVKEY").unwrap();
+                    let privkey = app_state.get_env("TRADER_PRIVKEY").unwrap();
                     if let Err(e) = executor.execute(balance::balance_from_config(config, privkey))
                     {
                         info!("Failed to get balances: {e:?}");
@@ -473,10 +476,6 @@ fn main() {
         }
         ReplCommand::Status => {
             info!("Configuration Status:");
-            info!(
-                "  Environment: {}",
-                app_state.client.lock().unwrap().environment()
-            );
             info!("  Server URL: {}", app_state.stack_url());
         }
         ReplCommand::Quit => {

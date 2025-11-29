@@ -243,15 +243,25 @@ message UnNormalizeDecimalsResponse {
   uint32 pair_decimals = 5;
 }
 
-// Request to get the signer public key
+// Request to get signer public key(s)
 message GetSignerPublicKeyRequest {
-  // Empty request - no parameters needed
+  // Optional: Request specific chain_id
+  // If omitted, returns all chains
+  optional uint32 chain_id = 1;
 }
 
-// Response containing the signer public key
+// Single chain's public key information
+message ChainPublicKey {
+  // The chain ID
+  uint32 chain_id = 1;
+  // The chain network name (e.g., "anvil-1", "base-sepolia")
+  string chain_network = 2;
+  // The signer's public key (address) for this chain
+  string public_key = 3;
+}
+
+// Response with public keys per chain
 message GetSignerPublicKeyResponse {
-  // The base chain public key (address)
-  string base_chain_public_key = 1;
-  // The quote chain public key (address)
-  string quote_chain_public_key = 2;
+  // Map of chain_id to public key info
+  map<uint32, ChainPublicKey> chain_keys = 1;
 }
