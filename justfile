@@ -5,10 +5,10 @@ default:
     @just --list
 
 # Set up the development environment
-setup:
+init:
     #!/usr/bin/env bash
-    cp .env.sample .env.anvil.local
-    echo "Please edit .env.anvil.local with your configuration values"
+    cp .env.sample .env
+    echo "Please edit the created .env with your account values"
 
 # Build the entire workspace
 build:
@@ -29,6 +29,10 @@ build-cli:
 # Build only the REPL
 build-repl:
     cargo build -p aspens-repl
+
+# Build only the Admin 
+build-admin:
+    cargo build -p aspens-admin
 
 # Run tests for the entire workspace
 test:
