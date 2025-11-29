@@ -14,8 +14,8 @@ use auth_pb::{AuthRequest, AuthResponse, InitializeManagerRequest, InitializeMan
 use eyre::Result;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// EIP-712 domain separator for Aspens authentication
-const EIP712_DOMAIN_NAME: &str = "Aspens";
+/// EIP-712 domain separator for Arborter authentication
+const EIP712_DOMAIN_NAME: &str = "Arborter";
 const EIP712_DOMAIN_VERSION: &str = "1";
 
 /// Authentication response containing JWT token and metadata
@@ -103,7 +103,7 @@ pub async fn authenticate_with_signature(
     let mut client = AuthServiceClient::new(channel);
 
     let request = tonic::Request::new(AuthRequest {
-        address: format!("{:?}", address),
+        address: address.to_checksum(None),
         timestamp,
         nonce,
         signature,
@@ -187,13 +187,13 @@ fn compute_domain_separator(chain_id: u64) -> B256 {
 /// Compute struct hash for authentication message
 ///
 /// structHash = keccak256(
-///     keccak256("AuthMessage(address address,uint256 timestamp,string nonce)") ||
+///     keccak256("AuthRequest(address address,uint64 timestamp,string nonce)") ||
 ///     address ||
 ///     timestamp ||
 ///     keccak256(nonce)
 /// )
 fn compute_auth_struct_hash(address: Address, timestamp: u64, nonce: &str) -> B256 {
-    let type_hash = keccak256(b"AuthMessage(address address,uint256 timestamp,string nonce)");
+    let type_hash = keccak256(b"AuthRequest(address address,uint64 timestamp,string nonce)");
     let nonce_hash = keccak256(nonce.as_bytes());
 
     let mut encoded = Vec::with_capacity(128);
@@ -201,7 +201,9 @@ fn compute_auth_struct_hash(address: Address, timestamp: u64, nonce: &str) -> B2
     // Address is left-padded to 32 bytes
     encoded.extend_from_slice(&[0u8; 12]);
     encoded.extend_from_slice(address.as_slice());
-    encoded.extend_from_slice(&U256::from(timestamp).to_be_bytes::<32>());
+    // timestamp is uint64, but still encoded as 32 bytes (left-padded)
+    encoded.extend_from_slice(&[0u8; 24]);
+    encoded.extend_from_slice(&timestamp.to_be_bytes());
     encoded.extend_from_slice(nonce_hash.as_slice());
 
     keccak256(&encoded)
