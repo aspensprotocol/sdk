@@ -1,0 +1,33 @@
+[package]
+name = "aspens-admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Admin CLI for an Aspens Market Stack"
+
+[[bin]]
+name = "aspens-admin"
+path = "src/main.rs"
+
+[dependencies]
+# Core library with admin feature
+aspens = { path = "../aspens", features = ["admin"] }
+
+# CLI dependencies
+clap = { workspace = true, features = ["env"] }
+clap-verbosity.workspace = true
+
+# Async runtime
+tokio.workspace = true
+
+# Error handling
+eyre.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Utilities
+url.workspace = true
+serde_json.workspace = true

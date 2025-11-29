@@ -83,7 +83,7 @@ enum Commands {
         /// Limit price for the order
         price: String,
     },
-    /// Fetch the current balances across all chains
+    /// Fetch the current balances for all supported tokens across all chains
     Balance,
     /// Show current configuration and connection status
     Status,

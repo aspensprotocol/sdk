@@ -5,6 +5,15 @@ use url::Url;
 
 use crate::commands::config::config_pb::{Chain, GetConfigResponse, Token};
 
+/// JWT token information for authenticated admin operations
+#[derive(Debug, Clone)]
+pub struct JwtToken {
+    /// The JWT token string
+    pub token: String,
+    /// Unix timestamp when the token expires (in seconds)
+    pub expires_at: u64,
+}
+
 /// Main client for interacting with Aspens trading platform
 pub struct AspensClient {
     /// URL of the Aspens Market Stack
@@ -15,6 +24,8 @@ pub struct AspensClient {
     pub(crate) env_vars: HashMap<String, String>,
     /// Cached configuration from the server
     pub(crate) config: Arc<RwLock<Option<GetConfigResponse>>>,
+    /// JWT token for admin operations (when authenticated)
+    pub(crate) jwt_token: Arc<RwLock<Option<JwtToken>>>,
 }
 
 impl AspensClient {
@@ -127,6 +138,56 @@ impl AspensClient {
                 )
             })
     }
+
+    /// Set the JWT token for admin operations
+    pub fn set_jwt_token(&self, token: String, expires_at: u64) {
+        let mut guard = self.jwt_token.write().unwrap();
+        *guard = Some(JwtToken { token, expires_at });
+    }
+
+    /// Get the current JWT token if valid
+    pub fn get_jwt_token(&self) -> Option<String> {
+        let guard = self.jwt_token.read().unwrap();
+        guard.as_ref().and_then(|jwt| {
+            if self.is_jwt_valid_internal(jwt) {
+                Some(jwt.token.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Check if the current JWT token is valid
+    pub fn is_jwt_valid(&self) -> bool {
+        let guard = self.jwt_token.read().unwrap();
+        guard
+            .as_ref()
+            .map(|jwt| self.is_jwt_valid_internal(jwt))
+            .unwrap_or(false)
+    }
+
+    /// Internal helper to check JWT validity
+    fn is_jwt_valid_internal(&self, jwt: &JwtToken) -> bool {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Add a 30 second buffer for clock skew
+        jwt.expires_at > now + 30
+    }
+
+    /// Clear the JWT token
+    pub fn clear_jwt_token(&self) {
+        let mut guard = self.jwt_token.write().unwrap();
+        *guard = None;
+    }
+
+    /// Get JWT expiry time (if set)
+    pub fn get_jwt_expiry(&self) -> Option<u64> {
+        let guard = self.jwt_token.read().unwrap();
+        guard.as_ref().map(|jwt| jwt.expires_at)
+    }
 }
 
 /// Builder for AspensClient
@@ -185,6 +246,7 @@ impl AspensClientBuilder {
             environment,
             env_vars,
             config: Arc::new(RwLock::new(None)),
+            jwt_token: Arc::new(RwLock::new(None)),
         })
     }
 }

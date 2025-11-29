@@ -113,41 +113,52 @@ async fn query_token_balance_on_chain(
         |v| v.to_string(),
     );
 
-    // Query available balance
-    let available_balance = call_get_balance(
-        named_chain,
-        &location.rpc_url,
-        &location.token_address,
-        &location.contract_address,
-        privkey,
-    )
-    .await
-    .map_or_else(
-        |e| {
-            warn!(
-                "Failed to get available balance on {}: {}",
-                chain_network, e
-            );
-            "error".to_string()
-        },
-        |v| v.to_string(),
-    );
+    // Check if trade contract is deployed before querying contract balances
+    let (available_balance, locked_balance) = if location.contract_address.is_empty() {
+        warn!(
+            "Trade contract not deployed on chain '{}'. Available and locked balances unavailable.",
+            chain_network
+        );
+        ("not deployed".to_string(), "not deployed".to_string())
+    } else {
+        // Query available balance
+        let available = call_get_balance(
+            named_chain,
+            &location.rpc_url,
+            &location.token_address,
+            &location.contract_address,
+            privkey,
+        )
+        .await
+        .map_or_else(
+            |e| {
+                warn!(
+                    "Failed to get available balance on {}: {}",
+                    chain_network, e
+                );
+                "error".to_string()
+            },
+            |v| v.to_string(),
+        );
 
-    // Query locked balance
-    let locked_balance = call_get_locked_balance(
-        &location.rpc_url,
-        &location.token_address,
-        &location.contract_address,
-        privkey,
-    )
-    .await
-    .map_or_else(
-        |e| {
-            warn!("Failed to get locked balance on {}: {}", chain_network, e);
-            "error".to_string()
-        },
-        |v| v.to_string(),
-    );
+        // Query locked balance
+        let locked = call_get_locked_balance(
+            &location.rpc_url,
+            &location.token_address,
+            &location.contract_address,
+            privkey,
+        )
+        .await
+        .map_or_else(
+            |e| {
+                warn!("Failed to get locked balance on {}: {}", chain_network, e);
+                "error".to_string()
+            },
+            |v| v.to_string(),
+        );
+
+        (available, locked)
+    };
 
     ChainBalance {
         chain_network,
@@ -159,8 +170,8 @@ async fn query_token_balance_on_chain(
 
 /// Format balance with decimals for human-readable display
 fn format_balance_with_decimals(balance_str: &str, decimals: i32) -> String {
-    if balance_str == "error" {
-        return "error".to_string();
+    if balance_str == "error" || balance_str == "not deployed" {
+        return balance_str.to_string();
     }
 
     match balance_str.parse::<u128>() {
