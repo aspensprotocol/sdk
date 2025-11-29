@@ -6,6 +6,7 @@
 use aspens::commands::admin::{self, AddMarketParams, Chain, Token};
 use aspens::commands::auth;
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use eyre::Result;
 use std::collections::HashMap;
@@ -13,6 +14,13 @@ use tracing::info;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::FmtSubscriber;
 use url::Url;
+
+/// Format a Unix timestamp as a human-readable datetime string
+fn format_expiry(timestamp: u64) -> String {
+    DateTime::<Utc>::from_timestamp(timestamp as i64, 0)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| format!("{} (invalid timestamp)", timestamp))
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "aspens-admin")]
@@ -291,7 +299,7 @@ async fn main() -> Result<()> {
             let result = executor.execute(auth::initialize_manager(stack_url, address))?;
             println!("Manager initialized successfully!");
             println!("JWT Token: {}", result.jwt_token);
-            println!("Expires at: {} (Unix timestamp)", result.expires_at);
+            println!("Expires at: {}", format_expiry(result.expires_at));
             println!("Address: {}", result.address);
             println!("\nTo use this token, set ASPENS_JWT environment variable or use --jwt flag");
         }
@@ -311,7 +319,7 @@ async fn main() -> Result<()> {
 
             println!("Authentication successful!");
             println!("JWT Token: {}", result.jwt_token);
-            println!("Expires at: {} (Unix timestamp)", result.expires_at);
+            println!("Expires at: {}", format_expiry(result.expires_at));
             println!("Address: {}", result.address);
             println!("\nTo use this token:");
             println!("  export ASPENS_JWT=\"{}\"", result.jwt_token);
@@ -565,7 +573,7 @@ async fn main() -> Result<()> {
             if client.is_jwt_valid() {
                 println!("JWT: Valid");
                 if let Some(expiry) = client.get_jwt_expiry() {
-                    println!("JWT Expires: {} (Unix timestamp)", expiry);
+                    println!("JWT Expires: {}", format_expiry(expiry));
                 }
             } else if cli.jwt.is_some() {
                 println!("JWT: Provided (validity not checked until used)");
