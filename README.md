@@ -66,6 +66,9 @@ just build-cli
 
 # Build only the REPL
 just build-repl
+
+# Build only the Admin
+just build-admin
 ```
 
 ## Usage
