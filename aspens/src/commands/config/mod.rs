@@ -89,12 +89,12 @@ impl GetConfigResponse {
         })
     }
 
-    pub fn get_chain_by_id(&self, chain_id: i32) -> Option<&Chain> {
+    pub fn get_chain_by_id(&self, chain_id: u32) -> Option<&Chain> {
         self.config
             .as_ref()?
             .chains
             .iter()
-            .find(|chain| chain.chain_id.eq(&chain_id))
+            .find(|chain| chain.chain_id == chain_id)
     }
 
     pub fn get_market_by_id(&self, market_id: &str) -> Option<&Market> {

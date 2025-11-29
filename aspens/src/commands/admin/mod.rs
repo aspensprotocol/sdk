@@ -97,7 +97,7 @@ pub async fn add_trade_contract(
     url: String,
     jwt: String,
     address: String,
-    chain_id: i32,
+    chain_id: u32,
 ) -> Result<AddTradeContractResponse> {
     let channel = create_channel(url).await?;
     let mut client = ConfigServiceClient::new(channel);
@@ -117,7 +117,7 @@ pub async fn add_trade_contract(
 pub async fn delete_trade_contract(
     url: String,
     jwt: String,
-    chain_id: i32,
+    chain_id: u32,
 ) -> Result<DeleteTradeContractResponse> {
     let channel = create_channel(url).await?;
     let mut client = ConfigServiceClient::new(channel);

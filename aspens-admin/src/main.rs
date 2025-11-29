@@ -85,7 +85,7 @@ enum Commands {
 
         /// Chain ID
         #[arg(long)]
-        chain_id: i32,
+        chain_id: u32,
 
         /// Contract owner address
         #[arg(long)]
@@ -224,13 +224,13 @@ enum Commands {
 
         /// Chain ID to associate with
         #[arg(long)]
-        chain_id: i32,
+        chain_id: u32,
     },
 
     /// Delete a trade contract from a chain
     DeleteTradeContract {
         /// Chain ID to remove contract from
-        chain_id: i32,
+        chain_id: u32,
     },
 
     // ========================================================================
@@ -302,8 +302,8 @@ async fn main() -> Result<()> {
 
         Commands::Login { chain_id } => {
             let privkey = client
-                .get_env("EVM_TESTNET_PRIVKEY")
-                .ok_or_else(|| eyre::eyre!("EVM_TESTNET_PRIVKEY not found in environment"))?
+                .get_env("ADMIN_PRIVKEY")
+                .ok_or_else(|| eyre::eyre!("ADMIN_PRIVKEY not found in environment"))?
                 .clone();
 
             info!("Authenticating with EIP-712 signature...");
