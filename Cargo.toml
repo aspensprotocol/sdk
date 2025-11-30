@@ -43,7 +43,6 @@ clap-verbosity = "2.1.0"
 
 # Utilities
 eyre = "0.6"
-dotenv = "0.15.0"
 hex = "0.4.3"
 url = "2.5.7"
 comfy-table = "7.2.1"

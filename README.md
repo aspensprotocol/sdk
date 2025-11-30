@@ -10,71 +10,41 @@ This is a Cargo workspace with four main components:
 - **`aspens-cli/`** - Command-line interface binary for scripted operations
 - **`aspens-repl/`** - Interactive REPL binary for manual trading
 - **`aspens-admin/`** - Administrative CLI for stack configuration (chains, tokens, markets)
-- **`examples/`** - Practical examples and decimal conversion guides
-- **`scripts/`** - Utility scripts for testing
 
 ## Prerequisites
 
 1. **Install Rust:**
 ```bash
-# Install Rust using rustup
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
 2. **Install Just (Optional but Recommended):**
 
-[Just](https://github.com/casey/just) is a command runner that simplifies common development tasks. This project uses a `justfile` for convenient commands.
+[Just](https://github.com/casey/just) is a command runner that simplifies common development tasks.
 
 ```bash
-# On macOS
-brew install just
-
-# On Linux
-curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
-
-# On Windows
-cargo install just
-
-# Or using cargo on any platform
-cargo install just
+brew install just          # macOS
+cargo install just         # Any platform
 ```
 
-Alternatively, you can use cargo commands directly (e.g., `cargo build` instead of `just build`).
-
-3. **Set up environment variables:**
+3. **Configure environment:**
 ```bash
-# Copy the environment template
-cp .env.sample .env.anvil.local
-
-# Edit the configuration values in .env.anvil.local
-# The SDK will automatically load environment-specific files
+cp .env.sample .env        # Copy the template
+# Edit .env with your configuration (ASPENS_MARKET_STACK_URL, TRADER_PRIVKEY, etc.)
 ```
 
-## Building the Project
+## Building
 
 ```bash
-# Build the entire workspace (library + binaries)
-just build
-
-# Build release version
-just release
-
-# Build only the core library
-just build-lib
-
-# Build only the CLI
-just build-cli
-
-# Build only the REPL
-just build-repl
-
-# Build only the Admin
-just build-admin
+just build                 # Build entire workspace
+just release               # Build release version
+just build-lib             # Build core library only
+just build-cli             # Build CLI only
+just build-repl            # Build REPL only
+just build-admin           # Build Admin CLI only
 ```
 
 ## Usage
-
-The SDK can be used in three ways: as a Rust library, as a CLI tool, or as an interactive REPL.
 
 ### 1. As a Rust Library
 
@@ -90,158 +60,68 @@ use aspens::{AspensClient, DirectExecutor};
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    // Build the client
     let client = AspensClient::builder()
         .with_url("http://localhost:50051")?
-        .with_environment("testnet")
         .build()?;
 
-    // Use trading operations
-    // ...
-
+    // Use trading operations...
     Ok(())
 }
 ```
 
 ### 2. Interactive Mode (REPL)
 
-Interactive mode provides a REPL (Read-Eval-Print Loop) interface where you can execute commands one at a time:
-
 ```bash
-# Start the REPL with anvil environment
-just repl-anvil
-
-# Or with testnet environment
-just repl-testnet
+cargo run --bin aspens-repl
 
 # Inside the REPL
 aspens> help
-Usage: <COMMAND>
-
-Commands:
-  initialize       Initialize a new trading session by (optionally) defining the arborter URL
-  get-config       Config: Fetch the current configuration from the arborter server
-  download-config  Config: Download configuration to a file
-  deposit          Deposit token(s) to make them available for trading
-  withdraw         Withdraw token(s) to a local wallet
-  buy              Send a BUY order
-  sell             Send a SELL order
-  get-orders       Get a list of all active orders
-  cancel-order     Cancel an order
-  balance          Fetch the balances
-  get-orderbook    Fetch the latest top of book
-  quit             Quit the REPL
-  help             Print this message or the help of the given subcommand(s)
-
+aspens> balance
+aspens> deposit base-sepolia USDC 1000
+aspens> buy-market USDC/USDT 100
 aspens> quit
 ```
 
 ### 3. Scripted Mode (CLI)
 
-Scripted mode allows you to execute commands directly from the command line, which is useful for automation and scripting:
-
 ```bash
-# Run with anvil environment
-just cli-anvil balance
-
-# Run with testnet environment
-just cli-testnet deposit base-goerli usdc 1000
-
-# Or use cargo directly
-cargo run -p aspens-cli -- --env testnet buy 100 --limit-price 50000
+cargo run --bin aspens-cli -- balance
+cargo run --bin aspens-cli -- deposit base-sepolia USDC 1000
+cargo run --bin aspens-cli -- buy-market USDC/USDT 100
 ```
 
-## Quick Start with Examples
-
-For practical examples and decimal conversion guides, see the [examples directory](examples/README.md) which includes:
-
-- Decimal conversion examples for various token pairs
-- Interactive trading sessions
-- Batch trading scripts
-- Troubleshooting guides
-
-## Available Commands
-
-### Just Commands
-
-The project includes a `justfile` with convenient commands:
+### 4. Admin CLI
 
 ```bash
-# List all available commands
-just
+# Initialize manager (first time only)
+cargo run --bin aspens-admin -- init-manager --address 0xYourAddress
 
-# Build the project
-just build
+# Login to get JWT
+cargo run --bin aspens-admin -- login
 
-# Run tests
-just test
-
-# Format code
-just fmt
-
-# Run CLI with specific environment
-just cli-anvil [args]
-just cli-testnet [args]
-
-# Run REPL with specific environment
-just repl-anvil
-just repl-testnet
+# Admin commands (JWT set in .env or via --jwt flag)
+cargo run --bin aspens-admin -- add-chain --network base-sepolia ...
+cargo run --bin aspens-admin -- add-token --network base-sepolia --symbol USDC ...
+cargo run --bin aspens-admin -- status
 ```
 
-### Environment Management
+## Just Commands
 
 ```bash
-# List available environments
-just env-list
-
-# Switch to specific environment
-just env-switch <environment>
-
-# Create new environment template
-just create-env <name>
-```
-
-## Development
-
-### Running Tests
-
-```bash
-# Run all tests
-just test
-
-# Run tests for library only
-just test-lib
-
-# Run tests with specific environment
-just test-anvil
-just test-testnet
-```
-
-### Code Quality
-
-```bash
-# Format code
-just fmt
-
-# Check code style
-just check
-
-# Run linter
-just lint
-```
-
-### Clean Build
-
-```bash
-# Clean build artifacts
-just clean
+just                       # List all available commands
+just build                 # Build the project
+just test                  # Run all tests
+just test-lib              # Run library tests only
+just fmt                   # Format code
+just check                 # Check code style
+just lint                  # Run linter
+just clean                 # Clean build artifacts
 ```
 
 ## Architecture
 
 ### Core Library (`aspens/`)
 
-The core library provides:
 - **AspensClient** - Main client with builder pattern for configuration
 - **Trading operations** - Deposit, withdraw, buy, sell, balance queries
 - **Executor pattern** - Async/sync execution strategies
@@ -250,38 +130,24 @@ The core library provides:
 
 ### CLI Binary (`aspens-cli/`)
 
-Command-line interface for scripted trading operations. Supports all trading commands with flags and arguments.
+Command-line interface for scripted trading operations.
 
 ### REPL Binary (`aspens-repl/`)
 
-Interactive Read-Eval-Print Loop for manual trading with:
-- Command history
-- Interactive prompts
-- Session state management
+Interactive Read-Eval-Print Loop for manual trading with command history and session state.
+
+### Admin Binary (`aspens-admin/`)
+
+Administrative CLI for managing stack configuration with EIP-712 signature authentication.
 
 ## Decimal Handling
 
-**Critical**: Aspens handles tokens with different decimal places across chains. The SDK works in "pair decimals" format internally, not native token decimals:
-- Base token (e.g., WBTC: 8 decimals)
-- Quote token (e.g., USDT: 6 decimals)
-- Pair decimals (configured per market, may differ from both)
+Aspens handles tokens with different decimal places across chains. The SDK works in "pair decimals" format internally. See `decimals.md` for detailed conversion examples.
 
-All order quantities and prices must be in pair decimal format when sent to the gRPC API. See `decimals.md` for detailed conversion examples.
+## Documentation
 
-## Support and Documentation
-
-- [Examples Directory](examples/README.md) - Practical usage examples
 - [Decimal Conversion Guide](decimals.md) - Understanding decimal handling
-- [CLAUDE.md](CLAUDE.md) - Architecture guide for AI assistants
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `just test`
-5. Format code: `just fmt`
-6. Submit a pull request
+- [CLAUDE.md](CLAUDE.md) - Architecture guide for development
 
 ## License
 

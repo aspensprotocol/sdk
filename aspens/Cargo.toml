@@ -12,7 +12,6 @@ alloy-chains.workspace = true
 alloy-contract.workspace = true
 alloy-sol-types.workspace = true
 eyre.workspace = true
-dotenv.workspace = true
 hex.workspace = true
 prost.workspace = true
 serde.workspace = true
