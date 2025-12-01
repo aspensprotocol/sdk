@@ -73,10 +73,10 @@ pub struct Order {
     /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
     #[prost(string, tag = "4")]
     pub market_id: ::prost::alloc::string::String,
-    /// User's pubkey (address)on the Base chain
+    /// User's pubkey (address) on the Base chain
     #[prost(string, tag = "5")]
     pub base_account_address: ::prost::alloc::string::String,
-    /// User's pubkey (address)on the Quote chain
+    /// User's pubkey (address) on the Quote chain
     #[prost(string, tag = "6")]
     pub quote_account_address: ::prost::alloc::string::String,
     /// 'DIRECT' (default) or 'DISCRETIONARY'
@@ -201,20 +201,20 @@ pub struct OrderbookEntry {
     #[prost(enumeration = "OrderState", tag = "9")]
     pub state: i32,
 }
-/// Request to add a new orderbook
+/// Request to set a new orderbook
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct AddOrderbookRequest {
-    /// The market ID to add the orderbook for
+pub struct SetOrderbookRequest {
+    /// The market ID to set the orderbook for
     #[prost(string, tag = "1")]
     pub market_id: ::prost::alloc::string::String,
     /// The number of decimal places for the orderbook
     #[prost(int32, tag = "2")]
     pub decimal_places: i32,
 }
-/// Response for adding a new orderbook
+/// Response for setting a new orderbook
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct AddOrderbookResponse {
-    /// Whether the orderbook was added successfully
+pub struct SetOrderbookResponse {
+    /// Whether the orderbook was set successfully
     #[prost(bool, tag = "1")]
     pub success: bool,
     /// The market ID of the created orderbook
@@ -630,11 +630,11 @@ pub mod arborter_service_client {
                 );
             self.inner.server_streaming(req, path, codec).await
         }
-        pub async fn add_orderbook(
+        pub async fn set_orderbook(
             &mut self,
-            request: impl tonic::IntoRequest<super::AddOrderbookRequest>,
+            request: impl tonic::IntoRequest<super::SetOrderbookRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::AddOrderbookResponse>,
+            tonic::Response<super::SetOrderbookResponse>,
             tonic::Status,
         > {
             self.inner
@@ -647,14 +647,14 @@ pub mod arborter_service_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/xyz.aspens.arborter.v1.ArborterService/AddOrderbook",
+                "/xyz.aspens.arborter.v1.ArborterService/SetOrderbook",
             );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(
                     GrpcMethod::new(
                         "xyz.aspens.arborter.v1.ArborterService",
-                        "AddOrderbook",
+                        "SetOrderbook",
                     ),
                 );
             self.inner.unary(req, path, codec).await

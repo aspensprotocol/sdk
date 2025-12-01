@@ -10,7 +10,7 @@ pub mod auth_pb {
 use alloy::primitives::{keccak256, Address, B256, U256};
 use alloy::signers::{local::PrivateKeySigner, Signer};
 use auth_pb::auth_service_client::AuthServiceClient;
-use auth_pb::{AuthRequest, AuthResponse, InitializeManagerRequest, InitializeManagerResponse};
+use auth_pb::{AuthRequest, AuthResponse, InitializeAdminRequest, InitializeAdminResponse};
 use eyre::Result;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,8 +39,8 @@ impl From<AuthResponse> for AuthToken {
     }
 }
 
-impl From<InitializeManagerResponse> for AuthToken {
-    fn from(response: InitializeManagerResponse) -> Self {
+impl From<InitializeAdminResponse> for AuthToken {
+    fn from(response: InitializeAdminResponse) -> Self {
         Self {
             jwt_token: response.jwt_token,
             expires_at: response.expires_at,
@@ -49,24 +49,24 @@ impl From<InitializeManagerResponse> for AuthToken {
     }
 }
 
-/// Initialize the first manager on a fresh Aspens stack
+/// Initialize the first admin on a fresh Aspens stack
 ///
-/// This can only be called once when no manager exists. It sets up
-/// the initial manager and returns a JWT token for that manager.
+/// This can only be called once when no admin exists. It sets up
+/// the initial admin and returns a JWT token for that admin.
 ///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
-/// * `address` - The Ethereum address to set as manager
-pub async fn initialize_manager(url: String, address: String) -> Result<AuthToken> {
+/// * `address` - The Ethereum address to set as admin
+pub async fn initialize_admin(url: String, address: String) -> Result<AuthToken> {
     let channel = tonic::transport::Channel::from_shared(url)?
         .connect()
         .await?;
 
     let mut client = AuthServiceClient::new(channel);
 
-    let request = tonic::Request::new(InitializeManagerRequest { address });
+    let request = tonic::Request::new(InitializeAdminRequest { address });
 
-    let response = client.initialize_manager(request).await?;
+    let response = client.initialize_admin(request).await?;
 
     Ok(response.into_inner().into())
 }

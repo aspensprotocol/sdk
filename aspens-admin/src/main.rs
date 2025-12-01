@@ -3,7 +3,7 @@
 //! Administrative command-line interface for managing Aspens Market Stacks  configuration.
 //! Requires authentication via EIP-712 signature to perform admin operations.
 
-use aspens::commands::admin::{self, AddMarketParams, Chain, Token};
+use aspens::commands::admin::{self, SetMarketParams, Chain, Token};
 use aspens::commands::auth;
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use chrono::{DateTime, Utc};
@@ -47,9 +47,9 @@ enum Commands {
     // ========================================================================
     // Authentication Commands
     // ========================================================================
-    /// Initialize the first manager (only works on fresh stack)
-    InitManager {
-        /// Ethereum address to set as initial manager
+    /// Initialize the first admin (only works on fresh stack)
+    InitAdmin {
+        /// Ethereum address to set as initial admin
         #[arg(long)]
         address: String,
     },
@@ -62,19 +62,19 @@ enum Commands {
     },
 
     // ========================================================================
-    // Manager Commands
+    // Admin Management Commands
     // ========================================================================
-    /// Update the manager address
-    UpdateManager {
-        /// New manager Ethereum address
+    /// Update the admin address
+    UpdateAdmin {
+        /// New admin Ethereum address
         address: String,
     },
 
     // ========================================================================
     // Chain Commands
     // ========================================================================
-    /// Add a new chain to the configuration
-    AddChain {
+    /// Set a chain in the configuration
+    SetChain {
         /// Chain architecture (e.g., "EVM", "Hedera")
         #[arg(long)]
         architecture: String,
@@ -91,9 +91,9 @@ enum Commands {
         #[arg(long)]
         chain_id: u32,
 
-        /// Contract owner address
+        /// Instance signer address
         #[arg(long)]
-        contract_owner_address: String,
+        instance_signer_address: String,
 
         /// RPC URL for the chain
         #[arg(long)]
@@ -121,8 +121,8 @@ enum Commands {
     // ========================================================================
     // Token Commands
     // ========================================================================
-    /// Add a token to a chain
-    AddToken {
+    /// Set a token on a chain
+    SetToken {
         /// Network to add token to (e.g., "base-sepolia")
         #[arg(long)]
         network: String,
@@ -141,9 +141,9 @@ enum Commands {
 
         /// Token decimals
         #[arg(long)]
-        decimals: i32,
+        decimals: u32,
 
-        /// Trade precision
+        /// Trade precision (decimal places used in trading)
         #[arg(long, default_value = "6")]
         trade_precision: i32,
 
@@ -166,8 +166,8 @@ enum Commands {
     // ========================================================================
     // Market Commands
     // ========================================================================
-    /// Add a new market
-    AddMarket {
+    /// Set a market
+    SetMarket {
         /// Base chain network (e.g., "base-sepolia")
         #[arg(long)]
         base_network: String,
@@ -220,8 +220,8 @@ enum Commands {
         network: String,
     },
 
-    /// Add an existing trade contract to a chain
-    AddTradeContract {
+    /// Set a trade contract on a chain
+    SetTradeContract {
         /// Contract address
         #[arg(long)]
         address: String,
@@ -297,10 +297,10 @@ async fn main() -> Result<()> {
         // ====================================================================
         // Authentication Commands
         // ====================================================================
-        Commands::InitManager { address } => {
-            info!("Initializing manager with address: {}", address);
-            let result = executor.execute(auth::initialize_manager(stack_url, address))?;
-            println!("Manager initialized successfully!");
+        Commands::InitAdmin { address } => {
+            info!("Initializing admin with address: {}", address);
+            let result = executor.execute(auth::initialize_admin(stack_url, address))?;
+            println!("Admin initialized successfully!");
             println!("JWT Token: {}", result.jwt_token);
             println!("Expires at: {}", format_expiry(result.expires_at));
             println!("Address: {}", result.address);
@@ -329,42 +329,42 @@ async fn main() -> Result<()> {
         }
 
         // ====================================================================
-        // Manager Commands
+        // Admin Management Commands
         // ====================================================================
-        Commands::UpdateManager { address } => {
+        Commands::UpdateAdmin { address } => {
             let jwt = get_jwt()?;
-            info!("Updating manager to: {}", address);
+            info!("Updating admin to: {}", address);
             let result =
-                executor.execute(admin::update_manager(stack_url.clone(), jwt, address))?;
+                executor.execute(admin::update_admin(stack_url.clone(), jwt, address))?;
             println!(
-                "Manager updated successfully to: {}",
-                result.manager_address
+                "Admin updated successfully to: {}",
+                result.admin_address
             );
         }
 
         // ====================================================================
         // Chain Commands
         // ====================================================================
-        Commands::AddChain {
+        Commands::SetChain {
             architecture,
             canonical_name,
             network,
             chain_id,
-            contract_owner_address,
+            instance_signer_address,
             rpc_url,
             service_address,
             permit2_address,
             explorer_url,
         } => {
             let jwt = get_jwt()?;
-            info!("Adding chain: {} ({})", canonical_name, network);
+            info!("Setting chain: {} ({})", canonical_name, network);
 
             let chain = Chain {
                 architecture,
                 canonical_name,
                 network: network.clone(),
                 chain_id,
-                contract_owner_address,
+                instance_signer_address,
                 explorer_url,
                 rpc_url,
                 service_address,
@@ -373,11 +373,11 @@ async fn main() -> Result<()> {
                 tokens: HashMap::new(),
             };
 
-            let result = executor.execute(admin::add_chain(stack_url.clone(), jwt, chain))?;
+            let result = executor.execute(admin::set_chain(stack_url.clone(), jwt, chain))?;
             if result.success {
-                println!("Chain '{}' added successfully!", network);
+                println!("Chain '{}' set successfully!", network);
             } else {
-                println!("Failed to add chain");
+                println!("Failed to set chain");
             }
         }
 
@@ -396,7 +396,7 @@ async fn main() -> Result<()> {
         // ====================================================================
         // Token Commands
         // ====================================================================
-        Commands::AddToken {
+        Commands::SetToken {
             network,
             name,
             symbol,
@@ -406,7 +406,7 @@ async fn main() -> Result<()> {
             token_id,
         } => {
             let jwt = get_jwt()?;
-            info!("Adding token {} ({}) to {}", name, symbol, network);
+            info!("Setting token {} ({}) on {}", name, symbol, network);
 
             let token = Token {
                 name,
@@ -417,16 +417,16 @@ async fn main() -> Result<()> {
                 trade_precision,
             };
 
-            let result = executor.execute(admin::add_token(
+            let result = executor.execute(admin::set_token(
                 stack_url.clone(),
                 jwt,
                 network.clone(),
                 token,
             ))?;
             if result.success {
-                println!("Token '{}' added to '{}' successfully!", symbol, network);
+                println!("Token '{}' set on '{}' successfully!", symbol, network);
             } else {
-                println!("Failed to add token");
+                println!("Failed to set token");
             }
         }
 
@@ -452,7 +452,7 @@ async fn main() -> Result<()> {
         // ====================================================================
         // Market Commands
         // ====================================================================
-        Commands::AddMarket {
+        Commands::SetMarket {
             base_network,
             quote_network,
             base_symbol,
@@ -465,11 +465,11 @@ async fn main() -> Result<()> {
         } => {
             let jwt = get_jwt()?;
             info!(
-                "Adding market: {}/{} ({}/{})",
+                "Setting market: {}/{} ({}/{})",
                 base_symbol, quote_symbol, base_network, quote_network
             );
 
-            let params = AddMarketParams {
+            let params = SetMarketParams {
                 base_chain_network: base_network,
                 quote_chain_network: quote_network,
                 base_chain_token_symbol: base_symbol.clone(),
@@ -481,14 +481,14 @@ async fn main() -> Result<()> {
                 pair_decimals,
             };
 
-            let result = executor.execute(admin::add_market(stack_url.clone(), jwt, params))?;
+            let result = executor.execute(admin::set_market(stack_url.clone(), jwt, params))?;
             if result.success {
                 println!(
-                    "Market '{}/{}' added successfully!",
+                    "Market '{}/{}' set successfully!",
                     base_symbol, quote_symbol
                 );
             } else {
-                println!("Failed to add market");
+                println!("Failed to set market");
             }
         }
 
@@ -518,19 +518,19 @@ async fn main() -> Result<()> {
             println!("Trade contract deployed at: {}", result.contract_address);
         }
 
-        Commands::AddTradeContract { address, chain_id } => {
+        Commands::SetTradeContract { address, chain_id } => {
             let jwt = get_jwt()?;
-            info!("Adding trade contract {} to chain {}", address, chain_id);
-            let result = executor.execute(admin::add_trade_contract(
+            info!("Setting trade contract {} on chain {}", address, chain_id);
+            let result = executor.execute(admin::set_trade_contract(
                 stack_url.clone(),
                 jwt,
                 address,
                 chain_id,
             ))?;
             if let Some(tc) = result.trade_contract {
-                println!("Trade contract added: {}", tc.address);
+                println!("Trade contract set: {}", tc.address);
             } else {
-                println!("Trade contract added successfully");
+                println!("Trade contract set successfully");
             }
         }
 

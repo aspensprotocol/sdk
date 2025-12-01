@@ -16,7 +16,7 @@ use crate::commands::config::config_pb::{Configuration, GetConfigResponse};
 struct TokenInfo {
     symbol: String,
     name: String,
-    decimals: i32,
+    decimals: u32,
     /// Map of chain_id -> (chain_network, token_address, contract_address)
     chain_locations: HashMap<u32, ChainLocation>,
 }
@@ -169,7 +169,7 @@ async fn query_token_balance_on_chain(
 }
 
 /// Format balance with decimals for human-readable display
-fn format_balance_with_decimals(balance_str: &str, decimals: i32) -> String {
+fn format_balance_with_decimals(balance_str: &str, decimals: u32) -> String {
     if balance_str == "error" || balance_str == "not deployed" {
         return balance_str.to_string();
     }

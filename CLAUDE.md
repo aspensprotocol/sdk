@@ -147,16 +147,16 @@ Administrative CLI for managing the Aspens stack configuration. Structure:
 - Requires JWT authentication for most operations
 
 **Commands:**
-- **Authentication**: `init-manager`, `login` (EIP-712 signature auth)
-- **Manager**: `update-manager`
-- **Chains**: `add-chain`, `delete-chain`
-- **Tokens**: `add-token`, `delete-token`
-- **Markets**: `add-market`, `delete-market`
-- **Contracts**: `deploy-contract`, `add-trade-contract`, `delete-trade-contract`
+- **Authentication**: `init-admin`, `login` (EIP-712 signature auth)
+- **Admin**: `update-admin`
+- **Chains**: `set-chain`, `delete-chain`
+- **Tokens**: `set-token`, `delete-token`
+- **Markets**: `set-market`, `delete-market`
+- **Contracts**: `deploy-contract`, `set-trade-contract`, `delete-trade-contract`
 - **Info**: `version`, `status`
 
 **Authentication Flow:**
-1. First-time setup: `aspens-admin init-manager --address <eth-address>`
+1. First-time setup: `aspens-admin init-admin --address <eth-address>`
 2. Subsequent logins: `aspens-admin login` (signs EIP-712 message with `ADMIN_PRIVKEY`)
 3. Use returned JWT via `--jwt` flag or `ASPENS_JWT` env var for admin commands
 

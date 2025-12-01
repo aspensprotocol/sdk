@@ -10,12 +10,12 @@ pub mod config_pb {
 
 use config_pb::config_service_client::ConfigServiceClient;
 use config_pb::{
-    AddChainRequest, AddChainResponse, AddMarketRequest, AddMarketResponse, AddTokenRequest,
-    AddTokenResponse, AddTradeContractRequest, AddTradeContractResponse, DeleteChainRequest,
+    SetChainRequest, SetChainResponse, SetMarketRequest, SetMarketResponse, SetTokenRequest,
+    SetTokenResponse, SetTradeContractRequest, SetTradeContractResponse, DeleteChainRequest,
     DeleteChainResponse, DeleteMarketRequest, DeleteMarketResponse, DeleteTokenRequest,
     DeleteTokenResponse, DeleteTradeContractRequest, DeleteTradeContractResponse,
-    DeployContractRequest, DeployContractResponse, Empty, UpdateManagerRequest,
-    UpdateManagerResponse, VersionInfo,
+    DeployContractRequest, DeployContractResponse, Empty, UpdateAdminRequest,
+    UpdateAdminResponse, VersionInfo,
 };
 use eyre::Result;
 use tonic::metadata::MetadataValue;
@@ -39,25 +39,25 @@ async fn create_channel(url: String) -> Result<Channel> {
 }
 
 // ============================================================================
-// Manager Operations
+// Admin Management Operations
 // ============================================================================
 
-/// Update the manager address (requires auth)
+/// Update the admin address (requires auth)
 ///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
 /// * `jwt` - Valid JWT token
-/// * `manager_address` - New manager Ethereum address
-pub async fn update_manager(
+/// * `admin_address` - New admin Ethereum address
+pub async fn update_admin(
     url: String,
     jwt: String,
-    manager_address: String,
-) -> Result<UpdateManagerResponse> {
+    admin_address: String,
+) -> Result<UpdateAdminResponse> {
     let channel = create_channel(url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
-    let request = authenticated_request(&jwt, UpdateManagerRequest { manager_address });
-    let response = client.update_manager(request).await?;
+    let request = authenticated_request(&jwt, UpdateAdminRequest { admin_address });
+    let response = client.update_admin(request).await?;
 
     Ok(response.into_inner())
 }
@@ -86,24 +86,24 @@ pub async fn deploy_contract(
     Ok(response.into_inner())
 }
 
-/// Add a trade contract to a chain (requires auth)
+/// Set a trade contract on a chain (requires auth)
 ///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
 /// * `jwt` - Valid JWT token
 /// * `address` - Contract address
 /// * `chain_id` - Chain ID to associate with
-pub async fn add_trade_contract(
+pub async fn set_trade_contract(
     url: String,
     jwt: String,
     address: String,
     chain_id: u32,
-) -> Result<AddTradeContractResponse> {
+) -> Result<SetTradeContractResponse> {
     let channel = create_channel(url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
-    let request = authenticated_request(&jwt, AddTradeContractRequest { address, chain_id });
-    let response = client.add_trade_contract(request).await?;
+    let request = authenticated_request(&jwt, SetTradeContractRequest { address, chain_id });
+    let response = client.set_trade_contract(request).await?;
 
     Ok(response.into_inner())
 }
@@ -132,18 +132,18 @@ pub async fn delete_trade_contract(
 // Chain Operations
 // ============================================================================
 
-/// Add a new chain to the configuration (requires auth)
+/// Set a chain in the configuration (requires auth)
 ///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
 /// * `jwt` - Valid JWT token
 /// * `chain` - Chain configuration
-pub async fn add_chain(url: String, jwt: String, chain: Chain) -> Result<AddChainResponse> {
+pub async fn set_chain(url: String, jwt: String, chain: Chain) -> Result<SetChainResponse> {
     let channel = create_channel(url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
-    let request = authenticated_request(&jwt, AddChainRequest { chain: Some(chain) });
-    let response = client.add_chain(request).await?;
+    let request = authenticated_request(&jwt, SetChainRequest { chain: Some(chain) });
+    let response = client.set_chain(request).await?;
 
     Ok(response.into_inner())
 }
@@ -172,30 +172,30 @@ pub async fn delete_chain(
 // Token Operations
 // ============================================================================
 
-/// Add a token to a chain (requires auth)
+/// Set a token on a chain (requires auth)
 ///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
 /// * `jwt` - Valid JWT token
 /// * `chain_network` - Network name (e.g., "base-sepolia")
 /// * `token` - Token configuration
-pub async fn add_token(
+pub async fn set_token(
     url: String,
     jwt: String,
     chain_network: String,
     token: Token,
-) -> Result<AddTokenResponse> {
+) -> Result<SetTokenResponse> {
     let channel = create_channel(url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(
         &jwt,
-        AddTokenRequest {
+        SetTokenRequest {
             chain_network,
             token: Some(token),
         },
     );
-    let response = client.add_token(request).await?;
+    let response = client.set_token(request).await?;
 
     Ok(response.into_inner())
 }
@@ -232,9 +232,9 @@ pub async fn delete_token(
 // Market Operations
 // ============================================================================
 
-/// Parameters for adding a new market
+/// Parameters for setting a market
 #[derive(Debug, Clone)]
-pub struct AddMarketParams {
+pub struct SetMarketParams {
     pub base_chain_network: String,
     pub quote_chain_network: String,
     pub base_chain_token_symbol: String,
@@ -246,23 +246,23 @@ pub struct AddMarketParams {
     pub pair_decimals: i32,
 }
 
-/// Add a new market (requires auth)
+/// Set a market (requires auth)
 ///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
 /// * `jwt` - Valid JWT token
 /// * `params` - Market parameters
-pub async fn add_market(
+pub async fn set_market(
     url: String,
     jwt: String,
-    params: AddMarketParams,
-) -> Result<AddMarketResponse> {
+    params: SetMarketParams,
+) -> Result<SetMarketResponse> {
     let channel = create_channel(url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(
         &jwt,
-        AddMarketRequest {
+        SetMarketRequest {
             base_chain_network: params.base_chain_network,
             quote_chain_network: params.quote_chain_network,
             base_chain_token_symbol: params.base_chain_token_symbol,
@@ -274,7 +274,7 @@ pub async fn add_market(
             pair_decimals: params.pair_decimals,
         },
     );
-    let response = client.add_market(request).await?;
+    let response = client.set_market(request).await?;
 
     Ok(response.into_inner())
 }

@@ -6,18 +6,18 @@ option optimize_for = SPEED;
 
 // The Configuration service definition
 service ConfigService {
-  // rpc service to set the manager address
-  rpc UpdateManager(UpdateManagerRequest) returns (UpdateManagerResponse) {}
-  // rpc service to deploy a contract on the base and quote chains
+  // rpc service to set the admin address
+  rpc UpdateAdmin(UpdateAdminRequest) returns (UpdateAdminResponse) {}
+  // rpc service to deploy a trading instance on the base and quote chains
   rpc DeployContract(DeployContractRequest) returns (DeployContractResponse) {}
-  // rpc service to add a chain to the configuration
-  rpc AddChain(AddChainRequest) returns (AddChainResponse) {}
-  // rpc service to add a new token to trade
-  rpc AddToken(AddTokenRequest) returns (AddTokenResponse) {}
-  // rpc service to add a new market to trade
-  rpc AddMarket(AddMarketRequest) returns (AddMarketResponse) {}
-  // rpc service to add a new trade contract
-  rpc AddTradeContract(AddTradeContractRequest) returns (AddTradeContractResponse) {}
+  // rpc service to set a chain in the configuration
+  rpc SetChain(SetChainRequest) returns (SetChainResponse) {}
+  // rpc service to set a new token to trade
+  rpc SetToken(SetTokenRequest) returns (SetTokenResponse) {}
+  // rpc service to set a new market to trade
+  rpc SetMarket(SetMarketRequest) returns (SetMarketResponse) {}
+  // rpc service to set a new trading instance
+  rpc SetTradeContract(SetTradeContractRequest) returns (SetTradeContractResponse) {}
   // rpc service to get the configuration
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse) {}
   // rpc service to get version information
@@ -28,57 +28,57 @@ service ConfigService {
   rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse) {}
   // rpc service to delete a chain
   rpc DeleteChain(DeleteChainRequest) returns (DeleteChainResponse) {}
-  // rpc service to delete a trade contract
+  // rpc service to delete a trading instance
   rpc DeleteTradeContract(DeleteTradeContractRequest) returns (DeleteTradeContractResponse) {}
 }
 
-message UpdateManagerRequest {
+message UpdateAdminRequest {
   // The address to set for admin management operations 
-  string manager_address = 1;
+  string admin_address = 1;
 }
 
-message UpdateManagerResponse {
+message UpdateAdminResponse {
   // The address that has been set for admin management operations 
-  string manager_address = 1;
+  string admin_address = 1;
 }
 
 message DeployContractRequest {
-  // The name of the chain to deploy the contract on. e.g. base-sepolia
+  // The name of the chain to deploy the instance on. e.g. base-sepolia
   string chain_network = 1;
 }
 
 message DeployContractResponse {
-  // The address that the contract is deployed to on the specified chain
+  // The address that the instance is deployed to on the specified chain
   string contract_address = 1;
 }
 
-message AddChainRequest {
-  // The chain to add
+message SetChainRequest {
+  // The chain to set
   Chain chain = 1;
 }
 
-message AddChainResponse {
-  // Indicates if the chain was added successfully
+message SetChainResponse {
+  // Indicates if the chain was set successfully
   bool success = 1;
   // The configuration object
   Configuration config = 2;
 }
 
-message AddTokenRequest {
-  // The name of the chain to add the token to. e.g. base-sepolia
+message SetTokenRequest {
+  // The name of the chain to set the token on. e.g. base-sepolia
   string chain_network = 1;
-  // The token to ad
+  // The token to set
   Token token = 2;
 }
 
-message AddTokenResponse {
-  // Indicates if the token was added successfully
+message SetTokenResponse {
+  // Indicates if the token was set successfully
   bool success = 1;
   // The configuration object
   Configuration config = 2;
 }
 
-message AddMarketRequest {
+message SetMarketRequest {
   // The base chain network
   string base_chain_network = 1;
   // The quote chain network
@@ -99,22 +99,22 @@ message AddMarketRequest {
   int32 pair_decimals = 9;
 }
 
-message AddMarketResponse {
-  // Indicates if the market was added successfully
+message SetMarketResponse {
+  // Indicates if the market was set successfully
   bool success = 1;
   // The configuration object
   Configuration config = 2;
 }
 
-message AddTradeContractRequest {
-  // The chain address of the trade contract
+message SetTradeContractRequest {
+  // The chain address of the trading instance
   string address = 1;
-  // The chain ID to associate the trade contract with
+  // The chain ID to associate the trading instance with
   uint32 chain_id = 2;
 }
 
-message AddTradeContractResponse {
-  // The created trade contract
+message SetTradeContractResponse {
+  // The created trading instance
   TradeContract trade_contract = 1;
 }
 
@@ -135,11 +135,11 @@ message Configuration {
   repeated Market markets = 2;
 }
 
-// Represents the trade contract details
+// Represents the trading instance details
 message TradeContract {
   // Optional: For non-EVM chains like Hedera, Solana, etc.
   optional string contract_id = 1;
-  // The chain address of the trade contract
+  // The chain address of the trading instance
   string address = 2;
 }
 
@@ -153,17 +153,17 @@ message Chain {
   string network = 3;
   // The chain ID (e.g., Ethereum = 1)
   uint32 chain_id = 4;
-  // Pubkey address of the owner of the deployed trade contract
-  string contract_owner_address = 5;
+  // Pubkey address of the signer of the deployed trading instance
+  string instance_signer_address = 5;
   // Optional: URL to the chain explorer
   optional string explorer_url = 6;
   // The RPC URL for the chain
   string rpc_url = 7;
-  // The address of the factory service contract on this chain. This is the address to call to deploy a new trade contract
+  // The address of the factory service contract on this chain. This is the address to call to deploy a new trading instance
   string service_address = 8;
   // The address of the permit2 contract on this chain
   string permit2_address = 9;
-  // The trade contract details
+  // The trading instance details
   TradeContract trade_contract = 10;
   // Mapping of token symbols to token details
   map<string, Token> tokens = 11;
@@ -202,8 +202,8 @@ message Token {
   // Optional: for networks that use IDs (e.g., Hedera)
   optional string token_id = 4;
   // The number of decimal places the token is defined with
-  int32 decimals = 5;
-  // The level of precision the token trades at
+  uint32 decimals = 5;
+  // The trade precision for this token (decimal places used in trading)
   int32 trade_precision = 6;
 }
 
@@ -251,15 +251,15 @@ message DeleteChainResponse {
   Configuration config = 2;
 }
 
-// Delete trade contract request
+// Delete trading instance request
 message DeleteTradeContractRequest {
-  // The chain ID to delete the trade contract from
+  // The chain ID to delete the trading instance from
   uint32 chain_id = 1;
 }
 
-// Delete trade contract response
+// Delete trading instance response
 message DeleteTradeContractResponse {
-  // Indicates if the trade contract was deleted successfully
+  // Indicates if the trading instance was deleted successfully
   bool success = 1;
   // The configuration object after deletion
   Configuration config = 2;

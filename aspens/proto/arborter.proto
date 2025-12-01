@@ -9,7 +9,7 @@ service ArborterService {
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {}
   rpc Trades(TradeRequest) returns (stream Trade) {}
   rpc Orderbook(OrderbookRequest) returns (stream OrderbookEntry) {}
-  rpc AddOrderbook(AddOrderbookRequest) returns (AddOrderbookResponse) {}
+  rpc SetOrderbook(SetOrderbookRequest) returns (SetOrderbookResponse) {}
   rpc RemoveOrderbook(RemoveOrderbookRequest) returns (RemoveOrderbookResponse) {}
   rpc UnNormalizeDecimals(UnNormalizeDecimalsRequest) returns (UnNormalizeDecimalsResponse);
   rpc GetSignerPublicKey(GetSignerPublicKeyRequest) returns (GetSignerPublicKeyResponse);
@@ -69,9 +69,9 @@ message Order {
   optional string price = 3;
   // Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
   string market_id = 4;
-  // User's pubkey (address)on the Base chain
+  // User's pubkey (address) on the Base chain
   string base_account_address = 5;
-  // User's pubkey (address)on the Quote chain
+  // User's pubkey (address) on the Quote chain
   string quote_account_address = 6;
   // 'DIRECT' (default) or 'DISCRETIONARY'
   ExecutionType execution_type = 7;
@@ -197,17 +197,17 @@ message OrderbookEntry {
   OrderState state = 9;
 }
 
-// Request to add a new orderbook
-message AddOrderbookRequest {
-  // The market ID to add the orderbook for
+// Request to set a new orderbook
+message SetOrderbookRequest {
+  // The market ID to set the orderbook for
   string market_id = 1;
   // The number of decimal places for the orderbook
   int32 decimal_places = 2;
 }
 
-// Response for adding a new orderbook
-message AddOrderbookResponse {
-  // Whether the orderbook was added successfully
+// Response for setting a new orderbook
+message SetOrderbookResponse {
+  // Whether the orderbook was set successfully
   bool success = 1;
   // The market ID of the created orderbook
   string market_id = 2;

@@ -34,11 +34,11 @@ fn build_protos() -> Result<()> {
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
         .type_attribute(
-            "xyz.aspens.arborter_auth.v1.InitializeManagerRequest",
+            "xyz.aspens.arborter_auth.v1.InitializeAdminRequest",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
         .type_attribute(
-            "xyz.aspens.arborter_auth.v1.InitializeManagerResponse",
+            "xyz.aspens.arborter_auth.v1.InitializeAdminResponse",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
         .compile_protos(&["proto/arborter_auth.proto"], &["proto"])?;
