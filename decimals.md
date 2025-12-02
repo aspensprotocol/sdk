@@ -305,8 +305,8 @@ just get-config
 # Stream orderbook to see decimal formatting
 just stream-orderbook "your-market-id"
 
-# Add test markets with specific decimal configurations
-just add-market base-chain quote-chain base-token quote-token base-addr quote-addr base-decimals quote-decimals pair-decimals
+# Set test markets with specific decimal configurations
+just set-market base-chain quote-chain base-token quote-token base-addr quote-addr base-decimals quote-decimals pair-decimals
 ```
 
 ## Summary

@@ -93,15 +93,15 @@ cargo run --bin aspens-cli -- buy-market USDC/USDT 100
 ### 4. Admin CLI
 
 ```bash
-# Initialize manager (first time only)
-cargo run --bin aspens-admin -- init-manager --address 0xYourAddress
+# Initialize admin (first time only)
+cargo run --bin aspens-admin -- init-admin --address 0xYourAddress
 
 # Login to get JWT
 cargo run --bin aspens-admin -- login
 
 # Admin commands (JWT set in .env or via --jwt flag)
-cargo run --bin aspens-admin -- add-chain --network base-sepolia ...
-cargo run --bin aspens-admin -- add-token --network base-sepolia --symbol USDC ...
+cargo run --bin aspens-admin -- set-chain --network base-sepolia ...
+cargo run --bin aspens-admin -- set-token --network base-sepolia --symbol USDC ...
 cargo run --bin aspens-admin -- status
 ```
 

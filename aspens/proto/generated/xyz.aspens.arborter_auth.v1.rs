@@ -30,21 +30,21 @@ pub struct AuthResponse {
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct InitializeManagerRequest {
-    /// The Ethereum address to set as the initial manager
+pub struct InitializeAdminRequest {
+    /// The Ethereum address to set as the initial admin
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct InitializeManagerResponse {
+pub struct InitializeAdminResponse {
     /// JWT token for authenticated requests
     #[prost(string, tag = "1")]
     pub jwt_token: ::prost::alloc::string::String,
     /// Unix timestamp when the token expires (in seconds)
     #[prost(uint64, tag = "2")]
     pub expires_at: u64,
-    /// The address that was set as manager
+    /// The address that was set as admin
     #[prost(string, tag = "3")]
     pub address: ::prost::alloc::string::String,
     /// Success message
@@ -144,13 +144,13 @@ pub mod auth_service_client {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
         }
-        /// Initialize the first manager (only works when no manager exists)
-        /// Returns a JWT token for the newly created manager
-        pub async fn initialize_manager(
+        /// Initialize the first admin (only works when no admin exists)
+        /// Returns a JWT token for the newly created admin
+        pub async fn initialize_admin(
             &mut self,
-            request: impl tonic::IntoRequest<super::InitializeManagerRequest>,
+            request: impl tonic::IntoRequest<super::InitializeAdminRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::InitializeManagerResponse>,
+            tonic::Response<super::InitializeAdminResponse>,
             tonic::Status,
         > {
             self.inner
@@ -163,20 +163,20 @@ pub mod auth_service_client {
                 })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/xyz.aspens.arborter_auth.v1.AuthService/InitializeManager",
+                "/xyz.aspens.arborter_auth.v1.AuthService/InitializeAdmin",
             );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(
                     GrpcMethod::new(
                         "xyz.aspens.arborter_auth.v1.AuthService",
-                        "InitializeManager",
+                        "InitializeAdmin",
                     ),
                 );
             self.inner.unary(req, path, codec).await
         }
         /// Authenticate with EIP-712 signature to obtain a JWT token
-        /// Only works if the address is already a manager
+        /// Only works if the address is already an admin
         pub async fn authenticate_with_signature(
             &mut self,
             request: impl tonic::IntoRequest<super::AuthRequest>,
