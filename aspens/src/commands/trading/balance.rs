@@ -176,7 +176,7 @@ fn format_balance_with_decimals(balance_str: &str, decimals: u32) -> String {
 
     match balance_str.parse::<u128>() {
         Ok(balance) => {
-            let divisor = 10_u128.pow(decimals as u32);
+            let divisor = 10_u128.pow(decimals);
             let integer_part = balance / divisor;
             let fractional_part = balance % divisor;
 
