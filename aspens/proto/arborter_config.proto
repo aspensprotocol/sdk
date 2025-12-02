@@ -33,12 +33,12 @@ service ConfigService {
 }
 
 message UpdateAdminRequest {
-  // The address to set for admin management operations 
+  // The address to set for admin management operations
   string admin_address = 1;
 }
 
 message UpdateAdminResponse {
-  // The address that has been set for admin management operations 
+  // The address that has been set for admin management operations
   string admin_address = 1;
 }
 
@@ -203,8 +203,6 @@ message Token {
   optional string token_id = 4;
   // The number of decimal places the token is defined with
   uint32 decimals = 5;
-  // The trade precision for this token (decimal places used in trading)
-  int32 trade_precision = 6;
 }
 
 // Delete market request

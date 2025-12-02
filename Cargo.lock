@@ -902,11 +902,13 @@ dependencies = [
 name = "aspens-cli"
 version = "0.3.0"
 dependencies = [
+ "alloy",
  "alloy-chains",
  "aspens",
  "clap",
  "clap-verbosity",
  "eyre",
+ "hex",
  "log",
  "serde_json",
  "tokio",
@@ -919,11 +921,13 @@ dependencies = [
 name = "aspens-repl"
 version = "0.3.0"
 dependencies = [
+ "alloy",
  "alloy-chains",
  "aspens",
  "clap",
  "clap-repl",
  "eyre",
+ "hex",
  "serde_json",
  "tokio",
  "tracing",

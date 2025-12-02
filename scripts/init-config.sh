@@ -320,7 +320,6 @@ $ASPENS_ADMIN set-token \
     --symbol "USDC" \
     --address "$USDC_ADDRESS_BASE" \
     --decimals 6 \
-    --trade-precision 6 \
     || print_warn "Token may already exist"
 
 # Set USDT0 on Flare Coston2
@@ -331,7 +330,6 @@ $ASPENS_ADMIN set-token \
     --symbol "USDT0" \
     --address "$USDT0_ADDRESS_FLARE" \
     --decimals 6 \
-    --trade-precision 6 \
     || print_warn "Token may already exist"
 
 # Set WC2FLR on Flare Coston2
@@ -342,7 +340,6 @@ $ASPENS_ADMIN set-token \
     --symbol "WC2FLR" \
     --address "$WC2FLR_ADDRESS_FLARE" \
     --decimals 18 \
-    --trade-precision 6 \
     || print_warn "Token may already exist"
 
 echo ""

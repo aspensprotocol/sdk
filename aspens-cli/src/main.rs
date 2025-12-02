@@ -83,6 +83,8 @@ enum Commands {
     Balance,
     /// Show current configuration and connection status
     Status,
+    /// Get the public key and address for the trader wallet
+    Pubkey,
 }
 
 #[tokio::main]
@@ -288,6 +290,18 @@ async fn main() -> Result<()> {
         Commands::Status => {
             info!("Configuration Status:");
             info!("  Stack URL: {}", client.stack_url());
+        }
+        Commands::Pubkey => {
+            use alloy::signers::local::PrivateKeySigner;
+
+            let privkey = client.get_env("TRADER_PRIVKEY").unwrap().clone();
+            let signer = privkey.parse::<PrivateKeySigner>()?;
+            let address = signer.address();
+            let pubkey = signer.credential().verifying_key();
+
+            println!("Trader Wallet:");
+            println!("  Address:    {}", address);
+            println!("  Public Key: 0x{}", hex::encode(pubkey.to_encoded_point(false).as_bytes()));
         }
         Commands::Config { output_file } => {
             use aspens::commands::config;
