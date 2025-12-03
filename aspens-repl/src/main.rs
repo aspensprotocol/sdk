@@ -484,21 +484,22 @@ fn main() {
             use alloy::signers::local::PrivateKeySigner;
 
             match app_state.get_env("TRADER_PRIVKEY") {
-                Some(privkey) => {
-                    match privkey.parse::<PrivateKeySigner>() {
-                        Ok(signer) => {
-                            let address = signer.address();
-                            let pubkey = signer.credential().verifying_key();
+                Some(privkey) => match privkey.parse::<PrivateKeySigner>() {
+                    Ok(signer) => {
+                        let address = signer.address();
+                        let pubkey = signer.credential().verifying_key();
 
-                            println!("Trader Wallet:");
-                            println!("  Address:    {}", address);
-                            println!("  Public Key: 0x{}", hex::encode(pubkey.to_encoded_point(false).as_bytes()));
-                        }
-                        Err(e) => {
-                            info!("Failed to parse private key: {e:?}");
-                        }
+                        println!("Trader Wallet:");
+                        println!("  Address:    {}", address);
+                        println!(
+                            "  Public Key: 0x{}",
+                            hex::encode(pubkey.to_encoded_point(false).as_bytes())
+                        );
                     }
-                }
+                    Err(e) => {
+                        info!("Failed to parse private key: {e:?}");
+                    }
+                },
                 None => {
                     info!("TRADER_PRIVKEY not found in environment");
                 }

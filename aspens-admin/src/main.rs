@@ -3,7 +3,7 @@
 //! Administrative command-line interface for managing Aspens Market Stacks  configuration.
 //! Requires authentication via EIP-712 signature to perform admin operations.
 
-use aspens::commands::admin::{self, SetMarketParams, Chain, Token};
+use aspens::commands::admin::{self, Chain, SetMarketParams, Token};
 use aspens::commands::auth;
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use chrono::{DateTime, Utc};
@@ -330,12 +330,8 @@ async fn main() -> Result<()> {
         Commands::UpdateAdmin { address } => {
             let jwt = get_jwt()?;
             info!("Updating admin to: {}", address);
-            let result =
-                executor.execute(admin::update_admin(stack_url.clone(), jwt, address))?;
-            println!(
-                "Admin updated successfully to: {}",
-                result.admin_address
-            );
+            let result = executor.execute(admin::update_admin(stack_url.clone(), jwt, address))?;
+            println!("Admin updated successfully to: {}", result.admin_address);
         }
 
         // ====================================================================

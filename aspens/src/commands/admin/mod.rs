@@ -10,11 +10,11 @@ pub mod config_pb {
 
 use config_pb::config_service_client::ConfigServiceClient;
 use config_pb::{
+    DeleteChainRequest, DeleteChainResponse, DeleteMarketRequest, DeleteMarketResponse,
+    DeleteTokenRequest, DeleteTokenResponse, DeleteTradeContractRequest,
+    DeleteTradeContractResponse, DeployContractRequest, DeployContractResponse, Empty,
     SetChainRequest, SetChainResponse, SetMarketRequest, SetMarketResponse, SetTokenRequest,
-    SetTokenResponse, SetTradeContractRequest, SetTradeContractResponse, DeleteChainRequest,
-    DeleteChainResponse, DeleteMarketRequest, DeleteMarketResponse, DeleteTokenRequest,
-    DeleteTokenResponse, DeleteTradeContractRequest, DeleteTradeContractResponse,
-    DeployContractRequest, DeployContractResponse, Empty, UpdateAdminRequest,
+    SetTokenResponse, SetTradeContractRequest, SetTradeContractResponse, UpdateAdminRequest,
     UpdateAdminResponse, VersionInfo,
 };
 use eyre::Result;

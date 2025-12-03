@@ -301,7 +301,10 @@ async fn main() -> Result<()> {
 
             println!("Trader Wallet:");
             println!("  Address:    {}", address);
-            println!("  Public Key: 0x{}", hex::encode(pubkey.to_encoded_point(false).as_bytes()));
+            println!(
+                "  Public Key: 0x{}",
+                hex::encode(pubkey.to_encoded_point(false).as_bytes())
+            );
         }
         Commands::Config { output_file } => {
             use aspens::commands::config;
