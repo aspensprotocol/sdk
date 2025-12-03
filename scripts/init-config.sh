@@ -121,6 +121,117 @@ WC2FLR_ADDRESS_FLARE="0xC67DCE33D7A8efA5FfEB961899C73fe01bCe9273"  # WC2FLR on F
 print_info "Initializing Aspens Market Stack configuration"
 echo ""
 
+# Verify Anvil chain IDs match expected values
+print_step "Verifying Anvil chain IDs..."
+
+# Check base chain (port 8545) has correct chain ID
+BASE_ACTUAL_CHAIN_ID=$(cast chain-id --rpc-url "$BASE_SEPOLIA_RPC_URL" 2>/dev/null || echo "0")
+if [ "$BASE_ACTUAL_CHAIN_ID" != "$BASE_SEPOLIA_CHAIN_ID" ]; then
+    print_error "Base chain ID mismatch!"
+    print_error "  Expected: $BASE_SEPOLIA_CHAIN_ID (Base Sepolia)"
+    print_error "  Got:      $BASE_ACTUAL_CHAIN_ID"
+    print_error "  RPC URL:  $BASE_SEPOLIA_RPC_URL"
+    print_error ""
+    print_error "This likely means:"
+    print_error "  1. Anvil is not running on port 8545, or"
+    print_error "  2. Anvil is forking from the wrong chain"
+    print_error ""
+    print_error "Check your Anvil configuration in ../infra/.env:"
+    print_error "  BASE_RPC_TESTNET should point to Base Sepolia"
+    exit 1
+fi
+print_info "✓ Base chain (port 8545): Chain ID $BASE_ACTUAL_CHAIN_ID (Base Sepolia)"
+
+# Check quote chain (port 8546) has correct chain ID
+QUOTE_ACTUAL_CHAIN_ID=$(cast chain-id --rpc-url "$FLARE_COSTON2_RPC_URL" 2>/dev/null || echo "0")
+if [ "$QUOTE_ACTUAL_CHAIN_ID" != "$FLARE_COSTON2_CHAIN_ID" ]; then
+    print_error "Quote chain ID mismatch!"
+    print_error "  Expected: $FLARE_COSTON2_CHAIN_ID (Flare Coston2)"
+    print_error "  Got:      $QUOTE_ACTUAL_CHAIN_ID"
+    print_error "  RPC URL:  $FLARE_COSTON2_RPC_URL"
+    print_error ""
+    print_error "This likely means:"
+    print_error "  1. Anvil is not running on port 8546, or"
+    print_error "  2. Anvil is forking from the wrong chain"
+    print_error ""
+    print_error "Check your Anvil configuration in ../infra/.env:"
+    print_error "  QUOTE_RPC_TESTNET should point to Flare Coston2"
+    exit 1
+fi
+print_info "✓ Quote chain (port 8546): Chain ID $QUOTE_ACTUAL_CHAIN_ID (Flare Coston2)"
+echo ""
+
+# Check Anvil fork block heights and optionally reset them
+print_step "Checking Anvil fork block heights..."
+
+# Get current Anvil block numbers
+BASE_ANVIL_BLOCK=$(cast block-number --rpc-url "$BASE_SEPOLIA_RPC_URL" 2>/dev/null || echo "0")
+QUOTE_ANVIL_BLOCK=$(cast block-number --rpc-url "$FLARE_COSTON2_RPC_URL" 2>/dev/null || echo "0")
+
+print_info "Current Anvil fork blocks:"
+print_info "  Base chain (port 8545):  Block $BASE_ANVIL_BLOCK"
+print_info "  Quote chain (port 8546): Block $QUOTE_ANVIL_BLOCK"
+
+# Get real testnet block numbers for comparison
+BASE_TESTNET_RPC=${BASE_FORK_URL:-${BASE_RPC_TESTNET:-}}
+QUOTE_TESTNET_RPC=${QUOTE_FORK_URL:-${QUOTE_RPC_TESTNET:-}}
+
+if [ -n "$BASE_TESTNET_RPC" ]; then
+    BASE_TESTNET_BLOCK=$(cast block-number --rpc-url "$BASE_TESTNET_RPC" 2>/dev/null || echo "0")
+    BASE_BLOCKS_BEHIND=$((BASE_TESTNET_BLOCK - BASE_ANVIL_BLOCK))
+    print_info "  Base Sepolia latest:     Block $BASE_TESTNET_BLOCK (Anvil is $BASE_BLOCKS_BEHIND blocks behind)"
+fi
+
+if [ -n "$QUOTE_TESTNET_RPC" ]; then
+    QUOTE_TESTNET_BLOCK=$(cast block-number --rpc-url "$QUOTE_TESTNET_RPC" 2>/dev/null || echo "0")
+    QUOTE_BLOCKS_BEHIND=$((QUOTE_TESTNET_BLOCK - QUOTE_ANVIL_BLOCK))
+    print_info "  Flare Coston2 latest:    Block $QUOTE_TESTNET_BLOCK (Anvil is $QUOTE_BLOCKS_BEHIND blocks behind)"
+fi
+
+# Check if forks should be reset (if RESET_ANVIL_FORKS env var is set or blocks are very old)
+RESET_THRESHOLD=${ANVIL_RESET_THRESHOLD:-10000}  # Reset if more than 10k blocks behind
+
+if [ "${RESET_ANVIL_FORKS:-false}" = "true" ] || [ "$BASE_BLOCKS_BEHIND" -gt "$RESET_THRESHOLD" ] || [ "$QUOTE_BLOCKS_BEHIND" -gt "$RESET_THRESHOLD" ]; then
+    print_warn "Anvil forks are outdated. Resetting to latest blocks..."
+
+    if [ -n "$BASE_TESTNET_RPC" ]; then
+        print_info "Resetting base chain to latest block..."
+        if cast rpc anvil_reset "{\"forking\": {\"jsonRpcUrl\": \"$BASE_TESTNET_RPC\"}}" --rpc-url "$BASE_SEPOLIA_RPC_URL" >/dev/null 2>&1; then
+            NEW_BASE_BLOCK=$(cast block-number --rpc-url "$BASE_SEPOLIA_RPC_URL" 2>/dev/null || echo "0")
+            print_info "✓ Base chain reset to block $NEW_BASE_BLOCK"
+        else
+            print_warn "Failed to reset base chain (may need to restart Anvil)"
+        fi
+    fi
+
+    if [ -n "$QUOTE_TESTNET_RPC" ]; then
+        print_info "Resetting quote chain to latest block..."
+        if cast rpc anvil_reset "{\"forking\": {\"jsonRpcUrl\": \"$QUOTE_TESTNET_RPC\"}}" --rpc-url "$FLARE_COSTON2_RPC_URL" >/dev/null 2>&1; then
+            NEW_QUOTE_BLOCK=$(cast block-number --rpc-url "$FLARE_COSTON2_RPC_URL" 2>/dev/null || echo "0")
+            print_info "✓ Quote chain reset to block $NEW_QUOTE_BLOCK"
+        else
+            print_warn "Failed to reset quote chain (may need to restart Anvil)"
+        fi
+    fi
+else
+    print_info "✓ Anvil forks are recent enough (less than $RESET_THRESHOLD blocks behind)"
+fi
+
+# Allow setting specific fork blocks via env vars
+if [ -n "${SET_BASE_FORK_BLOCK:-}" ]; then
+    print_info "Setting base chain to specific block $SET_BASE_FORK_BLOCK..."
+    cast rpc anvil_reset "{\"forking\": {\"jsonRpcUrl\": \"$BASE_TESTNET_RPC\", \"blockNumber\": $SET_BASE_FORK_BLOCK}}" --rpc-url "$BASE_SEPOLIA_RPC_URL" >/dev/null 2>&1
+    print_info "✓ Base chain set to block $SET_BASE_FORK_BLOCK"
+fi
+
+if [ -n "${SET_QUOTE_FORK_BLOCK:-}" ]; then
+    print_info "Setting quote chain to specific block $SET_QUOTE_FORK_BLOCK..."
+    cast rpc anvil_reset "{\"forking\": {\"jsonRpcUrl\": \"$QUOTE_TESTNET_RPC\", \"blockNumber\": $SET_QUOTE_FORK_BLOCK}}" --rpc-url "$FLARE_COSTON2_RPC_URL" >/dev/null 2>&1
+    print_info "✓ Quote chain set to block $SET_QUOTE_FORK_BLOCK"
+fi
+
+echo ""
+
 # Use deterministic signer addresses from mock-signer
 # These are the first two keys generated by the mock-signer service
 # See: infra/mock-signer/README.md for details
