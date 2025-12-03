@@ -14,10 +14,12 @@ path = "src/main.rs"
 aspens = { path = "../aspens" }
 
 # Workspace dependencies
+alloy.workspace = true
 alloy-chains.workspace = true
 eyre.workspace = true
 clap.workspace = true
 clap-repl.workspace = true
+hex.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true

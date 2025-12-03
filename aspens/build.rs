@@ -51,31 +51,31 @@ fn build_protos() -> Result<()> {
         .out_dir("proto/generated")
         .type_attribute(
             "xyz.aspens.arborter_config.v1.Configuration",
-            "#[derive(serde::Serialize, serde::Deserialize)]",
+            "#[derive(serde::Serialize, serde::Deserialize)] #[serde(rename_all = \"camelCase\")]",
         )
         .type_attribute(
             "xyz.aspens.arborter_config.v1.Chain",
-            "#[derive(serde::Serialize, serde::Deserialize)]",
+            "#[derive(serde::Serialize, serde::Deserialize)] #[serde(rename_all = \"camelCase\")]",
         )
         .type_attribute(
             "xyz.aspens.arborter_config.v1.Market",
-            "#[derive(serde::Serialize, serde::Deserialize)]",
+            "#[derive(serde::Serialize, serde::Deserialize)] #[serde(rename_all = \"camelCase\")]",
         )
         .type_attribute(
             "xyz.aspens.arborter_config.v1.Token",
-            "#[derive(serde::Serialize, serde::Deserialize)]",
+            "#[derive(serde::Serialize, serde::Deserialize)] #[serde(rename_all = \"camelCase\")]",
         )
         .type_attribute(
             "xyz.aspens.arborter_config.v1.TradeContract",
-            "#[derive(serde::Serialize, serde::Deserialize)]",
+            "#[derive(serde::Serialize, serde::Deserialize)] #[serde(rename_all = \"camelCase\")]",
         )
         .type_attribute(
             "xyz.aspens.arborter_config.v1.GetConfigResponse",
-            "#[derive(serde::Serialize, serde::Deserialize)]",
+            "#[derive(serde::Serialize, serde::Deserialize)] #[serde(rename_all = \"camelCase\")]",
         )
         .type_attribute(
             "xyz.aspens.arborter_config.v1.GetConfigRequest",
-            "#[derive(serde::Serialize, serde::Deserialize)]",
+            "#[derive(serde::Serialize, serde::Deserialize)] #[serde(rename_all = \"camelCase\")]",
         )
         .compile_protos(&["proto/arborter_config.proto"], &["proto"])?;
 
