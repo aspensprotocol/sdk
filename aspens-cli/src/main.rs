@@ -298,8 +298,9 @@ async fn main() -> Result<()> {
             info!("  Stack URL: {}", client.stack_url());
 
             // Ping the gRPC server
-            let ping_result =
-                executor.execute(aspens::health::ping_grpc_server(client.stack_url().to_string()));
+            let ping_result = executor.execute(aspens::health::ping_grpc_server(
+                client.stack_url().to_string(),
+            ));
             if ping_result.success {
                 info!(
                     "  Connection: OK ({}ms)",
@@ -308,7 +309,9 @@ async fn main() -> Result<()> {
             } else {
                 info!(
                     "  Connection: FAILED - {}",
-                    ping_result.error.unwrap_or_else(|| "Unknown error".to_string())
+                    ping_result
+                        .error
+                        .unwrap_or_else(|| "Unknown error".to_string())
                 );
             }
         }

@@ -497,7 +497,9 @@ fn main() {
             } else {
                 info!(
                     "  Connection: FAILED - {}",
-                    ping_result.error.unwrap_or_else(|| "Unknown error".to_string())
+                    ping_result
+                        .error
+                        .unwrap_or_else(|| "Unknown error".to_string())
                 );
             }
         }
