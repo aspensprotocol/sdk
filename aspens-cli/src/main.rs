@@ -83,6 +83,12 @@ enum Commands {
     Balance,
     /// Show current configuration and connection status
     Status,
+    /// Get the signer public key(s) for the trading instance
+    SignerPublicKey {
+        /// Optional chain ID to filter by. If not provided, returns all chains.
+        #[arg(long)]
+        chain_id: Option<u32>,
+    },
 }
 
 #[tokio::main]
@@ -304,6 +310,21 @@ async fn main() -> Result<()> {
                 // Display config as JSON
                 let json = serde_json::to_string_pretty(&config)?;
                 println!("{}", json);
+            }
+        }
+        Commands::SignerPublicKey { chain_id } => {
+            use aspens::commands::config;
+
+            let stack_url = client.stack_url().to_string();
+            info!("Fetching signer public key(s) from {stack_url}");
+            let response = executor.execute(config::get_signer_public_key(stack_url, chain_id))?;
+
+            println!("Signer Public Keys:");
+            for (id, key_info) in response.chain_keys.iter() {
+                println!(
+                    "  Chain {} ({}): {}",
+                    id, key_info.chain_network, key_info.public_key
+                );
             }
         }
     }
