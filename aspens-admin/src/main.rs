@@ -143,10 +143,6 @@ enum Commands {
         #[arg(long)]
         decimals: u32,
 
-        /// Trade precision (decimal places used in trading)
-        #[arg(long, default_value = "6")]
-        trade_precision: i32,
-
         /// Optional token ID (for Hedera)
         #[arg(long)]
         token_id: Option<String>,
@@ -398,7 +394,6 @@ async fn main() -> Result<()> {
             symbol,
             address,
             decimals,
-            trade_precision,
             token_id,
         } => {
             let jwt = get_jwt()?;
@@ -410,7 +405,6 @@ async fn main() -> Result<()> {
                 address,
                 token_id,
                 decimals,
-                trade_precision,
             };
 
             let result = executor.execute(admin::set_token(

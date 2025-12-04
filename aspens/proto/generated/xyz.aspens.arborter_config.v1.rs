@@ -114,9 +114,11 @@ pub struct SetTradeContractResponse {
 ///
 /// Add optional filters in the future (e.g., chain or market name)
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetConfigRequest {}
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetConfigResponse {
     /// The configuration object
@@ -125,6 +127,7 @@ pub struct GetConfigResponse {
 }
 /// The top-level response containing chains and markets
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Configuration {
     /// List of supported chains
@@ -136,6 +139,7 @@ pub struct Configuration {
 }
 /// Represents the trading instance details
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TradeContract {
     /// Optional: For non-EVM chains like Hedera, Solana, etc.
@@ -147,6 +151,7 @@ pub struct TradeContract {
 }
 /// Represents a single blockchain network
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Chain {
     /// The architecture of the chain (e.g., EVM, Hedera)
@@ -185,6 +190,7 @@ pub struct Chain {
 }
 /// Represents a market with a base- and quote- chain token pair
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Market {
     /// The market name, e.g. 'Base Sepolia USDC - OP Sepolia USDC'
@@ -217,6 +223,7 @@ pub struct Market {
 }
 /// Represents a single token
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Token {
     /// The name of the token
@@ -234,9 +241,6 @@ pub struct Token {
     /// The number of decimal places the token is defined with
     #[prost(uint32, tag = "5")]
     pub decimals: u32,
-    /// The trade precision for this token (decimal places used in trading)
-    #[prost(int32, tag = "6")]
-    pub trade_precision: i32,
 }
 /// Delete market request
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
