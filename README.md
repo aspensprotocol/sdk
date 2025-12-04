@@ -2,6 +2,24 @@
 
 A comprehensive SDK and CLI tools for interacting with an [Aspens Markets Stack](https://docs.aspens.xyz).
 
+## Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `config` | Fetch and display the configuration from the server |
+| `deposit <network> <token> <amount>` | Deposit tokens to make them available for trading |
+| `withdraw <network> <token> <amount>` | Withdraw tokens to a local wallet |
+| `buy-market <market> <amount>` | Send a market BUY order (executes at best available price) |
+| `buy-limit <market> <amount> <price>` | Send a limit BUY order (executes at specified price or better) |
+| `sell-market <market> <amount>` | Send a market SELL order (executes at best available price) |
+| `sell-limit <market> <amount> <price>` | Send a limit SELL order (executes at specified price or better) |
+| `balance` | Fetch the current balances for all supported tokens across all chains |
+| `status` | Show current configuration and connection status |
+| `trader-public-key` | Get the public key and address for the trader wallet |
+| `signer-public-key [--chain-id <id>]` | Get the signer public key(s) for the trading instance |
+
+All commands are available in both `aspens-cli` and `aspens-repl`.
+
 ## Project Structure
 
 This is a Cargo workspace with four main components:
