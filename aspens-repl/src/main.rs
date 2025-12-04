@@ -113,6 +113,8 @@ enum ReplCommand {
     Balance,
     /// Show current configuration and connection status
     Status,
+    /// Get the public key and address for the trader wallet
+    TraderPublicKey,
     /// Get the signer public key(s) for the trading instance
     SignerPublicKey {
         /// Optional chain ID to filter by. If not provided, returns all chains.
@@ -483,6 +485,31 @@ fn main() {
         ReplCommand::Status => {
             info!("Configuration Status:");
             info!("  Server URL: {}", app_state.stack_url());
+        }
+        ReplCommand::TraderPublicKey => {
+            use alloy::signers::local::PrivateKeySigner;
+
+            match app_state.get_env("TRADER_PRIVKEY") {
+                Some(privkey) => match privkey.parse::<PrivateKeySigner>() {
+                    Ok(signer) => {
+                        let address = signer.address();
+                        let pubkey = signer.credential().verifying_key();
+
+                        println!("Trader Wallet:");
+                        println!("  Address:    {}", address);
+                        println!(
+                            "  Public Key: 0x{}",
+                            hex::encode(pubkey.to_encoded_point(false).as_bytes())
+                        );
+                    }
+                    Err(e) => {
+                        info!("Failed to parse TRADER_PRIVKEY: {e:?}");
+                    }
+                },
+                None => {
+                    info!("TRADER_PRIVKEY not found in environment");
+                }
+            }
         }
         ReplCommand::SignerPublicKey { chain_id } => {
             use aspens::commands::config;

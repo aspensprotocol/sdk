@@ -83,6 +83,8 @@ enum Commands {
     Balance,
     /// Show current configuration and connection status
     Status,
+    /// Get the public key and address for the trader wallet
+    TraderPublicKey,
     /// Get the signer public key(s) for the trading instance
     SignerPublicKey {
         /// Optional chain ID to filter by. If not provided, returns all chains.
@@ -295,7 +297,7 @@ async fn main() -> Result<()> {
             info!("Configuration Status:");
             info!("  Stack URL: {}", client.stack_url());
         }
-        Commands::Pubkey => {
+        Commands::TraderPublicKey => {
             use alloy::signers::local::PrivateKeySigner;
 
             let privkey = client.get_env("TRADER_PRIVKEY").unwrap().clone();
