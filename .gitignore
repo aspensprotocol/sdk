@@ -10,3 +10,6 @@ anvil1.log
 anvil2.log
 cache/*
 .DS_Store
+
+# Python
+__pycache__/
