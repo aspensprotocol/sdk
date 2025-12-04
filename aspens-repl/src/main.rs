@@ -114,7 +114,13 @@ enum ReplCommand {
     /// Show current configuration and connection status
     Status,
     /// Get the public key and address for the trader wallet
-    Pubkey,
+    TraderPublicKey,
+    /// Get the signer public key(s) for the trading instance
+    SignerPublicKey {
+        /// Optional chain ID to filter by. If not provided, returns all chains.
+        #[arg(long)]
+        chain_id: Option<u32>,
+    },
     /// Quit the REPL
     Quit,
 }
@@ -480,7 +486,7 @@ fn main() {
             info!("Configuration Status:");
             info!("  Server URL: {}", app_state.stack_url());
         }
-        ReplCommand::Pubkey => {
+        ReplCommand::TraderPublicKey => {
             use alloy::signers::local::PrivateKeySigner;
 
             match app_state.get_env("TRADER_PRIVKEY") {
@@ -497,11 +503,32 @@ fn main() {
                         );
                     }
                     Err(e) => {
-                        info!("Failed to parse private key: {e:?}");
+                        info!("Failed to parse TRADER_PRIVKEY: {e:?}");
                     }
                 },
                 None => {
                     info!("TRADER_PRIVKEY not found in environment");
+                }
+            }
+        }
+        ReplCommand::SignerPublicKey { chain_id } => {
+            use aspens::commands::config;
+
+            let stack_url = app_state.stack_url();
+            info!("Fetching signer public key(s) from {}", stack_url);
+            match executor.execute(config::get_signer_public_key(stack_url, chain_id)) {
+                Ok(response) => {
+                    println!("Signer Public Keys:");
+                    for (id, key_info) in response.chain_keys.iter() {
+                        println!(
+                            "  Chain {} ({}): {}",
+                            id, key_info.chain_network, key_info.public_key
+                        );
+                    }
+                }
+                Err(e) => {
+                    info!("Failed to fetch signer public key(s): {e:?}");
+                    info!("Hint: Verify server connection with 'status' command");
                 }
             }
         }

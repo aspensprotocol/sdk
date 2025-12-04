@@ -2,6 +2,10 @@ pub mod config_pb {
     include!("../../../proto/generated/xyz.aspens.arborter_config.v1.rs");
 }
 
+pub mod arborter_pb {
+    include!("../../../proto/generated/xyz.aspens.arborter.v1.rs");
+}
+
 use config_pb::{Chain, GetConfigRequest, GetConfigResponse, Market, Token};
 use eyre::{bail, Result};
 use std::fs;
@@ -139,6 +143,32 @@ pub async fn download_config_to_file<P: AsRef<Path>>(url: String, path: P) -> Re
 
     info!("Configuration downloaded successfully");
     Ok(())
+}
+
+// Re-export types for external use
+pub use arborter_pb::{ChainPublicKey, GetSignerPublicKeyResponse};
+
+/// Get signer public key(s) from the trading server
+///
+/// # Arguments
+/// * `url` - The Aspens stack gRPC URL
+/// * `chain_id` - Optional chain ID to filter by. If None, returns all chains.
+pub async fn get_signer_public_key(
+    url: String,
+    chain_id: Option<u32>,
+) -> Result<GetSignerPublicKeyResponse> {
+    use arborter_pb::arborter_service_client::ArborterServiceClient;
+    use arborter_pb::GetSignerPublicKeyRequest;
+
+    let channel = tonic::transport::Channel::from_shared(url)?
+        .connect()
+        .await?;
+
+    let mut client = ArborterServiceClient::new(channel);
+    let request = tonic::Request::new(GetSignerPublicKeyRequest { chain_id });
+    let response = client.get_signer_public_key(request).await?;
+
+    Ok(response.into_inner())
 }
 
 #[cfg(test)]
