@@ -485,6 +485,23 @@ fn main() {
         ReplCommand::Status => {
             info!("Configuration Status:");
             info!("  Server URL: {}", app_state.stack_url());
+
+            // Ping the gRPC server
+            let ping_result =
+                executor.execute(aspens::health::ping_grpc_server(app_state.stack_url()));
+            if ping_result.success {
+                info!(
+                    "  Connection: OK ({}ms)",
+                    ping_result.latency_ms.unwrap_or(0)
+                );
+            } else {
+                info!(
+                    "  Connection: FAILED - {}",
+                    ping_result
+                        .error
+                        .unwrap_or_else(|| "Unknown error".to_string())
+                );
+            }
         }
         ReplCommand::TraderPublicKey => {
             use alloy::signers::local::PrivateKeySigner;

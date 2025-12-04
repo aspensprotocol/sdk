@@ -296,6 +296,24 @@ async fn main() -> Result<()> {
         Commands::Status => {
             info!("Configuration Status:");
             info!("  Stack URL: {}", client.stack_url());
+
+            // Ping the gRPC server
+            let ping_result = executor.execute(aspens::health::ping_grpc_server(
+                client.stack_url().to_string(),
+            ));
+            if ping_result.success {
+                info!(
+                    "  Connection: OK ({}ms)",
+                    ping_result.latency_ms.unwrap_or(0)
+                );
+            } else {
+                info!(
+                    "  Connection: FAILED - {}",
+                    ping_result
+                        .error
+                        .unwrap_or_else(|| "Unknown error".to_string())
+                );
+            }
         }
         Commands::TraderPublicKey => {
             use alloy::signers::local::PrivateKeySigner;
