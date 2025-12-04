@@ -1,0 +1,216 @@
+syntax = "proto3";
+
+package signer;
+
+// Service definition for the TPM-based signer
+// Provides cryptographic signing operations using Trusted Platform Module (TPM)
+service SignerService {
+  // Handles all signing requests
+  rpc ProcessRequest(SignRequest) returns (SignResponse);
+}
+
+// ============================================================================
+// Request Messages
+// ============================================================================
+
+// Main request message - uses oneof for type-safe request variants
+message SignRequest {
+  oneof request {
+    PingRequest ping = 1;
+    CreateKeyRequest create_key = 2;
+    SignEphemeralRequest sign_ephemeral = 3;
+    SignWithKeyRequest sign_with_key = 4;
+    GetPublicKeyRequest get_public_key = 5;
+    SignTransactionRequest sign_transaction = 6;
+  }
+}
+
+// Health check request
+message PingRequest {}
+
+// Create a new signing key in the TPM
+message CreateKeyRequest {}
+
+// Sign with an ephemeral (temporary) key
+message SignEphemeralRequest {
+  // The message to sign
+  // - For RAW: arbitrary string (will be SHA256 hashed)
+  // - For EIP712/EIP191: hex-encoded 32-byte digest
+  string message = 1;
+
+  // Signature type (default: RAW for backward compatibility)
+  optional SignatureType signature_type = 2;
+}
+
+// Sign with a previously created and saved key
+message SignWithKeyRequest {
+  // Key blob containing TPM private and public key data
+  KeyBlob key_blob = 1;
+
+  // The message to sign
+  // - For RAW: arbitrary string (will be SHA256 hashed)
+  // - For EIP712/EIP191: hex-encoded 32-byte digest
+  string message = 2;
+
+  // Signature type (default: RAW for backward compatibility)
+  optional SignatureType signature_type = 3;
+}
+
+// Get public key from a saved key blob
+message GetPublicKeyRequest {
+  // Key blob containing TPM private and public key data
+  KeyBlob key_blob = 1;
+}
+
+// Sign a transaction hash
+message SignTransactionRequest {
+  // Key blob containing TPM private and public key data
+  KeyBlob key_blob = 1;
+
+  // Transaction hash to sign (32 bytes, hex-encoded)
+  string hash = 2;
+}
+
+// ============================================================================
+// Response Messages
+// ============================================================================
+
+// Main response message - uses oneof for type-safe response variants
+message SignResponse {
+  oneof response {
+    SuccessResponse success = 1;
+    ErrorResponse error = 2;
+  }
+}
+
+// Successful response containing optional fields based on the request type
+message SuccessResponse {
+  // Hex-encoded signature (65 bytes: r || s || v, with recovery ID)
+  // Present for: sign_ephemeral, sign_with_key, sign_transaction
+  optional string signature = 1;
+
+  // Hex-encoded public key bytes (ECC P-256 point)
+  // Present for: sign_ephemeral, create_key, get_public_key
+  optional string public_key = 2;
+
+  // Serialized key blob (TPM private and public key data)
+  // Present for: create_key
+  optional KeyBlob key_blob = 3;
+
+  // EVM (Ethereum) address derived from the public key
+  // Present for: create_key, get_public_key (when evm feature is enabled)
+  optional string address = 4;
+
+  // Human-readable status message
+  optional string message = 5;
+}
+
+// Error response
+message ErrorResponse {
+  // Error description
+  string message = 1;
+
+  // Error code for programmatic error handling
+  ErrorCode code = 2;
+}
+
+// Simple ping response
+message PingResponse {
+  string message = 1; // Expected: "pong"
+}
+
+// ============================================================================
+// Data Structures
+// ============================================================================
+
+// Key blob structure containing TPM key data
+// This structure holds both the private and public portions of a TPM key
+// in their native TPM format, encoded as base64 strings
+message KeyBlob {
+  // Base64-encoded TPM private blob (the TPM 'private' area)
+  // This contains the encrypted private key material
+  string priv_blob_b64 = 1;
+
+  // Base64-encoded TPM public blob (the TPM 'public' area)
+  // This contains the public key and key metadata
+  string pub_blob_b64 = 2;
+}
+
+// Alternative KeyBlob format using raw bytes (more efficient for gRPC)
+message KeyBlobBytes {
+  // Raw TPM private blob bytes
+  bytes priv_blob = 1;
+
+  // Raw TPM public blob bytes
+  bytes pub_blob = 2;
+}
+
+// ============================================================================
+// Enumerations
+// ============================================================================
+
+// Signature type determines how the message is processed before signing
+enum SignatureType {
+  // Legacy behavior: SHA256 hash the message string
+  // Used for backward compatibility with existing clients
+  SIGNATURE_TYPE_RAW = 0;
+
+  // Pure EIP712: Sign the digest directly
+  // Used for Permit2 and other standard EIP712 signatures
+  // Message must be hex-encoded 32-byte EIP712 digest
+  SIGNATURE_TYPE_EIP712 = 1;
+
+  // EIP712 + EIP191 wrapper: Apply "Ethereum Signed Message" prefix
+  // Used for Midrib orders and other EIP191-wrapped signatures
+  // Message must be hex-encoded 32-byte EIP712 digest
+  // Signer will wrap with: "\x19Ethereum Signed Message:\n32" + digest
+  SIGNATURE_TYPE_EIP191 = 2;
+}
+
+// Error codes for structured error handling
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+
+  // TPM-related errors
+  ERROR_CODE_TPM_FAILURE = 1;
+  ERROR_CODE_TPM_CONTEXT_CREATE = 2;
+  ERROR_CODE_KEY_LOAD_FAILED = 3;
+  ERROR_CODE_SIGNING_FAILED = 4;
+  ERROR_CODE_KEY_CREATION_FAILED = 5;
+
+  // Data format errors
+  ERROR_CODE_INVALID_KEY_BLOB = 6;
+  ERROR_CODE_INVALID_MESSAGE = 7;
+  ERROR_CODE_DESERIALIZATION_ERROR = 8;
+  ERROR_CODE_ENCODING_ERROR = 9;
+
+  // Authentication errors
+  ERROR_CODE_HMAC_VERIFICATION_FAILED = 10;
+  ERROR_CODE_UNAUTHORIZED = 11;
+
+  // I/O and communication errors
+  ERROR_CODE_IO_ERROR = 12;
+  ERROR_CODE_SOCKET_ERROR = 13;
+
+  // Other errors
+  ERROR_CODE_INTERNAL_ERROR = 14;
+}
+
+// ============================================================================
+// Additional Metadata
+// ============================================================================
+
+// Metadata about the cryptographic operations
+message CryptoMetadata {
+  // Algorithm: ECC P-256 (NIST P-256)
+  string algorithm = 1; // "ECC_P256"
+
+  // Signing scheme: ECDSA with SHA256
+  string signing_scheme = 2; // "ECDSA_SHA256"
+
+  // Signature format: r || s (32 bytes each)
+  string signature_format = 3; // "CONCAT_R_S"
+
+  // Hash algorithm used for message digests
+  string hash_algorithm = 4; // "SHA256"
+}
