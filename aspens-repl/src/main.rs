@@ -7,6 +7,258 @@ use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
+/// Analyze an error and return a user-friendly message with hints
+fn format_error(err: &eyre::Report, context: &str) -> String {
+    let err_string = err.to_string().to_lowercase();
+    let root_cause = err.root_cause().to_string().to_lowercase();
+
+    // Connection errors
+    if err_string.contains("failed to connect")
+        || err_string.contains("connection refused")
+        || root_cause.contains("connection refused")
+    {
+        return format!(
+            "Failed to {}: Could not connect to the server\n\n\
+             Possible causes:\n\
+               - The Aspens server is not running\n\
+               - The server URL is incorrect\n\
+               - A firewall is blocking the connection\n\n\
+             Hints:\n\
+               - Check server status with 'status' command\n\
+               - Verify ASPENS_MARKET_STACK_URL in your .env file",
+            context
+        );
+    }
+
+    // DNS/hostname resolution errors
+    if err_string.contains("dns error")
+        || err_string.contains("no such host")
+        || err_string.contains("name or service not known")
+        || root_cause.contains("dns")
+    {
+        return format!(
+            "Failed to {}: Could not resolve server hostname\n\n\
+             Possible causes:\n\
+               - The server hostname is incorrect\n\
+               - DNS is not configured properly\n\
+               - No internet connection\n\n\
+             Hints:\n\
+               - Verify the stack URL is correct\n\
+               - Check your internet connection",
+            context
+        );
+    }
+
+    // TLS/SSL errors
+    if err_string.contains("tls")
+        || err_string.contains("ssl")
+        || err_string.contains("certificate")
+        || root_cause.contains("certificate")
+    {
+        return format!(
+            "Failed to {}: TLS/SSL error\n\n\
+             Possible causes:\n\
+               - Using HTTP URL for HTTPS server or vice versa\n\
+               - Server certificate is invalid or expired\n\n\
+             Hints:\n\
+               - For local development, use http://localhost:50051\n\
+               - For remote servers, use https://",
+            context
+        );
+    }
+
+    // Protocol/compression errors (HTTP/HTTPS mismatch)
+    if err_string.contains("compression flag")
+        || err_string.contains("protocol error")
+        || err_string.contains("invalid compression")
+    {
+        return format!(
+            "Failed to {}: Protocol mismatch\n\n\
+             Possible causes:\n\
+               - Using HTTP to connect to an HTTPS server\n\
+               - Using HTTPS to connect to an HTTP server\n\n\
+             Hints:\n\
+               - For remote servers, use https://\n\
+               - For local development, use http://",
+            context
+        );
+    }
+
+    // Timeout errors
+    if err_string.contains("timeout") || err_string.contains("timed out") {
+        return format!(
+            "Failed to {}: Request timed out\n\n\
+             Possible causes:\n\
+               - Server is overloaded or unresponsive\n\
+               - Network latency is too high\n\n\
+             Hints:\n\
+               - Try again in a few moments\n\
+               - Check server status with 'status' command",
+            context
+        );
+    }
+
+    // Chain/network not found
+    if err_string.contains("chain not found")
+        || err_string.contains("network not found")
+        || (err_string.contains("not found") && err_string.contains("chain"))
+    {
+        return format!(
+            "Failed to {}: Chain/network not found\n\n\
+             Hints:\n\
+               - Check available chains with 'config' command\n\
+               - Verify the network name is spelled correctly",
+            context
+        );
+    }
+
+    // Token not found
+    if err_string.contains("token not found")
+        || (err_string.contains("not found") && err_string.contains("token"))
+    {
+        return format!(
+            "Failed to {}: Token not found\n\n\
+             Hints:\n\
+               - Check available tokens with 'config' command\n\
+               - Token symbols are case-sensitive (e.g., USDC, not usdc)",
+            context
+        );
+    }
+
+    // Market not found
+    if err_string.contains("market not found")
+        || (err_string.contains("not found") && err_string.contains("market"))
+    {
+        return format!(
+            "Failed to {}: Market not found\n\n\
+             Hints:\n\
+               - Check available markets with 'config' command\n\
+               - Markets use format: chain_id::token::chain_id::token",
+            context
+        );
+    }
+
+    // Insufficient balance
+    if err_string.contains("insufficient")
+        || err_string.contains("not enough")
+        || err_string.contains("balance too low")
+    {
+        return format!(
+            "Failed to {}: Insufficient balance\n\n\
+             Hints:\n\
+               - Check your balances with 'balance' command\n\
+               - For trading: deposit tokens first\n\
+               - For deposits: ensure wallet has enough tokens",
+            context
+        );
+    }
+
+    // Transaction/RPC errors
+    if err_string.contains("transaction")
+        || err_string.contains("revert")
+        || err_string.contains("execution reverted")
+    {
+        return format!(
+            "Failed to {}: Transaction failed\n\n\
+             Possible causes:\n\
+               - Insufficient token balance or allowance\n\
+               - Contract execution reverted\n\n\
+             Hints:\n\
+               - Check your wallet balance\n\
+               - Try with a smaller amount",
+            context
+        );
+    }
+
+    // Private key errors
+    if err_string.contains("invalid private key")
+        || err_string.contains("privkey")
+        || err_string.contains("secret key")
+        || err_string.contains("hex decode")
+    {
+        return format!(
+            "Failed to {}: Invalid private key format\n\n\
+             Hints:\n\
+               - TRADER_PRIVKEY should be a 64-character hex string\n\
+               - Do not include the '0x' prefix\n\
+               - Check for extra whitespace or newlines",
+            context
+        );
+    }
+
+    // Generic fallback
+    format!(
+        "Failed to {}\n\nError: {}\n\nHints:\n  - Check server status with 'status' command\n  - Verify your .env configuration",
+        context, err
+    )
+}
+
+/// Print a friendly error message for missing TRADER_PRIVKEY
+fn print_missing_privkey_error() {
+    println!();
+    println!("TRADER_PRIVKEY not found");
+    println!();
+    println!("Hints:");
+    println!("  - Set TRADER_PRIVKEY in your .env file");
+    println!("  - The private key should be a 64-character hex string");
+    println!("  - Do not include the '0x' prefix");
+    println!();
+}
+
+/// Print a friendly error message
+fn print_error(message: &str) {
+    println!();
+    for line in message.lines() {
+        println!("{}", line);
+    }
+    println!();
+}
+
+/// Print friendly status error with hints
+fn print_status_error(error_msg: &str) {
+    println!("  Connection: FAILED");
+    println!();
+
+    if error_msg.contains("Connection refused") {
+        println!("Could not connect to the server.");
+        println!();
+        println!("Possible causes:");
+        println!("  - The Aspens server is not running");
+        println!("  - The server URL is incorrect");
+        println!("  - A firewall is blocking the connection");
+    } else if error_msg.contains("dns") || error_msg.contains("resolve") {
+        println!("Could not resolve the server hostname.");
+        println!();
+        println!("Possible causes:");
+        println!("  - The hostname is incorrect");
+        println!("  - DNS is not configured properly");
+        println!("  - No internet connection");
+    } else if error_msg.contains("tls")
+        || error_msg.contains("ssl")
+        || error_msg.contains("certificate")
+    {
+        println!("TLS/SSL error: {}", error_msg);
+        println!();
+        println!("Possible causes:");
+        println!("  - Using wrong protocol (http vs https)");
+        println!("  - Server certificate is invalid");
+    } else if error_msg.contains("timeout") {
+        println!("Connection timed out.");
+        println!();
+        println!("Possible causes:");
+        println!("  - Server is overloaded or unresponsive");
+        println!("  - Network latency is too high");
+    } else {
+        println!("Error: {}", error_msg);
+    }
+
+    println!();
+    println!("Hints:");
+    println!("  - Verify ASPENS_MARKET_STACK_URL in your .env file");
+    println!("  - For local: http://localhost:50051");
+    println!("  - For remote: https://your-server:50051");
+}
+
 struct AppState {
     client: Arc<Mutex<AspensClient>>,
 }
@@ -135,7 +387,7 @@ fn main() {
 
     // Build the client
     let mut builder = AspensClient::builder();
-    if let Some(url) = cli.stack_url {
+    if let Some(ref url) = cli.stack_url {
         builder = builder
             .with_url(url.to_string())
             .expect("Invalid stack URL");
@@ -168,25 +420,20 @@ fn main() {
             match executor.execute(config::get_config(stack_url.clone())) {
                 Ok(config) => {
                     // If output_file is provided, save to file
-                    if let Some(path) = output_file {
-                        if let Err(e) = executor
-                            .execute(config::download_config(stack_url.clone(), path.clone()))
-                        {
-                            info!("Failed to save configuration: {e:?}");
-                        } else {
-                            info!("Configuration saved to: {}", path);
+                    if let Some(ref path) = output_file {
+                        match executor.execute(config::download_config(stack_url.clone(), path.clone())) {
+                            Ok(_) => info!("Configuration saved to: {}", path),
+                            Err(e) => print_error(&format_error(&e, &format!("save configuration to '{}'", path))),
                         }
                     } else {
                         // Display config as JSON
                         match serde_json::to_string_pretty(&config) {
                             Ok(json) => println!("{}", json),
-                            Err(e) => info!("Failed to serialize config: {e:?}"),
+                            Err(e) => println!("Failed to format config as JSON: {}", e),
                         }
                     }
                 }
-                Err(e) => {
-                    info!("Failed to fetch config: {e:?}");
-                }
+                Err(e) => print_error(&format_error(&e, "fetch configuration")),
             }
         }
         ReplCommand::Deposit {
@@ -200,8 +447,7 @@ fn main() {
             let config = match app_state.get_config_sync() {
                 Ok(cfg) => cfg,
                 Err(e) => {
-                    info!("Failed to fetch config: {e:?}");
-                    info!("Hint: Ensure the Aspens server is running and accessible");
+                    print_error(&format_error(&e, "fetch configuration"));
                     return;
                 }
             };
@@ -209,20 +455,23 @@ fn main() {
             let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("TRADER_PRIVKEY not found in environment");
+                    print_missing_privkey_error();
                     return;
                 }
             };
 
-            if let Err(e) = executor.execute(deposit::call_deposit_from_config(
-                network, token, amount, privkey, config,
+            match executor.execute(deposit::call_deposit_from_config(
+                network.clone(),
+                token.clone(),
+                amount,
+                privkey,
+                config,
             )) {
-                info!("Failed to deposit: {e:?}");
-                info!("Hint: Check your balance with the 'balance' command");
-                info!("Hint: Verify server connection and configuration");
-                info!("Hint: Ensure you have sufficient token balance in your wallet");
-            } else {
-                info!("Deposit successful");
+                Ok(_) => info!("Deposit successful"),
+                Err(e) => print_error(&format_error(
+                    &e,
+                    &format!("deposit {} {} on {}", amount, token, network),
+                )),
             }
         }
         ReplCommand::Withdraw {
@@ -236,8 +485,7 @@ fn main() {
             let config = match app_state.get_config_sync() {
                 Ok(cfg) => cfg,
                 Err(e) => {
-                    info!("Failed to fetch config: {e:?}");
-                    info!("Hint: Ensure the Aspens server is running and accessible");
+                    print_error(&format_error(&e, "fetch configuration"));
                     return;
                 }
             };
@@ -245,19 +493,23 @@ fn main() {
             let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("TRADER_PRIVKEY not found in environment");
+                    print_missing_privkey_error();
                     return;
                 }
             };
 
-            if let Err(e) = executor.execute(withdraw::call_withdraw_from_config(
-                network, token, amount, privkey, config,
+            match executor.execute(withdraw::call_withdraw_from_config(
+                network.clone(),
+                token.clone(),
+                amount,
+                privkey,
+                config,
             )) {
-                info!("Failed to withdraw: {e:?}");
-                info!("Hint: Check your balance with the 'balance' command");
-                info!("Hint: Verify server connection and configuration");
-            } else {
-                info!("Withdraw successful");
+                Ok(_) => info!("Withdraw successful"),
+                Err(e) => print_error(&format_error(
+                    &e,
+                    &format!("withdraw {} {} from {}", amount, token, network),
+                )),
             }
         }
         ReplCommand::BuyMarket { market, amount } => {
@@ -267,8 +519,7 @@ fn main() {
             let config = match app_state.get_config_sync() {
                 Ok(cfg) => cfg,
                 Err(e) => {
-                    info!("Failed to fetch config: {e:?}");
-                    info!("Hint: Ensure the Aspens server is running and accessible");
+                    print_error(&format_error(&e, "fetch configuration"));
                     return;
                 }
             };
@@ -276,36 +527,34 @@ fn main() {
             let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("TRADER_PRIVKEY not found in environment");
+                    print_missing_privkey_error();
                     return;
                 }
             };
 
             match executor.execute(send_order::call_send_order_from_config(
                 app_state.stack_url(),
-                market,
+                market.clone(),
                 1, // Buy side
-                amount,
+                amount.clone(),
                 None, // No limit price (market order)
                 privkey,
                 config,
             )) {
                 Ok(result) => {
-                    info!("✓ Market buy order sent successfully");
+                    info!("Market buy order sent successfully");
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {
                             info!("  {}", formatted_hash);
                         }
-                        info!("💡 Paste these hashes into your chain's block explorer");
+                        info!("Paste these hashes into your chain's block explorer");
                     }
                 }
-                Err(e) => {
-                    info!("Failed to send market buy order: {e:?}");
-                    info!("Hint: Check your balance with the 'balance' command");
-                    info!("Hint: Ensure you have sufficient quote token for the buy");
-                    info!("Hint: Verify server connection with 'status' command");
-                }
+                Err(e) => print_error(&format_error(
+                    &e,
+                    &format!("send market buy order for {} on {}", amount, market),
+                )),
             }
         }
         ReplCommand::BuyLimit {
@@ -319,8 +568,7 @@ fn main() {
             let config = match app_state.get_config_sync() {
                 Ok(cfg) => cfg,
                 Err(e) => {
-                    info!("Failed to fetch config: {e:?}");
-                    info!("Hint: Ensure the Aspens server is running and accessible");
+                    print_error(&format_error(&e, "fetch configuration"));
                     return;
                 }
             };
@@ -328,36 +576,34 @@ fn main() {
             let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("TRADER_PRIVKEY not found in environment");
+                    print_missing_privkey_error();
                     return;
                 }
             };
 
             match executor.execute(send_order::call_send_order_from_config(
                 app_state.stack_url(),
-                market,
+                market.clone(),
                 1, // Buy side
-                amount,
-                Some(price),
+                amount.clone(),
+                Some(price.clone()),
                 privkey,
                 config,
             )) {
                 Ok(result) => {
-                    info!("✓ Limit buy order sent successfully");
+                    info!("Limit buy order sent successfully");
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {
                             info!("  {}", formatted_hash);
                         }
-                        info!("💡 Paste these hashes into your chain's block explorer");
+                        info!("Paste these hashes into your chain's block explorer");
                     }
                 }
-                Err(e) => {
-                    info!("Failed to send limit buy order: {e:?}");
-                    info!("Hint: Check your balance with the 'balance' command");
-                    info!("Hint: Ensure you have sufficient quote token for the buy");
-                    info!("Hint: Verify server connection with 'status' command");
-                }
+                Err(e) => print_error(&format_error(
+                    &e,
+                    &format!("send limit buy order for {} at {} on {}", amount, price, market),
+                )),
             }
         }
         ReplCommand::SellMarket { market, amount } => {
@@ -367,8 +613,7 @@ fn main() {
             let config = match app_state.get_config_sync() {
                 Ok(cfg) => cfg,
                 Err(e) => {
-                    info!("Failed to fetch config: {e:?}");
-                    info!("Hint: Ensure the Aspens server is running and accessible");
+                    print_error(&format_error(&e, "fetch configuration"));
                     return;
                 }
             };
@@ -376,36 +621,34 @@ fn main() {
             let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("TRADER_PRIVKEY not found in environment");
+                    print_missing_privkey_error();
                     return;
                 }
             };
 
             match executor.execute(send_order::call_send_order_from_config(
                 app_state.stack_url(),
-                market,
+                market.clone(),
                 2, // Sell side
-                amount,
+                amount.clone(),
                 None, // No limit price (market order)
                 privkey,
                 config,
             )) {
                 Ok(result) => {
-                    info!("✓ Market sell order sent successfully");
+                    info!("Market sell order sent successfully");
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {
                             info!("  {}", formatted_hash);
                         }
-                        info!("💡 Paste these hashes into your chain's block explorer");
+                        info!("Paste these hashes into your chain's block explorer");
                     }
                 }
-                Err(e) => {
-                    info!("Failed to send market sell order: {e:?}");
-                    info!("Hint: Check your balance with the 'balance' command");
-                    info!("Hint: Ensure you have sufficient base token for the sell");
-                    info!("Hint: Verify server connection with 'status' command");
-                }
+                Err(e) => print_error(&format_error(
+                    &e,
+                    &format!("send market sell order for {} on {}", amount, market),
+                )),
             }
         }
         ReplCommand::SellLimit {
@@ -419,8 +662,7 @@ fn main() {
             let config = match app_state.get_config_sync() {
                 Ok(cfg) => cfg,
                 Err(e) => {
-                    info!("Failed to fetch config: {e:?}");
-                    info!("Hint: Ensure the Aspens server is running and accessible");
+                    print_error(&format_error(&e, "fetch configuration"));
                     return;
                 }
             };
@@ -428,36 +670,34 @@ fn main() {
             let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
-                    info!("TRADER_PRIVKEY not found in environment");
+                    print_missing_privkey_error();
                     return;
                 }
             };
 
             match executor.execute(send_order::call_send_order_from_config(
                 app_state.stack_url(),
-                market,
+                market.clone(),
                 2, // Sell side
-                amount,
-                Some(price),
+                amount.clone(),
+                Some(price.clone()),
                 privkey,
                 config,
             )) {
                 Ok(result) => {
-                    info!("✓ Limit sell order sent successfully");
+                    info!("Limit sell order sent successfully");
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {
                             info!("  {}", formatted_hash);
                         }
-                        info!("💡 Paste these hashes into your chain's block explorer");
+                        info!("Paste these hashes into your chain's block explorer");
                     }
                 }
-                Err(e) => {
-                    info!("Failed to send limit sell order: {e:?}");
-                    info!("Hint: Check your balance with the 'balance' command");
-                    info!("Hint: Ensure you have sufficient base token for the sell");
-                    info!("Hint: Verify server connection with 'status' command");
-                }
+                Err(e) => print_error(&format_error(
+                    &e,
+                    &format!("send limit sell order for {} at {} on {}", amount, price, market),
+                )),
             }
         }
         ReplCommand::Balance => {
@@ -467,40 +707,38 @@ fn main() {
             let stack_url = app_state.stack_url();
             match executor.execute(config::get_config(stack_url.clone())) {
                 Ok(config) => {
-                    let privkey = app_state.get_env("TRADER_PRIVKEY").unwrap();
+                    let privkey = match app_state.get_env("TRADER_PRIVKEY") {
+                        Some(key) => key,
+                        None => {
+                            print_missing_privkey_error();
+                            return;
+                        }
+                    };
                     if let Err(e) = executor.execute(balance::balance_from_config(config, privkey))
                     {
-                        info!("Failed to get balances: {e:?}");
-                        info!("Hint: Check your RPC URLs with 'status' command");
-                        info!("Hint: Ensure your private key is correctly configured");
-                        info!("Hint: Verify the contract addresses are correct");
+                        print_error(&format_error(&e, "fetch balances"));
                     }
                 }
-                Err(e) => {
-                    info!("Failed to fetch configuration: {e:?}");
-                    info!("Hint: Verify server connection with 'status' command");
-                }
+                Err(e) => print_error(&format_error(&e, "fetch configuration")),
             }
         }
         ReplCommand::Status => {
-            info!("Configuration Status:");
-            info!("  Server URL: {}", app_state.stack_url());
+            println!("Configuration Status:");
+            println!("  Server URL: {}", app_state.stack_url());
 
             // Ping the gRPC server
             let ping_result =
                 executor.execute(aspens::health::ping_grpc_server(app_state.stack_url()));
             if ping_result.success {
-                info!(
+                println!(
                     "  Connection: OK ({}ms)",
                     ping_result.latency_ms.unwrap_or(0)
                 );
             } else {
-                info!(
-                    "  Connection: FAILED - {}",
-                    ping_result
-                        .error
-                        .unwrap_or_else(|| "Unknown error".to_string())
-                );
+                let error_msg = ping_result
+                    .error
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                print_status_error(&error_msg);
             }
         }
         ReplCommand::TraderPublicKey => {
@@ -520,12 +758,19 @@ fn main() {
                         );
                     }
                     Err(e) => {
-                        info!("Failed to parse TRADER_PRIVKEY: {e:?}");
+                        println!();
+                        println!("Invalid TRADER_PRIVKEY format");
+                        println!();
+                        println!("Error: {}", e);
+                        println!();
+                        println!("Hints:");
+                        println!("  - The private key should be a 64-character hex string");
+                        println!("  - Do not include the '0x' prefix");
+                        println!("  - Check for extra whitespace or newlines");
+                        println!();
                     }
                 },
-                None => {
-                    info!("TRADER_PRIVKEY not found in environment");
-                }
+                None => print_missing_privkey_error(),
             }
         }
         ReplCommand::SignerPublicKey { chain_id } => {
@@ -543,14 +788,11 @@ fn main() {
                         );
                     }
                 }
-                Err(e) => {
-                    info!("Failed to fetch signer public key(s): {e:?}");
-                    info!("Hint: Verify server connection with 'status' command");
-                }
+                Err(e) => print_error(&format_error(&e, "fetch signer public key(s)")),
             }
         }
         ReplCommand::Quit => {
-            info!("goodbye");
+            println!("Goodbye!");
             std::process::exit(0)
         }
     });
