@@ -100,8 +100,9 @@ pub async fn authenticate_with_signature(
 
     let mut client = AuthServiceClient::new(channel);
 
+    // Send address in lowercase format for consistent server-side comparison
     let request = tonic::Request::new(AuthRequest {
-        address: address.to_checksum(None),
+        address: format!("{:#x}", address),
         timestamp,
         nonce,
         signature,
