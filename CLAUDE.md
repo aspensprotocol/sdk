@@ -48,22 +48,19 @@ just clean
 ## Running CLI, REPL, and Admin
 
 ```bash
-# CLI with specific environment
-just cli-anvil [args]
-just cli-testnet [args]
+# Using just commands (reads ASPENS_MARKET_STACK_URL from .env)
+just cli [args]
+just repl
+just admin [command]
 
-# REPL with specific environment
-just repl-anvil
-just repl-testnet
+# Direct cargo commands with explicit stack URL
+cargo run -p aspens-cli -- --stack http://localhost:50051 [args]
+cargo run -p aspens-repl -- --stack https://grpc.example.com:50051
+cargo run -p aspens-admin -- --stack http://localhost:50051 [command]
 
-# Admin CLI with specific environment
-just admin-anvil [args]
-just admin-testnet [args]
-
-# Direct cargo commands
-cargo run -p aspens-cli -- --env anvil [args]
-cargo run -p aspens-repl -- --env testnet
-cargo run -p aspens-admin -- --env testnet [command]
+# Or set ASPENS_MARKET_STACK_URL in your .env file and run without --stack
+cargo run -p aspens-cli -- balance
+cargo run -p aspens-admin -- status
 ```
 
 ## Testing
@@ -74,10 +71,6 @@ just test
 
 # Run library tests only
 just test-lib
-
-# Run tests with specific environment
-just test-anvil
-just test-testnet
 ```
 
 ## Architecture
@@ -96,8 +89,7 @@ The core library is a pure Rust library with NO CLI dependencies. It provides:
 **Public API:**
 - **`AspensClient`** - Main client with builder pattern for configuration
   - `AspensClient::builder()` - Create a new client builder
-  - `.with_url()` - Set Aspen Market Stack RL
-  - `.with_environment()` - Set environment name (anvil, testnet, etc.)
+  - `.with_url()` - Set Aspens Market Stack URL (e.g., `http://localhost:50051`)
   - `.with_env_file()` - Set custom .env file path
   - `.build()` - Build the client
 - **Executors** - Async/sync execution strategies
@@ -119,7 +111,7 @@ The core library is a pure Rust library with NO CLI dependencies. It provides:
 
 **Key design principles:**
 - Environment configuration is handled in the library, not binaries
-- Client loads `.env.{environment}.local` files automatically
+- Client loads `.env` file automatically from the current directory
 - Environment variables are stored in the client for easy access
 - Protocol buffers are kept internal; clean Rust types are exposed
 
@@ -262,9 +254,17 @@ When adding tests:
 ```rust
 use aspens::{AspensClient, DirectExecutor};
 
+// Option 1: Use URL from ASPENS_MARKET_STACK_URL in .env
+let client = AspensClient::builder().build()?;
+
+// Option 2: Specify URL explicitly
 let client = AspensClient::builder()
-    .with_url("https://<aspens-stack-url.com>")?
-    .with_environment("testnet")
+    .with_url("https://grpc.example.com:50051")?
+    .build()?;
+
+// Option 3: Use a custom .env file
+let client = AspensClient::builder()
+    .with_env_file("/path/to/custom.env")
     .build()?;
 
 // Use executor for async operations
