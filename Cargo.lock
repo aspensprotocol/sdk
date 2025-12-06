@@ -886,11 +886,13 @@ dependencies = [
 name = "aspens-admin"
 version = "0.3.0"
 dependencies = [
+ "alloy",
  "aspens",
  "chrono",
  "clap",
  "clap-verbosity",
  "eyre",
+ "hex",
  "serde_json",
  "tokio",
  "tracing",
