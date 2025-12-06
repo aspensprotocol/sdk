@@ -12,7 +12,7 @@ use tonic::transport::{Channel, ClientTlsConfig};
 /// TLS accordingly. For `http://` URLs, it connects without TLS.
 ///
 /// # Arguments
-/// * `url` - The gRPC server URL (e.g., "http://localhost:50051" or "https://grpc.example.com:50051")
+/// * `url` - The gRPC server URL (e.g., "http://localhost:50051" or "<https://grpc.example.com:50051>")
 ///
 /// # Returns
 /// A configured `Channel` ready for use with gRPC clients.
