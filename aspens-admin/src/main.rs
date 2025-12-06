@@ -562,16 +562,24 @@ async fn main() -> Result<()> {
 
         Commands::Status => {
             info!("Configuration Status:");
-            println!("Stack URL: {}", client.stack_url());
-            if client.is_jwt_valid() {
-                println!("JWT: Valid");
-                if let Some(expiry) = client.get_jwt_expiry() {
-                    println!("JWT Expires: {}", format_expiry(expiry));
-                }
-            } else if cli.jwt.is_some() {
-                println!("JWT: Provided (validity not checked until used)");
+            info!("  Stack URL: {}", client.stack_url());
+
+            // Ping the gRPC server
+            let ping_result = executor.execute(aspens::health::ping_grpc_server(
+                client.stack_url().to_string(),
+            ));
+            if ping_result.success {
+                info!(
+                    "  Connection: OK ({}ms)",
+                    ping_result.latency_ms.unwrap_or(0)
+                );
             } else {
-                println!("JWT: Not set");
+                info!(
+                    "  Connection: FAILED - {}",
+                    ping_result
+                        .error
+                        .unwrap_or_else(|| "Unknown error".to_string())
+                );
             }
         }
     }

@@ -12,11 +12,14 @@ use std::fs;
 use std::path::Path;
 use tracing::info;
 
+use crate::grpc::create_channel;
+
 /// Fetch configuration from the trading server
 pub async fn get_config(url: String) -> Result<GetConfigResponse> {
     use config_pb::config_service_client::ConfigServiceClient;
 
-    let mut client = ConfigServiceClient::connect(url).await?;
+    let channel = create_channel(&url).await?;
+    let mut client = ConfigServiceClient::new(channel);
     let request = tonic::Request::new(GetConfigRequest {});
     let response = client.get_config(request).await?;
 
@@ -112,9 +115,7 @@ impl GetConfigResponse {
 
 pub async fn call_get_config(url: String) -> Result<GetConfigResponse> {
     // Create a channel to connect to the gRPC server
-    let channel = tonic::transport::Channel::from_shared(url)?
-        .connect()
-        .await?;
+    let channel = create_channel(&url).await?;
 
     // Instantiate the client
     let mut client = config_pb::config_service_client::ConfigServiceClient::new(channel);
@@ -160,9 +161,7 @@ pub async fn get_signer_public_key(
     use arborter_pb::arborter_service_client::ArborterServiceClient;
     use arborter_pb::GetSignerPublicKeyRequest;
 
-    let channel = tonic::transport::Channel::from_shared(url)?
-        .connect()
-        .await?;
+    let channel = create_channel(&url).await?;
 
     let mut client = ArborterServiceClient::new(channel);
     let request = tonic::Request::new(GetSignerPublicKeyRequest { chain_id });

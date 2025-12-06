@@ -21,7 +21,7 @@ alloy-contract = "1.1.2"
 alloy-sol-types = { version = "1.4.1", features = ["json"] }
 
 # gRPC & Protobuf
-tonic = { version = "0.14.2", default-features = false, features = ["codegen", "transport"] }
+tonic = { version = "0.14.2", default-features = false, features = ["codegen", "transport", "tls-native-roots", "tls-ring"] }
 tonic-reflection = "0.14.2"
 tonic-prost = "0.14.2"
 prost = "0.14.1"

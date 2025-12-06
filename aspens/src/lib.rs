@@ -1,6 +1,7 @@
 pub mod client;
 pub mod commands;
 pub mod executor;
+pub mod grpc;
 pub mod health;
 
 pub mod proto {

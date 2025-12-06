@@ -19,8 +19,9 @@ use config_pb::{
 };
 use eyre::Result;
 use tonic::metadata::MetadataValue;
-use tonic::transport::Channel;
 use tonic::Request;
+
+use crate::grpc::create_channel;
 
 /// Create an authenticated gRPC request with JWT bearer token
 fn authenticated_request<T>(jwt: &str, payload: T) -> Request<T> {
@@ -30,12 +31,6 @@ fn authenticated_request<T>(jwt: &str, payload: T) -> Request<T> {
         request.metadata_mut().insert("authorization", value);
     }
     request
-}
-
-/// Create a gRPC channel from URL
-async fn create_channel(url: String) -> Result<Channel> {
-    let channel = Channel::from_shared(url)?.connect().await?;
-    Ok(channel)
 }
 
 // ============================================================================
@@ -53,7 +48,7 @@ pub async fn update_admin(
     jwt: String,
     admin_address: String,
 ) -> Result<UpdateAdminResponse> {
-    let channel = create_channel(url).await?;
+    let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(&jwt, UpdateAdminRequest { admin_address });
@@ -77,7 +72,7 @@ pub async fn deploy_contract(
     jwt: String,
     chain_network: String,
 ) -> Result<DeployContractResponse> {
-    let channel = create_channel(url).await?;
+    let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(&jwt, DeployContractRequest { chain_network });
@@ -99,7 +94,7 @@ pub async fn set_trade_contract(
     address: String,
     chain_id: u32,
 ) -> Result<SetTradeContractResponse> {
-    let channel = create_channel(url).await?;
+    let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(&jwt, SetTradeContractRequest { address, chain_id });
@@ -119,7 +114,7 @@ pub async fn delete_trade_contract(
     jwt: String,
     chain_id: u32,
 ) -> Result<DeleteTradeContractResponse> {
-    let channel = create_channel(url).await?;
+    let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(&jwt, DeleteTradeContractRequest { chain_id });
@@ -139,7 +134,7 @@ pub async fn delete_trade_contract(
 /// * `jwt` - Valid JWT token
 /// * `chain` - Chain configuration
 pub async fn set_chain(url: String, jwt: String, chain: Chain) -> Result<SetChainResponse> {
-    let channel = create_channel(url).await?;
+    let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(&jwt, SetChainRequest { chain: Some(chain) });
@@ -159,7 +154,7 @@ pub async fn delete_chain(
     jwt: String,
     chain_network: String,
 ) -> Result<DeleteChainResponse> {
-    let channel = create_channel(url).await?;
+    let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(&jwt, DeleteChainRequest { chain_network });
@@ -185,7 +180,7 @@ pub async fn set_token(
     chain_network: String,
     token: Token,
 ) -> Result<SetTokenResponse> {
-    let channel = create_channel(url).await?;
+    let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(
@@ -213,7 +208,7 @@ pub async fn delete_token(
     chain_network: String,
     token_symbol: String,
 ) -> Result<DeleteTokenResponse> {
-    let channel = create_channel(url).await?;
+    let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(
@@ -257,7 +252,7 @@ pub async fn set_market(
     jwt: String,
     params: SetMarketParams,
 ) -> Result<SetMarketResponse> {
-    let channel = create_channel(url).await?;
+    let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(
@@ -290,7 +285,7 @@ pub async fn delete_market(
     jwt: String,
     market_id: String,
 ) -> Result<DeleteMarketResponse> {
-    let channel = create_channel(url).await?;
+    let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = authenticated_request(&jwt, DeleteMarketRequest { market_id });
@@ -308,7 +303,7 @@ pub async fn delete_market(
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
 pub async fn get_version(url: String) -> Result<VersionInfo> {
-    let channel = create_channel(url).await?;
+    let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
     let request = Request::new(Empty {});
