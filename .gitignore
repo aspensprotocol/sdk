@@ -3,6 +3,7 @@
 
 # Environment files
 .env
+.env.local
 
 # Local files
 lib/
