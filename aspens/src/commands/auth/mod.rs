@@ -14,6 +14,8 @@ use auth_pb::{AuthRequest, AuthResponse, InitializeAdminRequest, InitializeAdmin
 use eyre::Result;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::grpc::create_channel;
+
 /// EIP-712 domain separator for Arborter authentication
 const EIP712_DOMAIN_NAME: &str = "Arborter";
 const EIP712_DOMAIN_VERSION: &str = "1";
@@ -58,9 +60,7 @@ impl From<InitializeAdminResponse> for AuthToken {
 /// * `url` - The Aspens stack gRPC URL
 /// * `address` - The Ethereum address to set as admin
 pub async fn initialize_admin(url: String, address: String) -> Result<AuthToken> {
-    let channel = tonic::transport::Channel::from_shared(url)?
-        .connect()
-        .await?;
+    let channel = create_channel(&url).await?;
 
     let mut client = AuthServiceClient::new(channel);
 
@@ -96,9 +96,7 @@ pub async fn authenticate_with_signature(
     let signature = sign_auth_message(&signer, address, timestamp, &nonce, chain_id).await?;
 
     // Connect to gRPC service
-    let channel = tonic::transport::Channel::from_shared(url)?
-        .connect()
-        .await?;
+    let channel = create_channel(&url).await?;
 
     let mut client = AuthServiceClient::new(channel);
 

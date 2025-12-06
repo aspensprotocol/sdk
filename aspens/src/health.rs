@@ -1,22 +1,20 @@
 use eyre::{Context, Result};
 use std::time::{Duration, Instant};
-use tonic::transport::Channel;
+use tonic::transport::{Channel, ClientTlsConfig};
 use tonic_reflection::pb::v1::{
     server_reflection_client::ServerReflectionClient, server_reflection_request::MessageRequest,
     server_reflection_response::MessageResponse, ServerReflectionRequest,
 };
 use tracing::info;
 
+use crate::grpc::create_channel;
+
 /// Check if the gRPC server is accessible by attempting to list services via reflection
 pub async fn check_grpc_server(url: String) -> Result<Vec<String>> {
     info!("Connecting to gRPC server at {}", url);
 
     // Create a channel to connect to the gRPC server
-    let channel = Channel::from_shared(url.clone())
-        .wrap_err("Invalid gRPC server URL")?
-        .connect()
-        .await
-        .wrap_err("Failed to connect to gRPC server")?;
+    let channel = create_channel(&url).await?;
 
     // Use the reflection client to list services
     let mut reflection_client = ServerReflectionClient::new(channel);
@@ -94,13 +92,10 @@ pub async fn ping_grpc_server(url: String) -> PingResult {
 /// Ping the gRPC server with a custom timeout
 pub async fn ping_grpc_server_with_timeout(url: String, timeout: Duration) -> PingResult {
     let start = Instant::now();
+    let is_https = url.starts_with("https://");
 
-    let result = Channel::from_shared(url.clone())
-        .map_err(|e| e.to_string())
-        .map(|endpoint| endpoint.connect_timeout(timeout).timeout(timeout));
-
-    let endpoint = match result {
-        Ok(ep) => ep,
+    let endpoint = match Channel::from_shared(url.clone()) {
+        Ok(ep) => ep.connect_timeout(timeout).timeout(timeout),
         Err(e) => {
             return PingResult {
                 success: false,
@@ -109,6 +104,24 @@ pub async fn ping_grpc_server_with_timeout(url: String, timeout: Duration) -> Pi
                 error: Some(format!("Invalid URL: {}", e)),
             };
         }
+    };
+
+    // Configure TLS for HTTPS connections
+    let endpoint = if is_https {
+        let tls_config = ClientTlsConfig::new().with_native_roots();
+        match endpoint.tls_config(tls_config) {
+            Ok(ep) => ep,
+            Err(e) => {
+                return PingResult {
+                    success: false,
+                    url,
+                    latency_ms: None,
+                    error: Some(format!("TLS configuration error: {}", e)),
+                };
+            }
+        }
+    } else {
+        endpoint
     };
 
     match endpoint.connect().await {
