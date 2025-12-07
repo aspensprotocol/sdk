@@ -101,7 +101,7 @@ pub async fn authenticate_with_signature(
     let mut client = AuthServiceClient::new(channel);
 
     let request = tonic::Request::new(AuthRequest {
-        address: address.to_checksum(None),
+        address: format!("{:#x}", address),
         timestamp,
         nonce,
         signature,
