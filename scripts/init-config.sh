@@ -263,17 +263,17 @@ cd - > /dev/null
 
 # Read factory address from deployment artifacts or log
 if [[ -f "$ARBORTER_DIR/chains/evm/deployment/$BASE_SEPOLIA_CHAIN_ID/Factory/address" ]]; then
-    BASE_SEPOLIA_SERVICE_ADDRESS=$(cat "$ARBORTER_DIR/chains/evm/deployment/$BASE_SEPOLIA_CHAIN_ID/Factory/address")
-    print_info "Base chain factory address: $BASE_SEPOLIA_SERVICE_ADDRESS"
+    BASE_SEPOLIA_FACTORY_ADDRESS=$(cat "$ARBORTER_DIR/chains/evm/deployment/$BASE_SEPOLIA_CHAIN_ID/Factory/address")
+    print_info "Base chain factory address: $BASE_SEPOLIA_FACTORY_ADDRESS"
 else
     # Try to extract from deployment log
-    BASE_SEPOLIA_SERVICE_ADDRESS=$(grep "Factory deployed at:" /tmp/deploy-factory-base.log | awk '{print $NF}')
-    if [[ -z "$BASE_SEPOLIA_SERVICE_ADDRESS" ]]; then
+    BASE_SEPOLIA_FACTORY_ADDRESS=$(grep "Factory deployed at:" /tmp/deploy-factory-base.log | awk '{print $NF}')
+    if [[ -z "$BASE_SEPOLIA_FACTORY_ADDRESS" ]]; then
         print_error "Could not find factory address for base chain"
         print_error "Check /tmp/deploy-factory-base.log for details"
         exit 1
     fi
-    print_info "Base chain factory address (from log): $BASE_SEPOLIA_SERVICE_ADDRESS"
+    print_info "Base chain factory address (from log): $BASE_SEPOLIA_FACTORY_ADDRESS"
 fi
 
 # Deploy factory on quote chain
@@ -286,17 +286,17 @@ cd - > /dev/null
 
 # Read factory address from deployment artifacts or log
 if [[ -f "$ARBORTER_DIR/chains/evm/deployment/$FLARE_COSTON2_CHAIN_ID/Factory/address" ]]; then
-    FLARE_COSTON2_SERVICE_ADDRESS=$(cat "$ARBORTER_DIR/chains/evm/deployment/$FLARE_COSTON2_CHAIN_ID/Factory/address")
-    print_info "Quote chain factory address: $FLARE_COSTON2_SERVICE_ADDRESS"
+    FLARE_COSTON2_FACTORY_ADDRESS=$(cat "$ARBORTER_DIR/chains/evm/deployment/$FLARE_COSTON2_CHAIN_ID/Factory/address")
+    print_info "Quote chain factory address: $FLARE_COSTON2_FACTORY_ADDRESS"
 else
     # Try to extract from deployment log
-    FLARE_COSTON2_SERVICE_ADDRESS=$(grep "Factory deployed at:" /tmp/deploy-factory-quote.log | awk '{print $NF}')
-    if [[ -z "$FLARE_COSTON2_SERVICE_ADDRESS" ]]; then
+    FLARE_COSTON2_FACTORY_ADDRESS=$(grep "Factory deployed at:" /tmp/deploy-factory-quote.log | awk '{print $NF}')
+    if [[ -z "$FLARE_COSTON2_FACTORY_ADDRESS" ]]; then
         print_error "Could not find factory address for quote chain"
         print_error "Check /tmp/deploy-factory-quote.log for details"
         exit 1
     fi
-    print_info "Quote chain factory address (from log): $FLARE_COSTON2_SERVICE_ADDRESS"
+    print_info "Quote chain factory address (from log): $FLARE_COSTON2_FACTORY_ADDRESS"
 fi
 
 echo ""
@@ -334,7 +334,7 @@ $ASPENS_ADMIN set-chain \
     --chain-id "$BASE_SEPOLIA_CHAIN_ID" \
     --instance-signer-address "$BASE_SIGNER_ADDRESS" \
     --rpc-url "$BASE_SEPOLIA_RPC_URL" \
-    --service-address "$BASE_SEPOLIA_SERVICE_ADDRESS" \
+    --factory-address "$BASE_SEPOLIA_FACTORY_ADDRESS" \
     --permit2-address "$BASE_SEPOLIA_PERMIT2_ADDRESS" \
     --explorer-url "$BASE_SEPOLIA_EXPLORER" \
     || print_warn "Chain may already exist"
@@ -348,7 +348,7 @@ $ASPENS_ADMIN set-chain \
     --chain-id "$FLARE_COSTON2_CHAIN_ID" \
     --instance-signer-address "$QUOTE_SIGNER_ADDRESS" \
     --rpc-url "$FLARE_COSTON2_RPC_URL" \
-    --service-address "$FLARE_COSTON2_SERVICE_ADDRESS" \
+    --factory-address "$FLARE_COSTON2_FACTORY_ADDRESS" \
     --permit2-address "$FLARE_COSTON2_PERMIT2_ADDRESS" \
     --explorer-url "$FLARE_COSTON2_EXPLORER" \
     || print_warn "Chain may already exist"

@@ -175,9 +175,9 @@ pub struct Chain {
     /// The RPC URL for the chain
     #[prost(string, tag = "7")]
     pub rpc_url: ::prost::alloc::string::String,
-    /// The address of the factory service contract on this chain. This is the address to call to deploy a new trading instance
+    /// The address of the factory contract on this chain. This is the address to call to deploy a new trading instance
     #[prost(string, tag = "8")]
-    pub service_address: ::prost::alloc::string::String,
+    pub factory_address: ::prost::alloc::string::String,
     /// The address of the permit2 contract on this chain
     #[prost(string, tag = "9")]
     pub permit2_address: ::prost::alloc::string::String,
