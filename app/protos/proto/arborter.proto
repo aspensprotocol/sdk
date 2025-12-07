@@ -1,0 +1,267 @@
+syntax = "proto3";
+
+package xyz.aspens.arborter.v1;
+
+option optimize_for = SPEED;
+
+service ArborterService {
+  rpc SendOrder(SendOrderRequest) returns (SendOrderResponse) {}
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {}
+  rpc Trades(TradeRequest) returns (stream Trade) {}
+  rpc Orderbook(OrderbookRequest) returns (stream OrderbookEntry) {}
+  rpc SetOrderbook(SetOrderbookRequest) returns (SetOrderbookResponse) {}
+  rpc RemoveOrderbook(RemoveOrderbookRequest) returns (RemoveOrderbookResponse) {}
+  rpc UnNormalizeDecimals(UnNormalizeDecimalsRequest) returns (UnNormalizeDecimalsResponse);
+  rpc GetSignerPublicKey(GetSignerPublicKeyRequest) returns (GetSignerPublicKeyResponse);
+}
+
+message Empty {}
+
+message CancelOrderRequest {
+  OrderToCancel order = 1;
+  bytes signature_hash = 2;
+}
+
+message CancelOrderResponse {
+  // Whether the order was found and canceled
+  bool order_canceled = 1;
+  // Transaction hashes associated with this cancellation
+  repeated TransactionHash transaction_hashes = 2;
+  // Current state of the orderbook after this operation
+  repeated OrderbookEntry current_orderbook = 3;
+}
+
+message OrderbookRequest {
+  // Used to keep the client alive
+  bool continue_stream = 1;
+  // The market id to stream orders for
+  string market_id = 2;
+  // If true, returns existing open orders when stream starts, then continues streaming
+  optional bool historical_open_orders = 3;
+  // If this is sent too, then we filter by a specific trader
+  optional string filter_by_trader = 4;
+}
+
+message TradeRequest {
+    // Used to keep the client alive
+    bool continue_stream = 1;
+    // The market id to stream orders for
+    string market_id = 2;
+    // If true, returns existing closed when stream starts, then continues streaming
+    optional bool historical_closed_trades = 3;
+    // If this is sent too, then we filter by a specific trader
+    optional string filter_by_trader = 4;
+}
+
+message SendOrderRequest {
+  // The order to send
+  Order order = 1;
+  // Valid EIP-712 signature hash of this order
+  bytes signature_hash = 2;
+}
+
+message Order {
+  // 'BID' or 'ASK'
+  Side side = 1;
+  // Order size
+  string quantity = 2;
+  // Optional. including is a LIMIT order. excluding is a MARKET order.
+  optional string price = 3;
+  // Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
+  string market_id = 4;
+  // User's pubkey (address) on the Base chain
+  string base_account_address = 5;
+  // User's pubkey (address) on the Quote chain
+  string quote_account_address = 6;
+  // 'DIRECT' (default) or 'DISCRETIONARY'
+  ExecutionType execution_type = 7;
+  // When execution_type == 'discretionary', include order_ids to match with.
+  repeated uint64 matching_order_ids = 8;
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BID = 1;
+  SIDE_ASK = 2;
+}
+
+enum ExecutionType {
+  // Default - direct
+  EXECUTION_TYPE_UNSPECIFIED = 0;
+  // For dealroom use.
+  EXECUTION_TYPE_DISCRETIONARY = 1;
+}
+
+// The actual state of an order in the matching engine
+enum OrderState {
+  ORDER_STATE_UNSPECIFIED = 0;
+  // Order submitted, funds locked on-chain, shows in orderbook but NOT matchable
+  ORDER_STATE_PENDING = 1;
+  // OrderOpen blockchain event received, order is now matchable
+  ORDER_STATE_CONFIRMED = 2;
+  // Order matched by matching engine, trade recorded
+  ORDER_STATE_MATCHED = 3;
+  // Order canceled
+  ORDER_STATE_CANCELED = 4;
+  // On-chain settlement completed successfully
+  ORDER_STATE_SETTLED = 5;
+}
+
+message Trade {
+  // When the engine registers this executed trade
+  uint64 timestamp = 1;
+  // The setttled price net of fees
+  string price = 2;
+  // How much or many of the quote token
+  string qty = 3;
+  // Maker's internal trader id. Safely ignore.
+  string maker_id = 4;
+  // Taker's internal trader id. Safely ignore.
+  string taker_id = 5;
+  // The maker's base chain wallet address
+  string maker_base_address = 6;
+  // The maker's quote chain wallet address
+  string maker_quote_address = 7;
+  // The taker's base chain wallet address
+  string taker_base_address = 8;
+  // The taker's quote chain wallet address
+  string taker_quote_address = 9;
+  // Who is the buyer in this trade (MAKER or TAKER)
+  TradeRole buyer_is = 10;
+  // Who is the seller in this trade (MAKER or TAKER)
+  TradeRole seller_is = 11;
+  // The order_id that created this trade.
+  uint64 order_hit = 12;
+}
+
+enum TradeRole {
+  TRADE_ROLE_UNSPECIFIED = 0;
+  MAKER = 1;
+  TAKER = 2;
+}
+
+/* Transaction hash information */
+message TransactionHash {
+  // Type of transaction hash
+  string hash_type = 1;
+  // The transaction hash value
+  string hash_value = 2;
+}
+
+/* rpc: SendOrder */
+message SendOrderResponse {
+  // Whether the order has unmatched volume and has been added to the book.
+  bool order_in_book = 1;
+  // If the order lands in the book, what remains unfilled from the order.
+  optional Order order = 2;
+  // Which other orders, if any, this order was matched with.
+  repeated Trade trades = 3;
+  // Transaction hashes associated with this order
+  repeated TransactionHash transaction_hashes = 4;
+  // Current state of the orderbook after this operation
+  repeated OrderbookEntry current_orderbook = 5;
+}
+
+/* rpc: CancelOrder */
+message OrderToCancel {
+  // Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
+  string market_id = 1;
+  // 'BID' or 'ASK'
+  Side side = 2;
+  // the token address
+  string token_address = 3;
+  // Internal order Id.
+  uint64 order_id = 4;
+}
+
+
+/* rpc: Orderbook */
+message OrderbookEntry {
+  // when the order first landed in The Orderbook
+  uint64 timestamp = 1;
+  // internal id of the order
+  uint64 order_id = 2;
+  // price of the order - in non-decimal form
+  string price = 3;
+  // quantity of the order - in non-decimal form
+  string quantity = 4;
+  // 'BID = 1' or 'ASK = 2'
+  Side side = 5;
+  // The maker's base chain wallet address
+  string maker_base_address = 6;
+  // The maker's quote chain wallet address
+  string maker_quote_address = 7;
+  // The market ID this order belongs to
+  string market_id = 8;
+  // The actual state of the order (Pending, Confirmed, Matched, Canceled, Settled)
+  OrderState state = 9;
+}
+
+// Request to set a new orderbook
+message SetOrderbookRequest {
+  // The market ID to set the orderbook for
+  string market_id = 1;
+  // The number of decimal places for the orderbook
+  int32 decimal_places = 2;
+}
+
+// Response for setting a new orderbook
+message SetOrderbookResponse {
+  // Whether the orderbook was set successfully
+  bool success = 1;
+  // The market ID of the created orderbook
+  string market_id = 2;
+}
+
+// Request to remove an orderbook
+message RemoveOrderbookRequest {
+  // The market ID to remove the orderbook for
+  string market_id = 1;
+}
+
+// Response for removing an orderbook
+message RemoveOrderbookResponse {
+  // Whether the orderbook was removed successfully
+  bool success = 1;
+  // The market ID of the removed orderbook
+  string market_id = 2;
+}
+
+// Converts a value in pair decimals to the correct token decimals for a given market and side
+message UnNormalizeDecimalsRequest {
+  string market_id = 1;
+  string side = 2; // "buy" or "sell"
+  string quantity = 3; // in pair decimals
+  string price = 4;    // in pair decimals
+}
+
+message UnNormalizeDecimalsResponse {
+  string base_token_quantity = 1; // in base token decimals
+  string quote_token_quantity = 2; // in quote token decimals
+  uint32 base_token_decimals = 3;
+  uint32 quote_token_decimals = 4;
+  uint32 pair_decimals = 5;
+}
+
+// Request to get signer public key(s)
+message GetSignerPublicKeyRequest {
+  // Optional: Request specific chain_id
+  // If omitted, returns all chains
+  optional uint32 chain_id = 1;
+}
+
+// Single chain's public key information
+message ChainPublicKey {
+  // The chain ID
+  uint32 chain_id = 1;
+  // The chain network name (e.g., "anvil-1", "base-sepolia")
+  string chain_network = 2;
+  // The signer's public key (address) for this chain
+  string public_key = 3;
+}
+
+// Response with public keys per chain
+message GetSignerPublicKeyResponse {
+  // Map of chain_id to public key info
+  map<uint32, ChainPublicKey> chain_keys = 1;
+}
