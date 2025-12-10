@@ -4,6 +4,17 @@
 //! All commands (except `get_version`) require a valid JWT token obtained
 //! from the authentication service.
 
+use alloy_sol_types::sol;
+
+// MidribFactory contract for deploying trading instances
+sol!(
+    #[derive(Debug)]
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    MidribFactory,
+    "artifacts/MidribFactory.json"
+);
+
 pub mod config_pb {
     pub use crate::commands::config::config_pb::*;
 }
@@ -67,18 +78,89 @@ pub async fn update_admin(
 /// * `url` - The Aspens stack gRPC URL
 /// * `jwt` - Valid JWT token
 /// * `chain_network` - Network name (e.g., "base-sepolia")
+/// * `signed_tx` - RLP-encoded signed transaction bytes
 pub async fn deploy_contract(
     url: String,
     jwt: String,
     chain_network: String,
+    signed_tx: Vec<u8>,
 ) -> Result<DeployContractResponse> {
     let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
-    let request = authenticated_request(&jwt, DeployContractRequest { chain_network });
+    let request = authenticated_request(
+        &jwt,
+        DeployContractRequest {
+            chain_network,
+            signed_tx,
+        },
+    );
     let response = client.deploy_contract(request).await?;
 
     Ok(response.into_inner())
+}
+
+/// Parameters for building a createInstance transaction
+#[derive(Debug, Clone)]
+pub struct CreateInstanceParams {
+    /// The factory contract address on the target chain
+    pub factory_address: String,
+    /// The trading instance signer address
+    pub instance_signer_address: String,
+    /// Fee percentage (uint16: 0-65535)
+    pub fees: u16,
+    /// The RPC URL for the target chain
+    pub rpc_url: String,
+    /// The chain ID
+    pub chain_id: u64,
+    /// The private key for signing (hex string without 0x prefix)
+    pub privkey: String,
+}
+
+/// Build and sign a createInstance transaction for deploying a trading instance
+///
+/// This creates a signed transaction that can be sent to the backend for broadcasting.
+/// The transaction calls `createInstance(address _tradingInstanceSigner, uint16 _fees)`
+/// on the MidribFactory contract.
+///
+/// # Arguments
+/// * `params` - Parameters for building the transaction
+///
+/// # Returns
+/// The RLP-encoded signed transaction bytes
+pub async fn build_create_instance_tx(params: CreateInstanceParams) -> Result<Vec<u8>> {
+    use alloy::network::EthereumWallet;
+    use alloy::primitives::Address;
+    use alloy::providers::ProviderBuilder;
+    use alloy::signers::local::PrivateKeySigner;
+    use url::Url;
+
+    // Parse addresses
+    let factory_addr: Address = params.factory_address.parse()?;
+    let signer_addr: Address = params.instance_signer_address.parse()?;
+
+    // Set up the signer
+    let signer: PrivateKeySigner = params.privkey.parse()?;
+    let wallet = EthereumWallet::new(signer.clone());
+
+    // Set up the provider
+    let rpc_url = Url::parse(&params.rpc_url)?;
+    let provider = ProviderBuilder::new()
+        .with_chain_id(params.chain_id)
+        .wallet(wallet)
+        .connect_http(rpc_url);
+
+    // Create the contract instance
+    let factory = MidribFactory::new(factory_addr, &provider);
+
+    // Build the createInstance call
+    let tx_builder = factory.createInstance(signer_addr, params.fees);
+
+    // Build and sign the transaction without broadcasting
+    // build_raw_transaction takes a signer and returns the RLP-encoded signed tx bytes
+    let signed_tx_bytes = tx_builder.build_raw_transaction(signer).await?;
+
+    Ok(signed_tx_bytes)
 }
 
 /// Set a trade contract on a chain (requires auth)

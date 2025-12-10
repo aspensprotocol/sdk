@@ -16,6 +16,11 @@ pub struct DeployContractRequest {
     /// The name of the chain to deploy the instance on. e.g. base-sepolia
     #[prost(string, tag = "1")]
     pub chain_network: ::prost::alloc::string::String,
+    /// The signed transaction bytes (RLP encoded) to broadcast for contract deployment.
+    /// The transaction should call createInstance on the MidribFactory contract.
+    /// The admin signs this transaction externally and submits it here for broadcasting.
+    #[prost(bytes = "vec", tag = "2")]
+    pub signed_tx: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeployContractResponse {
