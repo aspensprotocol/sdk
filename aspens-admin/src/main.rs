@@ -3,7 +3,7 @@
 //! Administrative command-line interface for managing Aspens Market Stacks  configuration.
 //! Requires authentication via EIP-712 signature to perform admin operations.
 
-use aspens::commands::admin::{self, Chain, SetMarketParams, Token};
+use aspens::commands::admin::{self, Chain, CreateInstanceParams, SetMarketParams, Token};
 use aspens::commands::auth;
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use chrono::{DateTime, Utc};
@@ -445,6 +445,11 @@ enum Commands {
     DeployContract {
         /// Network to deploy on (e.g., "base-sepolia")
         network: String,
+
+        /// Fee percentage for the trading instance (uint16: 0-65535)
+        /// Represents the fee in basis points (e.g., 100 = 1%)
+        #[arg(long, default_value = "0")]
+        fees: u16,
     },
 
     /// Set a trade contract on a chain
@@ -865,14 +870,94 @@ async fn run() -> Result<()> {
         // ====================================================================
         // Contract Commands
         // ====================================================================
-        Commands::DeployContract { network } => {
+        Commands::DeployContract { network, fees } => {
             let jwt = get_jwt()?;
-            info!("Deploying trade contract on: {}", network);
+
+            // Get the admin private key for signing the transaction
+            let privkey = client.get_env("ADMIN_PRIVKEY").ok_or_else(|| {
+                eyre::eyre!(
+                    "ADMIN_PRIVKEY not found\n\n\
+                     This command requires ADMIN_PRIVKEY to sign the deployment transaction.\n\n\
+                     Hints:\n\
+                     - Set ADMIN_PRIVKEY in your .env file\n\
+                     - The private key should be a 64-character hex string (without 0x prefix)\n\
+                     - This wallet will pay the gas fees for the deployment"
+                )
+            })?;
+
+            info!("Fetching chain configuration for: {}", network);
+
+            // First, fetch the chain configuration to get factory address and instance signer
+            let config = executor
+                .execute(aspens::commands::config::get_config(stack_url.clone()))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("fetch configuration for '{}'", network)
+                    ))
+                })?;
+
+            let chain = config.get_chain(&network).ok_or_else(|| {
+                let available_chains = config
+                    .config
+                    .as_ref()
+                    .map(|c| {
+                        c.chains
+                            .iter()
+                            .map(|ch| ch.network.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                eyre::eyre!(
+                    "Chain '{}' not found in configuration\n\n\
+                     Available chains: {}\n\n\
+                     Hints:\n\
+                     - Use 'aspens-admin set-chain' to add the chain first",
+                    network,
+                    available_chains
+                )
+            })?;
+
+            info!(
+                "Building createInstance transaction for factory: {}",
+                chain.factory_address
+            );
+            info!("  Instance signer: {}", chain.instance_signer_address);
+            info!("  Fees: {}", fees);
+            info!("  Chain ID: {}", chain.chain_id);
+
+            // Build and sign the createInstance transaction
+            let params = CreateInstanceParams {
+                factory_address: chain.factory_address.clone(),
+                instance_signer_address: chain.instance_signer_address.clone(),
+                fees,
+                rpc_url: chain.rpc_url.clone(),
+                chain_id: chain.chain_id as u64,
+                privkey: privkey.clone(),
+            };
+
+            let signed_tx = executor
+                .execute(admin::build_create_instance_tx(params))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("build createInstance transaction for '{}'", network)
+                    ))
+                })?;
+
+            info!(
+                "Transaction signed ({} bytes), sending to backend for broadcast...",
+                signed_tx.len()
+            );
+
+            // Send the signed transaction to the backend
             let result = executor
                 .execute(admin::deploy_contract(
                     stack_url.clone(),
                     jwt,
                     network.clone(),
+                    signed_tx,
                 ))
                 .map_err(|e| {
                     eyre::eyre!(format_error(
