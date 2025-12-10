@@ -703,7 +703,10 @@ async fn run() -> Result<()> {
                 executor
                     .execute(config::download_config(stack_url.clone(), path.clone()))
                     .map_err(|e| {
-                        eyre::eyre!(format_error(&e, &format!("save configuration to '{}'", path)))
+                        eyre::eyre!(format_error(
+                            &e,
+                            &format!("save configuration to '{}'", path)
+                        ))
                     })?;
                 info!("Configuration saved to: {}", path);
             } else {

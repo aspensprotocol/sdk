@@ -815,7 +815,9 @@ async fn run() -> Result<()> {
 
             let result = executor
                 .execute(admin::set_market(stack_url.clone(), jwt, params))
-                .map_err(|e| eyre::eyre!(format_error(&e, &format!("set market '{}'", market_name))))?;
+                .map_err(|e| {
+                    eyre::eyre!(format_error(&e, &format!("set market '{}'", market_name)))
+                })?;
             if result.success {
                 println!("Market '{}' set successfully!", market_name);
             } else {

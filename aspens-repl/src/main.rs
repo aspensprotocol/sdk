@@ -421,9 +421,14 @@ fn main() {
                 Ok(config) => {
                     // If output_file is provided, save to file
                     if let Some(ref path) = output_file {
-                        match executor.execute(config::download_config(stack_url.clone(), path.clone())) {
+                        match executor
+                            .execute(config::download_config(stack_url.clone(), path.clone()))
+                        {
                             Ok(_) => info!("Configuration saved to: {}", path),
-                            Err(e) => print_error(&format_error(&e, &format!("save configuration to '{}'", path))),
+                            Err(e) => print_error(&format_error(
+                                &e,
+                                &format!("save configuration to '{}'", path),
+                            )),
                         }
                     } else {
                         // Display config as JSON
@@ -602,7 +607,10 @@ fn main() {
                 }
                 Err(e) => print_error(&format_error(
                     &e,
-                    &format!("send limit buy order for {} at {} on {}", amount, price, market),
+                    &format!(
+                        "send limit buy order for {} at {} on {}",
+                        amount, price, market
+                    ),
                 )),
             }
         }
@@ -696,7 +704,10 @@ fn main() {
                 }
                 Err(e) => print_error(&format_error(
                     &e,
-                    &format!("send limit sell order for {} at {} on {}", amount, price, market),
+                    &format!(
+                        "send limit sell order for {} at {} on {}",
+                        amount, price, market
+                    ),
                 )),
             }
         }
