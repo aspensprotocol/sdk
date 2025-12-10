@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use eyre::Result;
 use std::collections::HashMap;
+use std::process::ExitCode;
 use tracing::info;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::FmtSubscriber;
@@ -20,6 +21,236 @@ fn format_expiry(timestamp: u64) -> String {
     DateTime::<Utc>::from_timestamp(timestamp as i64, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| format!("{} (invalid timestamp)", timestamp))
+}
+
+/// Analyze an error and return a user-friendly message with hints
+fn format_error(err: &eyre::Report, context: &str) -> String {
+    let err_string = err.to_string().to_lowercase();
+    let root_cause = err.root_cause().to_string().to_lowercase();
+
+    // Connection errors
+    if err_string.contains("failed to connect")
+        || err_string.contains("connection refused")
+        || root_cause.contains("connection refused")
+    {
+        return format!(
+            "Failed to {}: Could not connect to the server\n\n\
+             Possible causes:\n\
+             - The Aspens server is not running\n\
+             - The server URL is incorrect\n\
+             - A firewall is blocking the connection\n\n\
+             Hints:\n\
+             - Check that the server is running\n\
+             - Verify the stack URL with 'aspens-admin status'\n\
+             - Current URL: Check your ASPENS_MARKET_STACK_URL or --stack flag",
+            context
+        );
+    }
+
+    // DNS/hostname resolution errors
+    if err_string.contains("dns error")
+        || err_string.contains("no such host")
+        || err_string.contains("name or service not known")
+        || root_cause.contains("dns")
+    {
+        return format!(
+            "Failed to {}: Could not resolve server hostname\n\n\
+             Possible causes:\n\
+             - The server hostname is incorrect\n\
+             - DNS is not configured properly\n\
+             - No internet connection\n\n\
+             Hints:\n\
+             - Verify the stack URL is correct\n\
+             - Check your internet connection\n\
+             - Try using an IP address instead of hostname",
+            context
+        );
+    }
+
+    // TLS/SSL errors
+    if err_string.contains("tls")
+        || err_string.contains("ssl")
+        || err_string.contains("certificate")
+        || root_cause.contains("certificate")
+    {
+        return format!(
+            "Failed to {}: TLS/SSL error\n\n\
+             Possible causes:\n\
+             - The server's SSL certificate is invalid or expired\n\
+             - Certificate chain is incomplete\n\
+             - Using HTTP URL for HTTPS server or vice versa\n\n\
+             Hints:\n\
+             - Verify you're using the correct protocol (http:// vs https://)\n\
+             - Check if the server's certificate is valid\n\
+             - For local development, use http://localhost:50051",
+            context
+        );
+    }
+
+    // Authentication errors
+    if err_string.contains("unauthenticated")
+        || err_string.contains("unauthorized")
+        || err_string.contains("401")
+        || err_string.contains("invalid token")
+        || err_string.contains("token expired")
+    {
+        return format!(
+            "Failed to {}: Authentication failed\n\n\
+             Possible causes:\n\
+             - JWT token is missing, invalid, or expired\n\
+             - You don't have admin privileges\n\n\
+             Hints:\n\
+             - Run 'aspens-admin login' to get a fresh JWT token\n\
+             - Set ASPENS_JWT in your .env file or use --jwt flag\n\
+             - Verify ADMIN_PRIVKEY is set correctly",
+            context
+        );
+    }
+
+    // Not authorized as admin (specific login error)
+    if err_string.contains("not authorized as an admin")
+        || err_string.contains("address is not authorized")
+    {
+        return format!(
+            "Failed to {}: Address is not authorized as admin\n\n\
+             The wallet address derived from ADMIN_PRIVKEY is not registered as an admin\n\
+             on this Aspens server.\n\n\
+             Possible causes:\n\
+             - Using the wrong private key (not the admin wallet)\n\
+             - The admin address was changed on the server\n\
+             - This is a fresh server and admin hasn't been initialized\n\n\
+             Hints:\n\
+             - Run 'aspens-admin admin-public-key' to see your wallet address\n\
+             - Compare with the registered admin address on the server\n\
+             - If this is a new server, use 'aspens-admin init-admin --address <your-address>'\n\
+             - Check that ADMIN_PRIVKEY in .env matches the expected admin wallet",
+            context
+        );
+    }
+
+    // Permission errors
+    if err_string.contains("permission denied")
+        || err_string.contains("forbidden")
+        || err_string.contains("403")
+    {
+        return format!(
+            "Failed to {}: Permission denied\n\n\
+             Possible causes:\n\
+             - Your account doesn't have admin privileges\n\
+             - The operation requires a different permission level\n\n\
+             Hints:\n\
+             - Verify you are using the correct admin wallet\n\
+             - Contact the system administrator",
+            context
+        );
+    }
+
+    // Already exists errors
+    if err_string.contains("already exists") || err_string.contains("duplicate") {
+        return format!(
+            "Failed to {}: Resource already exists\n\n\
+             Hints:\n\
+             - Use the appropriate delete command first if you want to replace it\n\
+             - Check existing configuration with the config command",
+            context
+        );
+    }
+
+    // Not found errors
+    if err_string.contains("not found") || err_string.contains("404") {
+        return format!(
+            "Failed to {}: Resource not found\n\n\
+             Hints:\n\
+             - Verify the resource name/ID is correct\n\
+             - Check existing configuration with the config command\n\
+             - The resource may have been deleted",
+            context
+        );
+    }
+
+    // Admin already initialized
+    if err_string.contains("admin already") || err_string.contains("already initialized") {
+        return format!(
+            "Failed to {}: Admin has already been initialized\n\n\
+             Hints:\n\
+             - Use 'aspens-admin login' to authenticate with the existing admin\n\
+             - Use 'aspens-admin update-admin' to change the admin address (requires auth)",
+            context
+        );
+    }
+
+    // Invalid address format
+    if err_string.contains("invalid address") || err_string.contains("invalid checksum") {
+        return format!(
+            "Failed to {}: Invalid Ethereum address format\n\n\
+             Hints:\n\
+             - Ensure the address starts with '0x'\n\
+             - Verify the address is 42 characters long (including '0x')\n\
+             - Use a checksummed address format",
+            context
+        );
+    }
+
+    // Private key errors
+    if err_string.contains("invalid private key")
+        || err_string.contains("privkey")
+        || err_string.contains("secret key")
+    {
+        return format!(
+            "Failed to {}: Invalid private key\n\n\
+             Hints:\n\
+             - Ensure ADMIN_PRIVKEY is set correctly in your .env file\n\
+             - The private key should be a 64-character hex string\n\
+             - Do not include the '0x' prefix for private keys",
+            context
+        );
+    }
+
+    // Timeout errors
+    if err_string.contains("timeout") || err_string.contains("timed out") {
+        return format!(
+            "Failed to {}: Request timed out\n\n\
+             Possible causes:\n\
+             - The server is overloaded or unresponsive\n\
+             - Network latency is too high\n\
+             - The operation is taking longer than expected\n\n\
+             Hints:\n\
+             - Try again in a few moments\n\
+             - Check server status with 'aspens-admin status'\n\
+             - Verify network connectivity",
+            context
+        );
+    }
+
+    // Protocol/compression errors (like the original issue)
+    if err_string.contains("compression flag")
+        || err_string.contains("protocol error")
+        || err_string.contains("invalid compression")
+    {
+        return format!(
+            "Failed to {}: Protocol mismatch\n\n\
+             Possible causes:\n\
+             - Using HTTP to connect to an HTTPS server\n\
+             - Using HTTPS to connect to an HTTP server\n\
+             - The server is not a gRPC endpoint\n\n\
+             Hints:\n\
+             - Check if the URL uses the correct protocol (http:// vs https://)\n\
+             - For remote servers, use https://\n\
+             - For local development, use http://",
+            context
+        );
+    }
+
+    // Generic fallback with the original error
+    format!(
+        "Failed to {}\n\n\
+         Error: {}\n\n\
+         Hints:\n\
+         - Check server status with 'aspens-admin status'\n\
+         - Verify your configuration in .env file\n\
+         - Use -v flag for more detailed output",
+        context, err
+    )
 }
 
 #[derive(Debug, Parser)]
@@ -241,10 +472,23 @@ enum Commands {
 
     /// Show current configuration and connection status
     Status,
+
+    /// Get the public key and address for the admin wallet (from ADMIN_PRIVKEY)
+    AdminPublicKey,
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     // Configure log level - convert from clap-verbosity's log::LevelFilter to tracing's LevelFilter
@@ -269,7 +513,7 @@ async fn main() -> Result<()> {
     // Build the client
     let mut builder = AspensClient::builder();
 
-    if let Some(url) = cli.stack_url {
+    if let Some(ref url) = cli.stack_url {
         builder = builder.with_url(url.to_string())?;
     }
 
@@ -284,7 +528,11 @@ async fn main() -> Result<()> {
             .or_else(|| client.get_env("ASPENS_JWT").cloned())
             .ok_or_else(|| {
                 eyre::eyre!(
-                    "JWT token required. Use --jwt flag, set ASPENS_JWT in .env, or run 'aspens-admin login' first"
+                    "JWT token required\n\n\
+                     Hints:\n\
+                     - Run 'aspens-admin login' to authenticate and get a JWT token\n\
+                     - Set ASPENS_JWT in your .env file\n\
+                     - Use the --jwt flag to provide a token directly"
                 )
             })
     };
@@ -295,7 +543,9 @@ async fn main() -> Result<()> {
         // ====================================================================
         Commands::InitAdmin { address } => {
             info!("Initializing admin with address: {}", address);
-            let result = executor.execute(auth::initialize_admin(stack_url, address))?;
+            let result = executor
+                .execute(auth::initialize_admin(stack_url, address))
+                .map_err(|e| eyre::eyre!(format_error(&e, "initialize admin")))?;
             println!("Admin initialized successfully!");
             println!("JWT Token: {}", result.jwt_token);
             println!("Expires at: {}", format_expiry(result.expires_at));
@@ -304,17 +554,55 @@ async fn main() -> Result<()> {
         }
 
         Commands::Login { chain_id } => {
-            let privkey = client
-                .get_env("ADMIN_PRIVKEY")
-                .ok_or_else(|| eyre::eyre!("ADMIN_PRIVKEY not found in environment"))?
-                .clone();
+            use alloy::signers::local::PrivateKeySigner;
+
+            let privkey = client.get_env("ADMIN_PRIVKEY").ok_or_else(|| {
+                eyre::eyre!(
+                    "ADMIN_PRIVKEY not found\n\n\
+                     Hints:\n\
+                     - Set ADMIN_PRIVKEY in your .env file\n\
+                     - The private key should be a 64-character hex string (without 0x prefix)\n\
+                     - This should be the private key for the admin wallet"
+                )
+            })?;
+
+            // Parse the private key to show the derived address
+            let signer: PrivateKeySigner = privkey.parse().map_err(|e| {
+                eyre::eyre!(
+                    "Invalid ADMIN_PRIVKEY format\n\n\
+                     Error: {}\n\n\
+                     Hints:\n\
+                     - The private key should be a 64-character hex string\n\
+                     - Do not include the '0x' prefix\n\
+                     - Check for extra whitespace or newlines",
+                    e
+                )
+            })?;
+            let address = signer.address();
 
             info!("Authenticating with EIP-712 signature...");
-            let result = executor.execute(auth::authenticate_with_signature(
-                stack_url.clone(),
-                privkey,
-                Some(chain_id),
-            ))?;
+            info!("  Wallet address: {}", address);
+
+            let result = executor
+                .execute(auth::authenticate_with_signature(
+                    stack_url.clone(),
+                    privkey.clone(),
+                    Some(chain_id),
+                ))
+                .map_err(|e| {
+                    // Include the address in the error context for better debugging
+                    let err_msg = format_error(&e, "authenticate");
+                    if err_msg.contains("not authorized as admin") {
+                        eyre::eyre!(
+                            "{}\n\n\
+                             Your wallet address: {}",
+                            err_msg,
+                            address
+                        )
+                    } else {
+                        eyre::eyre!(err_msg)
+                    }
+                })?;
 
             println!("Authentication successful!");
             println!("JWT Token: {}", result.jwt_token);
@@ -330,7 +618,9 @@ async fn main() -> Result<()> {
         Commands::UpdateAdmin { address } => {
             let jwt = get_jwt()?;
             info!("Updating admin to: {}", address);
-            let result = executor.execute(admin::update_admin(stack_url.clone(), jwt, address))?;
+            let result = executor
+                .execute(admin::update_admin(stack_url.clone(), jwt, address))
+                .map_err(|e| eyre::eyre!(format_error(&e, "update admin")))?;
             println!("Admin updated successfully to: {}", result.admin_address);
         }
 
@@ -365,23 +655,43 @@ async fn main() -> Result<()> {
                 tokens: HashMap::new(),
             };
 
-            let result = executor.execute(admin::set_chain(stack_url.clone(), jwt, chain))?;
+            let result = executor
+                .execute(admin::set_chain(stack_url.clone(), jwt, chain))
+                .map_err(|e| eyre::eyre!(format_error(&e, &format!("set chain '{}'", network))))?;
             if result.success {
                 println!("Chain '{}' set successfully!", network);
             } else {
-                println!("Failed to set chain");
+                return Err(eyre::eyre!(
+                    "Failed to set chain '{}'\n\n\
+                     The server returned success=false. This may indicate:\n\
+                     - Invalid chain configuration\n\
+                     - A conflict with existing configuration\n\n\
+                     Hints:\n\
+                     - Check the server logs for more details\n\
+                     - Verify all chain parameters are correct",
+                    network
+                ));
             }
         }
 
         Commands::DeleteChain { network } => {
             let jwt = get_jwt()?;
             info!("Deleting chain: {}", network);
-            let result =
-                executor.execute(admin::delete_chain(stack_url.clone(), jwt, network.clone()))?;
+            let result = executor
+                .execute(admin::delete_chain(stack_url.clone(), jwt, network.clone()))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(&e, &format!("delete chain '{}'", network)))
+                })?;
             if result.success {
                 println!("Chain '{}' deleted successfully!", network);
             } else {
-                println!("Failed to delete chain");
+                return Err(eyre::eyre!(
+                    "Failed to delete chain '{}'\n\n\
+                     Hints:\n\
+                     - Verify the chain network name is correct\n\
+                     - The chain may not exist or may have dependent resources",
+                    network
+                ));
             }
         }
 
@@ -407,35 +717,66 @@ async fn main() -> Result<()> {
                 decimals,
             };
 
-            let result = executor.execute(admin::set_token(
-                stack_url.clone(),
-                jwt,
-                network.clone(),
-                token,
-            ))?;
+            let result = executor
+                .execute(admin::set_token(
+                    stack_url.clone(),
+                    jwt,
+                    network.clone(),
+                    token,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("set token '{}' on '{}'", symbol, network)
+                    ))
+                })?;
             if result.success {
                 println!("Token '{}' set on '{}' successfully!", symbol, network);
             } else {
-                println!("Failed to set token");
+                return Err(eyre::eyre!(
+                    "Failed to set token '{}' on '{}'\n\n\
+                     Hints:\n\
+                     - Verify the chain '{}' exists\n\
+                     - Check the token address is valid\n\
+                     - Ensure decimals value is correct for this token",
+                    symbol,
+                    network,
+                    network
+                ));
             }
         }
 
         Commands::DeleteToken { network, symbol } => {
             let jwt = get_jwt()?;
             info!("Deleting token {} from {}", symbol, network);
-            let result = executor.execute(admin::delete_token(
-                stack_url.clone(),
-                jwt,
-                network.clone(),
-                symbol.clone(),
-            ))?;
+            let result = executor
+                .execute(admin::delete_token(
+                    stack_url.clone(),
+                    jwt,
+                    network.clone(),
+                    symbol.clone(),
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("delete token '{}' from '{}'", symbol, network)
+                    ))
+                })?;
             if result.success {
                 println!(
                     "Token '{}' deleted from '{}' successfully!",
                     symbol, network
                 );
             } else {
-                println!("Failed to delete token");
+                return Err(eyre::eyre!(
+                    "Failed to delete token '{}' from '{}'\n\n\
+                     Hints:\n\
+                     - Verify the token symbol is correct\n\
+                     - Check that the token exists on this chain\n\
+                     - The token may be used by active markets",
+                    symbol,
+                    network
+                ));
             }
         }
 
@@ -454,14 +795,15 @@ async fn main() -> Result<()> {
             pair_decimals,
         } => {
             let jwt = get_jwt()?;
+            let market_name = format!("{}/{}", base_symbol, quote_symbol);
             info!(
-                "Setting market: {}/{} ({}/{})",
-                base_symbol, quote_symbol, base_network, quote_network
+                "Setting market: {} ({}/{})",
+                market_name, base_network, quote_network
             );
 
             let params = SetMarketParams {
-                base_chain_network: base_network,
-                quote_chain_network: quote_network,
+                base_chain_network: base_network.clone(),
+                quote_chain_network: quote_network.clone(),
                 base_chain_token_symbol: base_symbol.clone(),
                 quote_chain_token_symbol: quote_symbol.clone(),
                 base_chain_token_address: base_address,
@@ -471,29 +813,52 @@ async fn main() -> Result<()> {
                 pair_decimals,
             };
 
-            let result = executor.execute(admin::set_market(stack_url.clone(), jwt, params))?;
+            let result = executor
+                .execute(admin::set_market(stack_url.clone(), jwt, params))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(&e, &format!("set market '{}'", market_name)))
+                })?;
             if result.success {
-                println!(
-                    "Market '{}/{}' set successfully!",
-                    base_symbol, quote_symbol
-                );
+                println!("Market '{}' set successfully!", market_name);
             } else {
-                println!("Failed to set market");
+                return Err(eyre::eyre!(
+                    "Failed to set market '{}'\n\n\
+                     Hints:\n\
+                     - Verify both chains '{}' and '{}' exist\n\
+                     - Check that tokens '{}' and '{}' are configured on their respective chains\n\
+                     - Ensure token addresses and decimals are correct",
+                    market_name,
+                    base_network,
+                    quote_network,
+                    base_symbol,
+                    quote_symbol
+                ));
             }
         }
 
         Commands::DeleteMarket { market_id } => {
             let jwt = get_jwt()?;
             info!("Deleting market: {}", market_id);
-            let result = executor.execute(admin::delete_market(
-                stack_url.clone(),
-                jwt,
-                market_id.clone(),
-            ))?;
+            let result = executor
+                .execute(admin::delete_market(
+                    stack_url.clone(),
+                    jwt,
+                    market_id.clone(),
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(&e, &format!("delete market '{}'", market_id)))
+                })?;
             if result.success {
                 println!("Market '{}' deleted successfully!", market_id);
             } else {
-                println!("Failed to delete market");
+                return Err(eyre::eyre!(
+                    "Failed to delete market '{}'\n\n\
+                     Hints:\n\
+                     - Verify the market ID is correct\n\
+                     - Check existing markets with the config command\n\
+                     - The market may have active orders",
+                    market_id
+                ));
             }
         }
 
@@ -503,20 +868,37 @@ async fn main() -> Result<()> {
         Commands::DeployContract { network } => {
             let jwt = get_jwt()?;
             info!("Deploying trade contract on: {}", network);
-            let result =
-                executor.execute(admin::deploy_contract(stack_url.clone(), jwt, network))?;
+            let result = executor
+                .execute(admin::deploy_contract(
+                    stack_url.clone(),
+                    jwt,
+                    network.clone(),
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("deploy contract on '{}'", network)
+                    ))
+                })?;
             println!("Trade contract deployed at: {}", result.contract_address);
         }
 
         Commands::SetTradeContract { address, chain_id } => {
             let jwt = get_jwt()?;
             info!("Setting trade contract {} on chain {}", address, chain_id);
-            let result = executor.execute(admin::set_trade_contract(
-                stack_url.clone(),
-                jwt,
-                address,
-                chain_id,
-            ))?;
+            let result = executor
+                .execute(admin::set_trade_contract(
+                    stack_url.clone(),
+                    jwt,
+                    address.clone(),
+                    chain_id,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("set trade contract on chain {}", chain_id)
+                    ))
+                })?;
             if let Some(tc) = result.trade_contract {
                 println!("Trade contract set: {}", tc.address);
             } else {
@@ -527,18 +909,32 @@ async fn main() -> Result<()> {
         Commands::DeleteTradeContract { chain_id } => {
             let jwt = get_jwt()?;
             info!("Deleting trade contract from chain {}", chain_id);
-            let result = executor.execute(admin::delete_trade_contract(
-                stack_url.clone(),
-                jwt,
-                chain_id,
-            ))?;
+            let result = executor
+                .execute(admin::delete_trade_contract(
+                    stack_url.clone(),
+                    jwt,
+                    chain_id,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("delete trade contract from chain {}", chain_id)
+                    ))
+                })?;
             if result.success {
                 println!(
                     "Trade contract deleted from chain {} successfully!",
                     chain_id
                 );
             } else {
-                println!("Failed to delete trade contract");
+                return Err(eyre::eyre!(
+                    "Failed to delete trade contract from chain {}\n\n\
+                     Hints:\n\
+                     - Verify the chain ID is correct\n\
+                     - Check that a trade contract exists on this chain\n\
+                     - The contract may have active trades",
+                    chain_id
+                ));
             }
         }
 
@@ -546,7 +942,9 @@ async fn main() -> Result<()> {
         // Info Commands
         // ====================================================================
         Commands::Version => {
-            let version = executor.execute(admin::get_version(stack_url.clone()))?;
+            let version = executor
+                .execute(admin::get_version(stack_url.clone()))
+                .map_err(|e| eyre::eyre!(format_error(&e, "get server version")))?;
             println!("Server Version Information:");
             println!("  Version: {}", version.version);
             println!("  Git Commit: {}", version.git_commit_hash);
@@ -561,26 +959,103 @@ async fn main() -> Result<()> {
         }
 
         Commands::Status => {
-            info!("Configuration Status:");
-            info!("  Stack URL: {}", client.stack_url());
+            println!("Configuration Status:");
+            println!("  Stack URL: {}", client.stack_url());
 
             // Ping the gRPC server
             let ping_result = executor.execute(aspens::health::ping_grpc_server(
                 client.stack_url().to_string(),
             ));
             if ping_result.success {
-                info!(
+                println!(
                     "  Connection: OK ({}ms)",
                     ping_result.latency_ms.unwrap_or(0)
                 );
             } else {
-                info!(
-                    "  Connection: FAILED - {}",
-                    ping_result
-                        .error
-                        .unwrap_or_else(|| "Unknown error".to_string())
-                );
+                let error_msg = ping_result
+                    .error
+                    .unwrap_or_else(|| "Unknown error".to_string());
+
+                // Provide friendly hints based on the error
+                println!("  Connection: FAILED");
+                println!();
+
+                if error_msg.contains("Connection refused") {
+                    println!("Could not connect to the server.");
+                    println!();
+                    println!("Possible causes:");
+                    println!("  - The Aspens server is not running");
+                    println!("  - The server URL is incorrect");
+                    println!("  - A firewall is blocking the connection");
+                } else if error_msg.contains("dns") || error_msg.contains("resolve") {
+                    println!("Could not resolve the server hostname.");
+                    println!();
+                    println!("Possible causes:");
+                    println!("  - The hostname is incorrect");
+                    println!("  - DNS is not configured properly");
+                    println!("  - No internet connection");
+                } else if error_msg.contains("tls")
+                    || error_msg.contains("ssl")
+                    || error_msg.contains("certificate")
+                {
+                    println!("TLS/SSL error: {}", error_msg);
+                    println!();
+                    println!("Possible causes:");
+                    println!("  - Using wrong protocol (http vs https)");
+                    println!("  - Server certificate is invalid");
+                } else if error_msg.contains("timeout") {
+                    println!("Connection timed out.");
+                    println!();
+                    println!("Possible causes:");
+                    println!("  - Server is overloaded or unresponsive");
+                    println!("  - Network latency is too high");
+                } else {
+                    println!("Error: {}", error_msg);
+                }
+
+                println!();
+                println!("Hints:");
+                println!("  - Verify ASPENS_MARKET_STACK_URL in your .env file");
+                println!("  - Use --stack flag to specify a different URL");
+                println!("  - For local: http://localhost:50051");
+                println!("  - For remote: https://your-server:50051");
             }
+        }
+
+        Commands::AdminPublicKey => {
+            use alloy::signers::local::PrivateKeySigner;
+
+            let privkey = client.get_env("ADMIN_PRIVKEY").ok_or_else(|| {
+                eyre::eyre!(
+                    "ADMIN_PRIVKEY not found\n\n\
+                     Hints:\n\
+                     - Set ADMIN_PRIVKEY in your .env file\n\
+                     - The private key should be a 64-character hex string (without 0x prefix)\n\
+                     - This should be the private key for the admin wallet"
+                )
+            })?;
+
+            let signer: PrivateKeySigner = privkey.parse().map_err(|e| {
+                eyre::eyre!(
+                    "Invalid ADMIN_PRIVKEY format\n\n\
+                     Error: {}\n\n\
+                     Hints:\n\
+                     - The private key should be a 64-character hex string\n\
+                     - Do not include the '0x' prefix\n\
+                     - Check for extra whitespace or newlines",
+                    e
+                )
+            })?;
+
+            let address = signer.address();
+            let pubkey = signer.credential().verifying_key();
+
+            println!("Admin Wallet:");
+            println!("  Address:    {}", address);
+            println!(
+                "  Public Key: 0x{}",
+                hex::encode(pubkey.to_encoded_point(false).as_bytes())
+            );
         }
     }
 

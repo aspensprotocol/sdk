@@ -2,9 +2,214 @@ use aspens::commands::trading::{balance, deposit, send_order, withdraw};
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use clap::Parser;
 use eyre::Result;
+use std::process::ExitCode;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use url::Url;
+
+/// Analyze an error and return a user-friendly message with hints
+fn format_error(err: &eyre::Report, context: &str) -> String {
+    let err_string = err.to_string().to_lowercase();
+    let root_cause = err.root_cause().to_string().to_lowercase();
+
+    // Connection errors
+    if err_string.contains("failed to connect")
+        || err_string.contains("connection refused")
+        || root_cause.contains("connection refused")
+    {
+        return format!(
+            "Failed to {}: Could not connect to the server\n\n\
+             Possible causes:\n\
+             - The Aspens server is not running\n\
+             - The server URL is incorrect\n\
+             - A firewall is blocking the connection\n\n\
+             Hints:\n\
+             - Check that the server is running\n\
+             - Verify the stack URL with 'aspens-cli status'\n\
+             - Check ASPENS_MARKET_STACK_URL in your .env file",
+            context
+        );
+    }
+
+    // DNS/hostname resolution errors
+    if err_string.contains("dns error")
+        || err_string.contains("no such host")
+        || err_string.contains("name or service not known")
+        || root_cause.contains("dns")
+    {
+        return format!(
+            "Failed to {}: Could not resolve server hostname\n\n\
+             Possible causes:\n\
+             - The server hostname is incorrect\n\
+             - DNS is not configured properly\n\
+             - No internet connection\n\n\
+             Hints:\n\
+             - Verify the stack URL is correct\n\
+             - Check your internet connection\n\
+             - Try using an IP address instead of hostname",
+            context
+        );
+    }
+
+    // TLS/SSL errors
+    if err_string.contains("tls")
+        || err_string.contains("ssl")
+        || err_string.contains("certificate")
+        || root_cause.contains("certificate")
+    {
+        return format!(
+            "Failed to {}: TLS/SSL error\n\n\
+             Possible causes:\n\
+             - The server's SSL certificate is invalid or expired\n\
+             - Certificate chain is incomplete\n\
+             - Using HTTP URL for HTTPS server or vice versa\n\n\
+             Hints:\n\
+             - Verify you're using the correct protocol (http:// vs https://)\n\
+             - For local development, use http://localhost:50051\n\
+             - For remote servers, use https://",
+            context
+        );
+    }
+
+    // Protocol/compression errors (HTTP/HTTPS mismatch)
+    if err_string.contains("compression flag")
+        || err_string.contains("protocol error")
+        || err_string.contains("invalid compression")
+    {
+        return format!(
+            "Failed to {}: Protocol mismatch\n\n\
+             Possible causes:\n\
+             - Using HTTP to connect to an HTTPS server\n\
+             - Using HTTPS to connect to an HTTP server\n\
+             - The server is not a gRPC endpoint\n\n\
+             Hints:\n\
+             - For remote servers, use https://\n\
+             - For local development, use http://\n\
+             - Verify ASPENS_MARKET_STACK_URL in your .env file",
+            context
+        );
+    }
+
+    // Timeout errors
+    if err_string.contains("timeout") || err_string.contains("timed out") {
+        return format!(
+            "Failed to {}: Request timed out\n\n\
+             Possible causes:\n\
+             - The server is overloaded or unresponsive\n\
+             - Network latency is too high\n\
+             - The operation is taking longer than expected\n\n\
+             Hints:\n\
+             - Try again in a few moments\n\
+             - Check server status with 'aspens-cli status'\n\
+             - Verify network connectivity",
+            context
+        );
+    }
+
+    // Chain/network not found
+    if err_string.contains("chain not found")
+        || err_string.contains("network not found")
+        || (err_string.contains("not found") && err_string.contains("chain"))
+    {
+        return format!(
+            "Failed to {}: Chain/network not found\n\n\
+             Hints:\n\
+             - Check available chains with 'aspens-cli config'\n\
+             - Verify the network name is spelled correctly\n\
+             - The chain may not be configured on this server",
+            context
+        );
+    }
+
+    // Token not found
+    if err_string.contains("token not found")
+        || (err_string.contains("not found") && err_string.contains("token"))
+    {
+        return format!(
+            "Failed to {}: Token not found\n\n\
+             Hints:\n\
+             - Check available tokens with 'aspens-cli config'\n\
+             - Verify the token symbol is spelled correctly (case-sensitive)\n\
+             - The token may not be configured on this chain",
+            context
+        );
+    }
+
+    // Market not found
+    if err_string.contains("market not found")
+        || (err_string.contains("not found") && err_string.contains("market"))
+    {
+        return format!(
+            "Failed to {}: Market not found\n\n\
+             Hints:\n\
+             - Check available markets with 'aspens-cli config'\n\
+             - Verify the market ID is correct\n\
+             - Markets are identified by their full ID (e.g., chain_id::token::chain_id::token)",
+            context
+        );
+    }
+
+    // Insufficient balance
+    if err_string.contains("insufficient")
+        || err_string.contains("not enough")
+        || err_string.contains("balance too low")
+    {
+        return format!(
+            "Failed to {}: Insufficient balance\n\n\
+             Hints:\n\
+             - Check your balances with 'aspens-cli balance'\n\
+             - For trading: ensure you have deposited tokens first\n\
+             - For deposits: ensure your wallet has enough tokens",
+            context
+        );
+    }
+
+    // Transaction/RPC errors
+    if err_string.contains("transaction")
+        || err_string.contains("revert")
+        || err_string.contains("execution reverted")
+    {
+        return format!(
+            "Failed to {}: Transaction failed\n\n\
+             Possible causes:\n\
+             - Insufficient token balance or allowance\n\
+             - Contract execution reverted\n\
+             - Gas estimation failed\n\n\
+             Hints:\n\
+             - Check your wallet balance\n\
+             - Verify you have approved the contract to spend tokens\n\
+             - Try with a smaller amount",
+            context
+        );
+    }
+
+    // Private key errors
+    if err_string.contains("invalid private key")
+        || err_string.contains("privkey")
+        || err_string.contains("secret key")
+        || err_string.contains("hex decode")
+    {
+        return format!(
+            "Failed to {}: Invalid private key\n\n\
+             Hints:\n\
+             - Ensure TRADER_PRIVKEY is set correctly in your .env file\n\
+             - The private key should be a 64-character hex string\n\
+             - Do not include the '0x' prefix",
+            context
+        );
+    }
+
+    // Generic fallback with the original error
+    format!(
+        "Failed to {}\n\n\
+         Error: {}\n\n\
+         Hints:\n\
+         - Check server status with 'aspens-cli status'\n\
+         - Verify your configuration in .env file\n\
+         - Use -v flag for more detailed output",
+        context, err
+    )
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "aspens-cli")]
@@ -94,7 +299,17 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     // Configure log level based on verbosity flag
@@ -117,12 +332,25 @@ async fn main() -> Result<()> {
     // Build the client
     let mut builder = AspensClient::builder();
 
-    if let Some(url) = cli.stack_url {
+    if let Some(ref url) = cli.stack_url {
         builder = builder.with_url(url.to_string())?;
     }
 
     let client = builder.build()?;
     let executor = DirectExecutor;
+
+    // Helper to get trader private key with friendly error
+    let get_trader_privkey = || -> Result<String> {
+        client.get_env("TRADER_PRIVKEY").cloned().ok_or_else(|| {
+            eyre::eyre!(
+                "TRADER_PRIVKEY not found\n\n\
+                 Hints:\n\
+                 - Set TRADER_PRIVKEY in your .env file\n\
+                 - The private key should be a 64-character hex string (without 0x prefix)\n\
+                 - This should be the private key for your trading wallet"
+            )
+        })
+    };
 
     match cli.command {
         Commands::Deposit {
@@ -134,12 +362,27 @@ async fn main() -> Result<()> {
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
-            let config = executor.execute(aspens::commands::config::call_get_config(stack_url))?;
-            let privkey = client.get_env("TRADER_PRIVKEY").unwrap().clone();
+            let config = executor
+                .execute(aspens::commands::config::call_get_config(stack_url))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
-            executor.execute(deposit::call_deposit_from_config(
-                network, token, amount, privkey, config,
-            ))?;
+            let privkey = get_trader_privkey()?;
+
+            executor
+                .execute(deposit::call_deposit_from_config(
+                    network.clone(),
+                    token.clone(),
+                    amount,
+                    privkey,
+                    config,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("deposit {} {} on {}", amount, token, network)
+                    ))
+                })?;
+
             info!("Deposit was successful");
         }
         Commands::Withdraw {
@@ -151,12 +394,27 @@ async fn main() -> Result<()> {
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
-            let config = executor.execute(aspens::commands::config::call_get_config(stack_url))?;
-            let privkey = client.get_env("TRADER_PRIVKEY").unwrap().clone();
+            let config = executor
+                .execute(aspens::commands::config::call_get_config(stack_url))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
-            executor.execute(withdraw::call_withdraw_from_config(
-                network, token, amount, privkey, config,
-            ))?;
+            let privkey = get_trader_privkey()?;
+
+            executor
+                .execute(withdraw::call_withdraw_from_config(
+                    network.clone(),
+                    token.clone(),
+                    amount,
+                    privkey,
+                    config,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("withdraw {} {} from {}", amount, token, network)
+                    ))
+                })?;
+
             info!("Withdraw was successful");
         }
         Commands::BuyMarket { market, amount } => {
@@ -164,16 +422,28 @@ async fn main() -> Result<()> {
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
-            let config =
-                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
-            let privkey = client.get_env("TRADER_PRIVKEY").unwrap().clone();
+            let config = executor
+                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
-            let result = executor.execute(send_order::call_send_order_from_config(
-                stack_url, market, 1, // Buy side
-                amount, None, // No limit price (market order)
-                privkey, config,
-            ))?;
-            info!("SendOrder result: {result:?}");
+            let privkey = get_trader_privkey()?;
+
+            let result = executor
+                .execute(send_order::call_send_order_from_config(
+                    stack_url,
+                    market.clone(),
+                    1, // Buy side
+                    amount.clone(),
+                    None, // No limit price (market order)
+                    privkey,
+                    config,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("send market buy order for {} on {}", amount, market)
+                    ))
+                })?;
 
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
@@ -181,10 +451,10 @@ async fn main() -> Result<()> {
                 for formatted_hash in result.get_formatted_transaction_hashes() {
                     info!("  {}", formatted_hash);
                 }
-                info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
+                info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
 
-            info!("✓ Market buy order sent successfully");
+            info!("Market buy order sent successfully");
         }
         Commands::BuyLimit {
             market,
@@ -195,20 +465,31 @@ async fn main() -> Result<()> {
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
-            let config =
-                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
-            let privkey = client.get_env("TRADER_PRIVKEY").unwrap().clone();
+            let config = executor
+                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
-            let result = executor.execute(send_order::call_send_order_from_config(
-                stack_url,
-                market,
-                1, // Buy side
-                amount,
-                Some(price),
-                privkey,
-                config,
-            ))?;
-            info!("SendOrder result: {result:?}");
+            let privkey = get_trader_privkey()?;
+
+            let result = executor
+                .execute(send_order::call_send_order_from_config(
+                    stack_url,
+                    market.clone(),
+                    1, // Buy side
+                    amount.clone(),
+                    Some(price.clone()),
+                    privkey,
+                    config,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!(
+                            "send limit buy order for {} at {} on {}",
+                            amount, price, market
+                        )
+                    ))
+                })?;
 
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
@@ -216,26 +497,38 @@ async fn main() -> Result<()> {
                 for formatted_hash in result.get_formatted_transaction_hashes() {
                     info!("  {}", formatted_hash);
                 }
-                info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
+                info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
 
-            info!("✓ Limit buy order sent successfully");
+            info!("Limit buy order sent successfully");
         }
         Commands::SellMarket { market, amount } => {
             info!("Sending market SELL order for {amount} on market {market}");
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
-            let config =
-                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
-            let privkey = client.get_env("TRADER_PRIVKEY").unwrap().clone();
+            let config = executor
+                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
-            let result = executor.execute(send_order::call_send_order_from_config(
-                stack_url, market, 2, // Sell side
-                amount, None, // No limit price (market order)
-                privkey, config,
-            ))?;
-            info!("SendOrder result: {result:?}");
+            let privkey = get_trader_privkey()?;
+
+            let result = executor
+                .execute(send_order::call_send_order_from_config(
+                    stack_url,
+                    market.clone(),
+                    2, // Sell side
+                    amount.clone(),
+                    None, // No limit price (market order)
+                    privkey,
+                    config,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("send market sell order for {} on {}", amount, market)
+                    ))
+                })?;
 
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
@@ -243,10 +536,10 @@ async fn main() -> Result<()> {
                 for formatted_hash in result.get_formatted_transaction_hashes() {
                     info!("  {}", formatted_hash);
                 }
-                info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
+                info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
 
-            info!("✓ Market sell order sent successfully");
+            info!("Market sell order sent successfully");
         }
         Commands::SellLimit {
             market,
@@ -257,20 +550,31 @@ async fn main() -> Result<()> {
 
             // Fetch configuration from server
             let stack_url = client.stack_url().to_string();
-            let config =
-                executor.execute(aspens::commands::config::call_get_config(stack_url.clone()))?;
-            let privkey = client.get_env("TRADER_PRIVKEY").unwrap().clone();
+            let config = executor
+                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
-            let result = executor.execute(send_order::call_send_order_from_config(
-                stack_url,
-                market,
-                2, // Sell side
-                amount,
-                Some(price),
-                privkey,
-                config,
-            ))?;
-            info!("SendOrder result: {result:?}");
+            let privkey = get_trader_privkey()?;
+
+            let result = executor
+                .execute(send_order::call_send_order_from_config(
+                    stack_url,
+                    market.clone(),
+                    2, // Sell side
+                    amount.clone(),
+                    Some(price.clone()),
+                    privkey,
+                    config,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!(
+                            "send limit sell order for {} at {} on {}",
+                            amount, price, market
+                        )
+                    ))
+                })?;
 
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
@@ -278,48 +582,103 @@ async fn main() -> Result<()> {
                 for formatted_hash in result.get_formatted_transaction_hashes() {
                     info!("  {}", formatted_hash);
                 }
-                info!("💡 Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
+                info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
 
-            info!("✓ Limit sell order sent successfully");
+            info!("Limit sell order sent successfully");
         }
         Commands::Balance => {
             use aspens::commands::config;
 
             info!("Fetching balances for all tokens across all chains");
             let stack_url = client.stack_url().to_string();
-            let config = executor.execute(config::get_config(stack_url))?;
-            let privkey = client.get_env("TRADER_PRIVKEY").unwrap().clone();
+            let config = executor
+                .execute(config::get_config(stack_url))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
-            executor.execute(balance::balance_from_config(config, privkey))?;
+            let privkey = get_trader_privkey()?;
+
+            executor
+                .execute(balance::balance_from_config(config, privkey))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch balances")))?;
         }
         Commands::Status => {
-            info!("Configuration Status:");
-            info!("  Stack URL: {}", client.stack_url());
+            println!("Configuration Status:");
+            println!("  Stack URL: {}", client.stack_url());
 
             // Ping the gRPC server
             let ping_result = executor.execute(aspens::health::ping_grpc_server(
                 client.stack_url().to_string(),
             ));
             if ping_result.success {
-                info!(
+                println!(
                     "  Connection: OK ({}ms)",
                     ping_result.latency_ms.unwrap_or(0)
                 );
             } else {
-                info!(
-                    "  Connection: FAILED - {}",
-                    ping_result
-                        .error
-                        .unwrap_or_else(|| "Unknown error".to_string())
-                );
+                let error_msg = ping_result
+                    .error
+                    .unwrap_or_else(|| "Unknown error".to_string());
+
+                println!("  Connection: FAILED");
+                println!();
+
+                if error_msg.contains("Connection refused") {
+                    println!("Could not connect to the server.");
+                    println!();
+                    println!("Possible causes:");
+                    println!("  - The Aspens server is not running");
+                    println!("  - The server URL is incorrect");
+                    println!("  - A firewall is blocking the connection");
+                } else if error_msg.contains("dns") || error_msg.contains("resolve") {
+                    println!("Could not resolve the server hostname.");
+                    println!();
+                    println!("Possible causes:");
+                    println!("  - The hostname is incorrect");
+                    println!("  - DNS is not configured properly");
+                    println!("  - No internet connection");
+                } else if error_msg.contains("tls")
+                    || error_msg.contains("ssl")
+                    || error_msg.contains("certificate")
+                {
+                    println!("TLS/SSL error: {}", error_msg);
+                    println!();
+                    println!("Possible causes:");
+                    println!("  - Using wrong protocol (http vs https)");
+                    println!("  - Server certificate is invalid");
+                } else if error_msg.contains("timeout") {
+                    println!("Connection timed out.");
+                    println!();
+                    println!("Possible causes:");
+                    println!("  - Server is overloaded or unresponsive");
+                    println!("  - Network latency is too high");
+                } else {
+                    println!("Error: {}", error_msg);
+                }
+
+                println!();
+                println!("Hints:");
+                println!("  - Verify ASPENS_MARKET_STACK_URL in your .env file");
+                println!("  - Use --stack flag to specify a different URL");
+                println!("  - For local: http://localhost:50051");
+                println!("  - For remote: https://your-server:50051");
             }
         }
         Commands::TraderPublicKey => {
             use alloy::signers::local::PrivateKeySigner;
 
-            let privkey = client.get_env("TRADER_PRIVKEY").unwrap().clone();
-            let signer = privkey.parse::<PrivateKeySigner>()?;
+            let privkey = get_trader_privkey()?;
+            let signer = privkey.parse::<PrivateKeySigner>().map_err(|e| {
+                eyre::eyre!(
+                    "Invalid TRADER_PRIVKEY format\n\n\
+                     Error: {}\n\n\
+                     Hints:\n\
+                     - The private key should be a 64-character hex string\n\
+                     - Do not include the '0x' prefix\n\
+                     - Check for any extra whitespace or newlines",
+                    e
+                )
+            })?;
             let address = signer.address();
             let pubkey = signer.credential().verifying_key();
 
@@ -335,11 +694,20 @@ async fn main() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             info!("Fetching configuration from {stack_url}");
-            let config = executor.execute(config::get_config(stack_url.clone()))?;
+            let config = executor
+                .execute(config::get_config(stack_url.clone()))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
             // If output_file is provided, save to file
-            if let Some(path) = output_file {
-                executor.execute(config::download_config(stack_url.clone(), path.clone()))?;
+            if let Some(ref path) = output_file {
+                executor
+                    .execute(config::download_config(stack_url.clone(), path.clone()))
+                    .map_err(|e| {
+                        eyre::eyre!(format_error(
+                            &e,
+                            &format!("save configuration to '{}'", path)
+                        ))
+                    })?;
                 info!("Configuration saved to: {}", path);
             } else {
                 // Display config as JSON
@@ -352,7 +720,9 @@ async fn main() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             info!("Fetching signer public key(s) from {stack_url}");
-            let response = executor.execute(config::get_signer_public_key(stack_url, chain_id))?;
+            let response = executor
+                .execute(config::get_signer_public_key(stack_url, chain_id))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch signer public key(s)")))?;
 
             println!("Signer Public Keys:");
             for (id, key_info) in response.chain_keys.iter() {
