@@ -211,7 +211,7 @@ pub async fn call_send_order_from_config(
 
     // Derive public key (account address) from private key
     let signer = privkey.parse::<PrivateKeySigner>()?;
-    let account_address = signer.address().to_string();
+    let account_address = signer.address().to_checksum(None);
 
     tracing::info!(
         "Sending order: market={}, side={}, quantity={}, price={:?}, account={}",
