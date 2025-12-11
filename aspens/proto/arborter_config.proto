@@ -66,10 +66,8 @@ message GetDeployCalldataResponse {
 message DeployContractRequest {
   // The name of the chain to deploy the instance on. e.g. base-sepolia
   string chain_network = 1;
-  // The signed transaction bytes (RLP encoded) to broadcast for contract deployment.
-  // The transaction should call createInstance on the MidribFactory contract.
-  // The admin signs this transaction externally and submits it here for broadcasting.
-  bytes signed_tx = 2;
+  // The signed transaction hash of the createInstance function call
+  string tx_hash = 2;
 }
 
 message DeployContractResponse {
