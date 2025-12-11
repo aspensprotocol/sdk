@@ -24,9 +24,10 @@ use config_pb::{
     DeleteChainRequest, DeleteChainResponse, DeleteMarketRequest, DeleteMarketResponse,
     DeleteTokenRequest, DeleteTokenResponse, DeleteTradeContractRequest,
     DeleteTradeContractResponse, DeployContractRequest, DeployContractResponse, Empty,
-    SetChainRequest, SetChainResponse, SetMarketRequest, SetMarketResponse, SetTokenRequest,
-    SetTokenResponse, SetTradeContractRequest, SetTradeContractResponse, UpdateAdminRequest,
-    UpdateAdminResponse, VersionInfo,
+    GetDeployCalldataRequest, GetDeployCalldataResponse, SetChainRequest, SetChainResponse,
+    SetMarketRequest, SetMarketResponse, SetTokenRequest, SetTokenResponse,
+    SetTradeContractRequest, SetTradeContractResponse, UpdateAdminRequest, UpdateAdminResponse,
+    VersionInfo,
 };
 use eyre::Result;
 use tonic::metadata::MetadataValue;
@@ -72,6 +73,37 @@ pub async fn update_admin(
 // Contract Operations
 // ============================================================================
 
+/// Get deploy calldata from the server for deploying a trading instance
+///
+/// This retrieves the pre-encoded calldata for creating a trading instance,
+/// along with the factory address and chain ID needed for signing the transaction.
+///
+/// # Arguments
+/// * `url` - The Aspens stack gRPC URL
+/// * `jwt` - Valid JWT token
+/// * `chain_network` - Network name (e.g., "base-sepolia")
+/// * `fee_bps` - Fee in basis points (e.g., 100 = 1%)
+pub async fn get_deploy_calldata(
+    url: String,
+    jwt: String,
+    chain_network: String,
+    fee_bps: u32,
+) -> Result<GetDeployCalldataResponse> {
+    let channel = create_channel(&url).await?;
+    let mut client = ConfigServiceClient::new(channel);
+
+    let request = authenticated_request(
+        &jwt,
+        GetDeployCalldataRequest {
+            chain_network,
+            fee_bps,
+        },
+    );
+    let response = client.get_deploy_calldata(request).await?;
+
+    Ok(response.into_inner())
+}
+
 /// Deploy a trade contract on a chain (requires auth)
 ///
 /// # Arguments
@@ -100,18 +132,16 @@ pub async fn deploy_contract(
     Ok(response.into_inner())
 }
 
-/// Parameters for building a createInstance transaction
+/// Parameters for building a createInstance transaction using server-provided calldata
 #[derive(Debug, Clone)]
 pub struct CreateInstanceParams {
-    /// The factory contract address on the target chain
+    /// The factory contract address on the target chain (from GetDeployCalldata response)
     pub factory_address: String,
-    /// The trading instance signer address
-    pub instance_signer_address: String,
-    /// Fee percentage (uint16: 0-65535)
-    pub fees: u16,
+    /// Pre-encoded calldata for createInstance (from GetDeployCalldata response)
+    pub calldata: Vec<u8>,
     /// The RPC URL for the target chain
     pub rpc_url: String,
-    /// The chain ID
+    /// The chain ID (from GetDeployCalldata response)
     pub chain_id: u64,
     /// The private key for signing (hex string without 0x prefix)
     pub privkey: String,
@@ -119,29 +149,30 @@ pub struct CreateInstanceParams {
 
 /// Build and sign a createInstance transaction for deploying a trading instance
 ///
-/// This creates a signed transaction that can be sent to the backend for broadcasting.
-/// The transaction calls `createInstance(address _tradingInstanceSigner, uint16 _fees)`
-/// on the MidribFactory contract.
+/// This creates a signed transaction using pre-encoded calldata from the server.
+/// The calldata is obtained from the GetDeployCalldata RPC call.
 ///
 /// # Arguments
-/// * `params` - Parameters for building the transaction
+/// * `params` - Parameters for building the transaction (includes server-provided calldata)
 ///
 /// # Returns
 /// The RLP-encoded signed transaction bytes
 pub async fn build_create_instance_tx(params: CreateInstanceParams) -> Result<Vec<u8>> {
-    use alloy::network::EthereumWallet;
-    use alloy::primitives::Address;
-    use alloy::providers::ProviderBuilder;
+    use alloy::consensus::{SignableTransaction, TxEip1559, TxEnvelope};
+    use alloy::network::{EthereumWallet, TransactionBuilder, TxSigner};
+    use alloy::primitives::{Address, Bytes, TxKind, U256};
+    use alloy::providers::{Provider, ProviderBuilder};
+    use alloy::rpc::types::TransactionRequest;
     use alloy::signers::local::PrivateKeySigner;
     use url::Url;
 
     // Parse addresses
     let factory_addr: Address = params.factory_address.parse()?;
-    let signer_addr: Address = params.instance_signer_address.parse()?;
 
     // Set up the signer
     let signer: PrivateKeySigner = params.privkey.parse()?;
     let wallet = EthereumWallet::new(signer.clone());
+    let from_address = signer.address();
 
     // Set up the provider
     let rpc_url = Url::parse(&params.rpc_url)?;
@@ -150,17 +181,47 @@ pub async fn build_create_instance_tx(params: CreateInstanceParams) -> Result<Ve
         .wallet(wallet)
         .connect_http(rpc_url);
 
-    // Create the contract instance
-    let factory = MidribFactory::new(factory_addr, &provider);
+    // Get the nonce for the signing address
+    let nonce = provider.get_transaction_count(from_address).await?;
 
-    // Build the createInstance call
-    let tx_builder = factory.createInstance(signer_addr, params.fees);
+    // The calldata is ABI-encoded createInstance(address, uint16)
+    let calldata_bytes = Bytes::from(params.calldata.clone());
 
-    // Build and sign the transaction without broadcasting
-    // build_raw_transaction takes a signer and returns the RLP-encoded signed tx bytes
-    let signed_tx_bytes = tx_builder.build_raw_transaction(signer).await?;
+    // Build a transaction request for gas estimation
+    let tx_request = TransactionRequest::default()
+        .with_from(from_address)
+        .with_to(factory_addr)
+        .with_input(calldata_bytes.clone());
 
-    Ok(signed_tx_bytes)
+    // Estimate gas
+    let gas_estimate = provider.estimate_gas(tx_request).await?;
+
+    // Get current gas prices
+    let fee_estimate = provider.estimate_eip1559_fees().await?;
+
+    // Build the EIP-1559 transaction
+    let mut tx = TxEip1559 {
+        chain_id: params.chain_id,
+        nonce,
+        gas_limit: gas_estimate + (gas_estimate / 10), // Add 10% buffer
+        max_fee_per_gas: fee_estimate.max_fee_per_gas,
+        max_priority_fee_per_gas: fee_estimate.max_priority_fee_per_gas,
+        to: TxKind::Call(factory_addr),
+        value: U256::ZERO,
+        access_list: Default::default(),
+        input: calldata_bytes,
+    };
+
+    // Sign the transaction
+    let signature = signer.sign_transaction(&mut tx).await?;
+    let signed_tx = TxEnvelope::Eip1559(tx.into_signed(signature));
+
+    // Encode the signed transaction to RLP bytes
+    use alloy::eips::eip2718::Encodable2718;
+    let mut encoded = Vec::new();
+    signed_tx.encode_2718(&mut encoded);
+
+    Ok(encoded)
 }
 
 /// Set a trade contract on a chain (requires auth)

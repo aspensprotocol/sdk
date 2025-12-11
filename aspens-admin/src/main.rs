@@ -885,9 +885,35 @@ async fn run() -> Result<()> {
                 )
             })?;
 
-            info!("Fetching chain configuration for: {}", network);
+            info!("Fetching deploy calldata from server for: {}", network);
 
-            // First, fetch the chain configuration to get factory address and instance signer
+            // Step 1: Get deploy calldata from the server
+            let calldata_response = executor
+                .execute(admin::get_deploy_calldata(
+                    stack_url.clone(),
+                    jwt.clone(),
+                    network.clone(),
+                    fees as u32,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("fetch deploy calldata for '{}'", network)
+                    ))
+                })?;
+
+            info!(
+                "Building createInstance transaction for factory: {}",
+                calldata_response.factory_address
+            );
+            info!(
+                "  Instance signer: {}",
+                calldata_response.instance_signer_address
+            );
+            info!("  Fees: {} bps", fees);
+            info!("  Chain ID: {}", calldata_response.chain_id);
+
+            // Step 2: Fetch the chain configuration to get the RPC URL
             let config = executor
                 .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| {
@@ -919,21 +945,12 @@ async fn run() -> Result<()> {
                 )
             })?;
 
-            info!(
-                "Building createInstance transaction for factory: {}",
-                chain.factory_address
-            );
-            info!("  Instance signer: {}", chain.instance_signer_address);
-            info!("  Fees: {}", fees);
-            info!("  Chain ID: {}", chain.chain_id);
-
-            // Build and sign the createInstance transaction
+            // Step 3: Build and sign the createInstance transaction using server-provided calldata
             let params = CreateInstanceParams {
-                factory_address: chain.factory_address.clone(),
-                instance_signer_address: chain.instance_signer_address.clone(),
-                fees,
+                factory_address: calldata_response.factory_address.clone(),
+                calldata: calldata_response.calldata.clone(),
                 rpc_url: chain.rpc_url.clone(),
-                chain_id: chain.chain_id as u64,
+                chain_id: calldata_response.chain_id as u64,
                 privkey: privkey.clone(),
             };
 
@@ -951,7 +968,7 @@ async fn run() -> Result<()> {
                 signed_tx.len()
             );
 
-            // Send the signed transaction to the backend
+            // Step 4: Send the signed transaction to the backend
             let result = executor
                 .execute(admin::deploy_contract(
                     stack_url.clone(),
