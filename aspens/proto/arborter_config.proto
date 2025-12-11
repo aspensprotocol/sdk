@@ -8,6 +8,8 @@ option optimize_for = SPEED;
 service ConfigService {
   // rpc service to set the admin address
   rpc UpdateAdmin(UpdateAdminRequest) returns (UpdateAdminResponse) {}
+  // rpc service to get pre-encoded calldata for deploying a trading instance
+  rpc GetDeployCalldata(GetDeployCalldataRequest) returns (GetDeployCalldataResponse) {}
   // rpc service to deploy a trading instance on the base and quote chains
   rpc DeployContract(DeployContractRequest) returns (DeployContractResponse) {}
   // rpc service to set a chain in the configuration
@@ -40,6 +42,25 @@ message UpdateAdminRequest {
 message UpdateAdminResponse {
   // The address that has been set for admin management operations
   string admin_address = 1;
+}
+
+message GetDeployCalldataRequest {
+  // The name of the chain to deploy the instance on. e.g. base-sepolia
+  string chain_network = 1;
+  // Fee in basis points for the trading instance (e.g., 100 = 1%)
+  uint32 fee_bps = 2;
+}
+
+message GetDeployCalldataResponse {
+  // The factory contract address to call
+  string factory_address = 1;
+  // The ABI-encoded calldata for createInstance(signer, feeBps)
+  // The signer address is pre-populated with the correct instance signer
+  bytes calldata = 2;
+  // The instance signer address that will own the deployed contract
+  string instance_signer_address = 3;
+  // The chain ID for transaction construction
+  uint32 chain_id = 4;
 }
 
 message DeployContractRequest {
