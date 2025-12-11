@@ -106,16 +106,19 @@ pub async fn get_deploy_calldata(
 
 /// Deploy a trade contract on a chain (requires auth)
 ///
+/// This function is called after broadcasting the transaction locally.
+/// It waits for the transaction to be confirmed and extracts the deployed contract address.
+///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
 /// * `jwt` - Valid JWT token
 /// * `chain_network` - Network name (e.g., "base-sepolia")
-/// * `signed_tx` - RLP-encoded signed transaction bytes
+/// * `tx_hash` - Transaction hash (0x-prefixed hex) of the already-broadcast createInstance call
 pub async fn deploy_contract(
     url: String,
     jwt: String,
     chain_network: String,
-    signed_tx: Vec<u8>,
+    tx_hash: String,
 ) -> Result<DeployContractResponse> {
     let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
@@ -124,7 +127,7 @@ pub async fn deploy_contract(
         &jwt,
         DeployContractRequest {
             chain_network,
-            signed_tx,
+            tx_hash,
         },
     );
     let response = client.deploy_contract(request).await?;
@@ -222,6 +225,33 @@ pub async fn build_create_instance_tx(params: CreateInstanceParams) -> Result<Ve
     signed_tx.encode_2718(&mut encoded);
 
     Ok(encoded)
+}
+
+/// Broadcast a signed transaction and return the transaction hash
+///
+/// # Arguments
+/// * `rpc_url` - The RPC URL for the target chain
+/// * `signed_tx` - RLP-encoded signed transaction bytes
+///
+/// # Returns
+/// The transaction hash as a 0x-prefixed hex string
+pub async fn broadcast_transaction(rpc_url: String, signed_tx: Vec<u8>) -> Result<String> {
+    use alloy::providers::{Provider, ProviderBuilder};
+    use url::Url;
+
+    let rpc_url_parsed = Url::parse(&rpc_url)?;
+    let provider = ProviderBuilder::new().connect_http(rpc_url_parsed);
+
+    // Broadcast the signed transaction
+    let pending_tx = provider
+        .send_raw_transaction(&signed_tx)
+        .await
+        .map_err(|e| eyre::eyre!("Failed to broadcast transaction: {}", e))?;
+
+    let tx_hash = pending_tx.tx_hash();
+
+    // Return the tx hash as 0x-prefixed hex string
+    Ok(format!("{:?}", tx_hash))
 }
 
 /// Set a trade contract on a chain (requires auth)

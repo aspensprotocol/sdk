@@ -964,22 +964,37 @@ async fn run() -> Result<()> {
                 })?;
 
             info!(
-                "Transaction signed ({} bytes), sending to backend for broadcast...",
+                "Transaction signed ({} bytes), broadcasting to chain...",
                 signed_tx.len()
             );
 
-            // Step 4: Send the signed transaction to the backend
-            let result = executor
-                .execute(admin::deploy_contract(
-                    stack_url.clone(),
-                    jwt,
-                    network.clone(),
+            // Step 4: Broadcast the transaction to the chain
+            let tx_hash = executor
+                .execute(admin::broadcast_transaction(
+                    chain.rpc_url.clone(),
                     signed_tx,
                 ))
                 .map_err(|e| {
                     eyre::eyre!(format_error(
                         &e,
-                        &format!("deploy contract on '{}'", network)
+                        &format!("broadcast transaction to '{}'", network)
+                    ))
+                })?;
+
+            info!("Transaction broadcast with hash: {}", tx_hash);
+
+            // Step 5: Send the tx hash to the backend to wait for confirmation and extract contract address
+            let result = executor
+                .execute(admin::deploy_contract(
+                    stack_url.clone(),
+                    jwt,
+                    network.clone(),
+                    tx_hash,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("wait for contract deployment on '{}'", network)
                     ))
                 })?;
             println!("Trade contract deployed at: {}", result.contract_address);
