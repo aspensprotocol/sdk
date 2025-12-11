@@ -62,6 +62,13 @@ check:
 lint:
     cargo clippy --workspace
 
+# Run `cargo fmt` in check mode (matches CI)
+fmt-check:
+    cargo fmt --all -- --check
+
+# In preparation for CI passing for a Pull Request, run lint, fmt-check, and test
+prep-for-pr: lint fmt-check test
+
 # Run AMMIT tests with specific environment
 test-anvil:
     ./scripts/ammit.sh anvil
