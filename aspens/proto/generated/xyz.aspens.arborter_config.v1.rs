@@ -12,6 +12,31 @@ pub struct UpdateAdminResponse {
     pub admin_address: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetDeployCalldataRequest {
+    /// The name of the chain to deploy the instance on. e.g. base-sepolia
+    #[prost(string, tag = "1")]
+    pub chain_network: ::prost::alloc::string::String,
+    /// Fee in basis points for the trading instance (e.g., 100 = 1%)
+    #[prost(uint32, tag = "2")]
+    pub fee_bps: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetDeployCalldataResponse {
+    /// The factory contract address to call
+    #[prost(string, tag = "1")]
+    pub factory_address: ::prost::alloc::string::String,
+    /// The ABI-encoded calldata for createInstance(signer, feeBps)
+    /// The signer address is pre-populated with the correct instance signer
+    #[prost(bytes = "vec", tag = "2")]
+    pub calldata: ::prost::alloc::vec::Vec<u8>,
+    /// The instance signer address that will own the deployed contract
+    #[prost(string, tag = "3")]
+    pub instance_signer_address: ::prost::alloc::string::String,
+    /// The chain ID for transaction construction
+    #[prost(uint32, tag = "4")]
+    pub chain_id: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeployContractRequest {
     /// The name of the chain to deploy the instance on. e.g. base-sepolia
     #[prost(string, tag = "1")]
@@ -466,6 +491,36 @@ pub mod config_service_client {
                     GrpcMethod::new(
                         "xyz.aspens.arborter_config.v1.ConfigService",
                         "UpdateAdmin",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// rpc service to get pre-encoded calldata for deploying a trading instance
+        pub async fn get_deploy_calldata(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetDeployCalldataRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetDeployCalldataResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/GetDeployCalldata",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "GetDeployCalldata",
                     ),
                 );
             self.inner.unary(req, path, codec).await
