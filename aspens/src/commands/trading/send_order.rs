@@ -12,6 +12,7 @@ use eyre::Result;
 use prost::Message;
 
 use crate::commands::config::config_pb::GetConfigResponse;
+use crate::grpc::create_channel;
 
 impl fmt::Display for Order {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -113,10 +114,8 @@ pub async fn call_send_order(
     quote_account_address: String,
     privkey: String,
 ) -> Result<SendOrderResponse> {
-    // Create a channel to connect to the gRPC server
-    let channel = tonic::transport::Channel::from_shared(url)?
-        .connect()
-        .await?;
+    // Create a channel to connect to the gRPC server (with TLS support for HTTPS)
+    let channel = create_channel(&url).await?;
 
     // Instantiate the client
     let mut client = ArborterServiceClient::new(channel);
