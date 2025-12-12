@@ -314,6 +314,10 @@ struct ReplCli {
     /// The Aspens stack URL (overrides ASPENS_MARKET_STACK_URL from .env)
     #[arg(short = 's', long = "stack")]
     stack_url: Option<url::Url>,
+
+    /// Path to environment file (defaults to .env in current directory)
+    #[arg(short = 'e', long = "env-file")]
+    env_file: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -401,6 +405,9 @@ fn main() {
 
     // Build the client
     let mut builder = AspensClient::builder();
+    if let Some(ref env_file) = cli.env_file {
+        builder = builder.with_env_file(env_file);
+    }
     if let Some(ref url) = cli.stack_url {
         builder = builder
             .with_url(url.to_string())

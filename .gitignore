@@ -4,6 +4,8 @@
 # Environment files
 .env
 .env.local
+!.env.sample
+.env.*
 
 # Local files
 lib/
