@@ -15,14 +15,17 @@ impl AsyncExecutor for DirectExecutor {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
-        let handle = tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(future)
-        });
-        futures::executor::block_on(handle).unwrap()
+        // Spawn the future on the current runtime and block until completion.
+        // This approach:
+        // 1. Spawns the async work on the tokio runtime's worker threads
+        // 2. Uses block_in_place to safely block the current thread while waiting
+        // This works correctly when called from within an async context
+        // (e.g., from #[tokio::main]).
+        let handle = tokio::runtime::Handle::current();
+        let task = handle.spawn(future);
+        tokio::task::block_in_place(move || {
+            handle.block_on(task).expect("task panicked")
+        })
     }
 }
 

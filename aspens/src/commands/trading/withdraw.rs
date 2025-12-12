@@ -1,6 +1,6 @@
 use alloy::network::EthereumWallet;
-use alloy::primitives::{Address, U160};
-use alloy::providers::ProviderBuilder;
+use alloy::primitives::{Address, U160, U256};
+use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
 use eyre::Result;
@@ -8,6 +8,9 @@ use url::Url;
 
 use super::MidribV2;
 use crate::commands::config::config_pb::GetConfigResponse;
+
+/// Minimum gas balance required for transactions (0.0001 ETH = 100000 gwei)
+const MIN_GAS_BALANCE: u128 = 100_000_000_000_000; // 0.0001 ETH in wei
 
 /// Withdraw tokens using configuration from the server
 ///
@@ -110,6 +113,7 @@ pub async fn call_withdraw_from_config(
     let contract_addr: Address = Address::parse_checksummed(&contract_address, None)?;
     let token_addr: Address = token.address.parse()?;
     let signer = privkey.parse::<PrivateKeySigner>()?;
+    let signer_address = signer.address();
     let wallet = EthereumWallet::new(signer);
     let rpc_url = Url::parse(&chain.rpc_url)?;
 
@@ -118,6 +122,21 @@ pub async fn call_withdraw_from_config(
         .with_chain(chain_type)
         .wallet(wallet)
         .connect_http(rpc_url);
+
+    // Check gas balance before attempting any transactions
+    let gas_balance = provider.get_balance(signer_address).await?;
+    tracing::info!("Gas balance: {} wei", gas_balance);
+
+    if gas_balance < U256::from(MIN_GAS_BALANCE) {
+        let balance_eth = gas_balance.to::<u128>() as f64 / 1e18;
+        return Err(eyre::eyre!(
+            "insufficient gas: wallet has {:.6} native tokens, need at least 0.0001 for gas. \
+            Fund your wallet ({}) with native tokens on {} to pay for transaction fees.",
+            balance_eth,
+            signer_address,
+            network
+        ));
+    }
 
     // Get an instance of the contract
     let contract = MidribV2::new(contract_addr, &provider);

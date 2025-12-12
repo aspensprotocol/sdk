@@ -149,7 +149,21 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         );
     }
 
-    // Insufficient balance
+    // Insufficient gas (check before general insufficient balance)
+    if err_string.contains("insufficient gas") {
+        return format!(
+            "Failed to {}: Insufficient gas for transaction fees\n\n\
+             Your wallet needs native tokens (ETH, FLR, etc.) to pay for gas.\n\n\
+             Hints:\n\
+             - Fund your wallet with native tokens on the target chain\n\
+             - For testnets, use a faucet to get free test tokens:\n\
+               - Base Sepolia: https://www.alchemy.com/faucets/base-sepolia\n\
+               - Flare Coston2: https://faucet.flare.network",
+            context
+        );
+    }
+
+    // Insufficient token balance
     if err_string.contains("insufficient")
         || err_string.contains("not enough")
         || err_string.contains("balance too low")
