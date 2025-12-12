@@ -23,9 +23,7 @@ impl AsyncExecutor for DirectExecutor {
         // (e.g., from #[tokio::main]).
         let handle = tokio::runtime::Handle::current();
         let task = handle.spawn(future);
-        tokio::task::block_in_place(move || {
-            handle.block_on(task).expect("task panicked")
-        })
+        tokio::task::block_in_place(move || handle.block_on(task).expect("task panicked"))
     }
 }
 
