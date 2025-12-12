@@ -262,6 +262,10 @@ struct Cli {
     #[arg(short = 's', long = "stack")]
     stack_url: Option<Url>,
 
+    /// Path to environment file (defaults to .env in current directory)
+    #[arg(short = 'e', long = "env-file")]
+    env_file: Option<String>,
+
     /// JWT token for authentication (can also be set via ASPENS_JWT env var)
     #[arg(long, env = "ASPENS_JWT")]
     jwt: Option<String>,
@@ -517,6 +521,10 @@ async fn run() -> Result<()> {
 
     // Build the client
     let mut builder = AspensClient::builder();
+
+    if let Some(ref env_file) = cli.env_file {
+        builder = builder.with_env_file(env_file);
+    }
 
     if let Some(ref url) = cli.stack_url {
         builder = builder.with_url(url.to_string())?;
