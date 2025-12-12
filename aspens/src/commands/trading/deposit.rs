@@ -153,7 +153,10 @@ pub async fn call_deposit_from_config(
 
     // Only set allowance if current allowance is insufficient
     if allowance_result < allowance_amount {
-        tracing::info!("Current allowance insufficient, approving {} tokens", allowance_amount);
+        tracing::info!(
+            "Current allowance insufficient, approving {} tokens",
+            allowance_amount
+        );
         let approve_result = erc20
             .approve(contract_addr, allowance_amount)
             .send()
