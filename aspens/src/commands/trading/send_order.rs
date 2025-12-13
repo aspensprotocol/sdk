@@ -4,13 +4,17 @@ pub mod arborter_pb {
 
 use std::fmt;
 
-use alloy::primitives::Signature;
+use alloy::primitives::{Address, Signature, U256};
+use alloy::providers::ProviderBuilder;
 use alloy::signers::{local::PrivateKeySigner, Signer};
+use alloy_chains::NamedChain;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{Order, SendOrderRequest, SendOrderResponse, TransactionHash};
 use eyre::Result;
 use prost::Message;
+use url::Url;
 
+use super::MidribV2;
 use crate::commands::config::config_pb::GetConfigResponse;
 use crate::grpc::create_channel;
 
@@ -240,6 +244,46 @@ async fn sign_transaction(msg_bytes: &[u8], privkey: &str) -> Result<Signature> 
     Ok(signature)
 }
 
+/// Query deposited (available) balance for a token on a specific chain
+async fn query_deposited_balance(
+    rpc_url: &str,
+    token_address: &str,
+    contract_address: &str,
+    user_address: Address,
+    chain_id: u32,
+) -> Result<U256> {
+    let contract_addr: Address = Address::parse_checksummed(contract_address, None)?;
+    let token_addr: Address = token_address.parse()?;
+    let rpc_url = Url::parse(rpc_url)?;
+
+    // Try to get NamedChain, fallback to a default
+    let named_chain = NamedChain::try_from(chain_id as u64).unwrap_or(NamedChain::BaseSepolia);
+
+    let provider = ProviderBuilder::new()
+        .with_chain(named_chain)
+        .connect_http(rpc_url);
+    let contract = MidribV2::new(contract_addr, &provider);
+    let result = contract
+        .tradeBalance(user_address, token_addr)
+        .call()
+        .await?;
+    Ok(result)
+}
+
+/// Format a U256 balance with decimals for display
+fn format_balance_for_display(balance: U256, decimals: u32) -> String {
+    let balance_u128: u128 = balance.try_into().unwrap_or(u128::MAX);
+    let divisor = 10_u128.pow(decimals);
+    let integer_part = balance_u128 / divisor;
+    let fractional_part = balance_u128 % divisor;
+    format!(
+        "{}.{:0width$}",
+        integer_part,
+        fractional_part,
+        width = decimals as usize
+    )
+}
+
 /// Send an order using configuration from the server
 ///
 /// This is the recommended way to send orders. It uses the configuration
@@ -331,7 +375,8 @@ pub async fn call_send_order_from_config(
 
     // Derive public key (account address) from private key
     let signer = privkey.parse::<PrivateKeySigner>()?;
-    let account_address = signer.address().to_checksum(None);
+    let user_address = signer.address();
+    let account_address = user_address.to_checksum(None);
 
     tracing::info!(
         "Sending order: market={}, side={}, quantity={}, price={:?}, account={}",
@@ -343,17 +388,98 @@ pub async fn call_send_order_from_config(
     );
 
     // Call the low-level send_order function
-    call_send_order(
+    let result = call_send_order(
         url,
         side,
-        converted_quantity,
-        converted_price,
+        converted_quantity.clone(),
+        converted_price.clone(),
         market_id,
         account_address.clone(),
         account_address,
         privkey,
     )
-    .await
+    .await;
+
+    // If we get an insufficient balance error, query and display actual balances
+    if let Err(ref e) = result {
+        let err_str = e.to_string().to_lowercase();
+        if err_str.contains("insufficient") || err_str.contains("balance") {
+            // Determine which chain/token to check based on side
+            // BUY: need quote token, SELL: need base token
+            let (check_chain_network, check_token_symbol, check_token_decimals) = if side == 1 {
+                (
+                    &market.quote_chain_network,
+                    &market.quote_chain_token_symbol,
+                    market.quote_chain_token_decimals as u32,
+                )
+            } else {
+                (
+                    &market.base_chain_network,
+                    &market.base_chain_token_symbol,
+                    market.base_chain_token_decimals as u32,
+                )
+            };
+
+            // Try to query the actual deposited balance for more helpful error
+            if let Some(chain) = config.get_chain(check_chain_network) {
+                if let Some(trade_contract) = &chain.trade_contract {
+                    if let Some(token) = chain.tokens.get(check_token_symbol) {
+                        if let Ok(deposited_balance) = query_deposited_balance(
+                            &chain.rpc_url,
+                            &token.address,
+                            &trade_contract.address,
+                            user_address,
+                            chain.chain_id,
+                        )
+                        .await
+                        {
+                            let deposited_formatted =
+                                format_balance_for_display(deposited_balance, check_token_decimals);
+
+                            // Calculate required amount
+                            let required_str = if side == 1 {
+                                // BUY: need quantity * price
+                                if let Some(ref p) = converted_price {
+                                    let qty: u128 = converted_quantity.parse().unwrap_or(0);
+                                    let prc: u128 = p.parse().unwrap_or(0);
+                                    let pair_dec_factor = 10_u128.pow(pair_decimals as u32);
+                                    let required = qty * prc / pair_dec_factor;
+                                    format_balance_for_display(
+                                        U256::from(required),
+                                        check_token_decimals,
+                                    )
+                                } else {
+                                    "unknown (market order)".to_string()
+                                }
+                            } else {
+                                // SELL: need quantity
+                                let qty: u128 = converted_quantity.parse().unwrap_or(0);
+                                format_balance_for_display(U256::from(qty), check_token_decimals)
+                            };
+
+                            return Err(eyre::eyre!(
+                                "Insufficient deposited balance on {}.\n\
+                                 Token: {}\n\
+                                 Required: {} {}\n\
+                                 Available: {} {}\n\n\
+                                 Deposit more {} on {} before placing this order.",
+                                check_chain_network,
+                                check_token_symbol,
+                                required_str,
+                                check_token_symbol,
+                                deposited_formatted,
+                                check_token_symbol,
+                                check_token_symbol,
+                                check_chain_network
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    result
 }
 
 #[cfg(test)]
