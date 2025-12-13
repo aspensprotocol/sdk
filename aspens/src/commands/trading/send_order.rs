@@ -57,12 +57,9 @@ fn to_pair_decimals(amount: &str, pair_decimals: i32) -> eyre::Result<String> {
     };
 
     // Parse as u128 to remove leading zeros and validate it's a number
-    let value: u128 = raw_result.parse().map_err(|_| {
-        eyre::eyre!(
-            "Invalid amount '{}': could not parse as number",
-            amount
-        )
-    })?;
+    let value: u128 = raw_result
+        .parse()
+        .map_err(|_| eyre::eyre!("Invalid amount '{}': could not parse as number", amount))?;
 
     Ok(value.to_string())
 }

@@ -210,9 +210,12 @@ fn display_all_token_balances(all_token_balances: &[TokenBalance]) -> String {
     let mut output = String::new();
     output.push('\n');
 
-    output.push_str("═══════════════════════════════════════════════════════════════════════════\n");
+    output
+        .push_str("═══════════════════════════════════════════════════════════════════════════\n");
     output.push_str("                                 BALANCES\n");
-    output.push_str("═══════════════════════════════════════════════════════════════════════════\n\n");
+    output.push_str(
+        "═══════════════════════════════════════════════════════════════════════════\n\n",
+    );
 
     let mut table = Table::new();
     table.load_preset(UTF8_BORDERS_ONLY);
@@ -250,8 +253,7 @@ fn display_all_token_balances(all_token_balances: &[TokenBalance]) -> String {
                 let wallet = format_balance_with_decimals(&chain_balance.wallet_balance, decimals);
                 let deposited =
                     format_balance_with_decimals(&chain_balance.available_balance, decimals);
-                let locked =
-                    format_balance_with_decimals(&chain_balance.locked_balance, decimals);
+                let locked = format_balance_with_decimals(&chain_balance.locked_balance, decimals);
 
                 table.add_row(vec![symbol.clone(), wallet, deposited, locked]);
             }
