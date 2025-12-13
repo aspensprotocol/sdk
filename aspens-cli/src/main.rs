@@ -178,6 +178,22 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         );
     }
 
+    // Invalid string length (typically from decimal/amount formatting issues)
+    if err_string.contains("invalid string length") {
+        return format!(
+            "Failed to {}: Invalid amount format\n\n\
+             The server rejected the order due to an invalid amount format.\n\n\
+             Possible causes:\n\
+             - Amount or price is too small or has too few digits\n\
+             - Values need to be in the correct decimal format\n\n\
+             Hints:\n\
+             - Use decimal notation for amounts (e.g., '1.5' instead of '1')\n\
+             - Check 'aspens-cli config' to see the market's pairDecimals setting\n\
+             - For market with pairDecimals=4: '1' becomes '10000', '0.5' becomes '5000'",
+            context
+        );
+    }
+
     // Transaction/RPC errors
     if err_string.contains("transaction")
         || err_string.contains("revert")
