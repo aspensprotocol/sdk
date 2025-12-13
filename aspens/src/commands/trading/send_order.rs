@@ -21,8 +21,14 @@ use crate::grpc::create_channel;
 /// * `pair_decimals` - The number of decimal places for the pair
 ///
 /// # Returns
-/// The amount in pair decimals format as a string
+/// The amount in pair decimals format as a string (clean numeric, no leading zeros)
 fn to_pair_decimals(amount: &str, pair_decimals: i32) -> eyre::Result<String> {
+    // Handle empty or whitespace input
+    let amount = amount.trim();
+    if amount.is_empty() {
+        return Err(eyre::eyre!("Amount cannot be empty"));
+    }
+
     // Parse the amount as a decimal number
     let parts: Vec<&str> = amount.split('.').collect();
 
@@ -40,15 +46,25 @@ fn to_pair_decimals(amount: &str, pair_decimals: i32) -> eyre::Result<String> {
     let decimal_places = decimal_part.len() as i32;
     let zeros_to_add = pair_decimals - decimal_places;
 
-    if zeros_to_add < 0 {
+    let raw_result = if zeros_to_add < 0 {
         // More decimal places than pair_decimals allows - truncate
         let truncated_decimal = &decimal_part[..pair_decimals as usize];
-        Ok(format!("{}{}", integer_part, truncated_decimal))
+        format!("{}{}", integer_part, truncated_decimal)
     } else {
         // Add zeros to reach pair_decimals
         let zeros = "0".repeat(zeros_to_add as usize);
-        Ok(format!("{}{}{}", integer_part, decimal_part, zeros))
-    }
+        format!("{}{}{}", integer_part, decimal_part, zeros)
+    };
+
+    // Parse as u128 to remove leading zeros and validate it's a number
+    let value: u128 = raw_result.parse().map_err(|_| {
+        eyre::eyre!(
+            "Invalid amount '{}': could not parse as number",
+            amount
+        )
+    })?;
+
+    Ok(value.to_string())
 }
 
 /// Check if amount appears to already be in pair decimals format
@@ -359,16 +375,16 @@ mod tests {
     fn test_to_pair_decimals_decimal() {
         // Test decimal conversion with pair_decimals=4
         assert_eq!(to_pair_decimals("1.5", 4).unwrap(), "15000");
-        assert_eq!(to_pair_decimals("0.5", 4).unwrap(), "05000"); // Note: leading zero preserved
+        assert_eq!(to_pair_decimals("0.5", 4).unwrap(), "5000"); // Leading zero removed
         assert_eq!(to_pair_decimals("1.25", 4).unwrap(), "12500");
-        assert_eq!(to_pair_decimals("0.0001", 4).unwrap(), "00001");
+        assert_eq!(to_pair_decimals("0.0001", 4).unwrap(), "1");
     }
 
     #[test]
     fn test_to_pair_decimals_truncation() {
         // Test truncation when too many decimal places
         assert_eq!(to_pair_decimals("1.12345", 4).unwrap(), "11234");
-        assert_eq!(to_pair_decimals("0.99999", 4).unwrap(), "09999");
+        assert_eq!(to_pair_decimals("0.99999", 4).unwrap(), "9999");
     }
 
     #[test]

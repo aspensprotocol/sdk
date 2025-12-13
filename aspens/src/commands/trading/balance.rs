@@ -15,7 +15,6 @@ use crate::commands::config::config_pb::{Configuration, GetConfigResponse};
 #[derive(Debug, Clone)]
 struct TokenInfo {
     symbol: String,
-    name: String,
     decimals: u32,
     /// Map of chain_id -> (chain_network, token_address, contract_address)
     chain_locations: HashMap<u32, ChainLocation>,
@@ -66,7 +65,6 @@ fn extract_all_tokens_from_config(config: &Configuration) -> HashMap<String, Tok
                 .entry(symbol.clone())
                 .or_insert_with(|| TokenInfo {
                     symbol: symbol.clone(),
-                    name: token.name.clone(),
                     decimals: token.decimals,
                     chain_locations: HashMap::new(),
                 })
@@ -192,13 +190,13 @@ fn format_balance_with_decimals(balance_str: &str, decimals: u32) -> String {
     }
 }
 
-/// Display all token balances in a single table with tokens as rows
+/// Display all token balances in a single table grouped by chain
 fn display_all_token_balances(all_token_balances: &[TokenBalance]) -> String {
     if all_token_balances.is_empty() {
         return String::new();
     }
 
-    // Collect all unique chain networks across all tokens
+    // Collect all unique chain networks across all tokens and sort them
     let mut all_chains: Vec<String> = Vec::new();
     for token_balance in all_token_balances {
         for chain_balance in &token_balance.chain_balances {
@@ -212,62 +210,52 @@ fn display_all_token_balances(all_token_balances: &[TokenBalance]) -> String {
     let mut output = String::new();
     output.push('\n');
 
-    output.push_str("═══════════════════════════════════════════════════════════\n");
-    output.push_str("                      BALANCES\n");
-    output.push_str("═══════════════════════════════════════════════════════════\n");
+    output.push_str("═══════════════════════════════════════════════════════════════════════════\n");
+    output.push_str("                                 BALANCES\n");
+    output.push_str("═══════════════════════════════════════════════════════════════════════════\n\n");
 
     let mut table = Table::new();
     table.load_preset(UTF8_BORDERS_ONLY);
 
-    // Build header with two rows: chain name on first row, balance type on second row
-    let mut header: Vec<String> = vec!["Symbol".to_string(), "Token Name".to_string()];
-    for chain in &all_chains {
-        header.push(format!("{}\nWallet", chain));
-        header.push(format!("{}\nAvailable", chain));
-        header.push(format!("{}\nLocked", chain));
-    }
-    table.set_header(header);
+    // Set header: Token, Wallet, Deposited, Locked
+    table.set_header(vec!["Token", "Wallet", "Deposited", "Locked"]);
 
-    // Add row for each token
-    for token_balance in all_token_balances {
-        let mut row: Vec<String> = Vec::new();
+    // Group by chain - add rows for each chain section
+    for (chain_idx, chain) in all_chains.iter().enumerate() {
+        // Add chain header row (spans conceptually as a section header)
+        if chain_idx > 0 {
+            // Add separator row between chains
+            table.add_row(vec!["", "", "", ""]);
+        }
 
-        // Token symbol
-        row.push(token_balance.token_info.symbol.clone());
+        // Add chain name as a section header
+        table.add_row(vec![
+            format!("── {} ──", chain),
+            String::new(),
+            String::new(),
+            String::new(),
+        ]);
 
-        // Token name
-        row.push(token_balance.token_info.name.clone());
-
-        // For each chain, add Wallet, Available, and Locked columns
-        for chain in &all_chains {
-            // Find the balance for this chain
+        // Add tokens for this chain
+        for token_balance in all_token_balances {
+            // Find if this token exists on this chain
             if let Some(chain_balance) = token_balance
                 .chain_balances
                 .iter()
                 .find(|cb| cb.chain_network == *chain)
             {
                 let decimals = token_balance.token_info.decimals;
-                row.push(format_balance_with_decimals(
-                    &chain_balance.wallet_balance,
-                    decimals,
-                ));
-                row.push(format_balance_with_decimals(
-                    &chain_balance.available_balance,
-                    decimals,
-                ));
-                row.push(format_balance_with_decimals(
-                    &chain_balance.locked_balance,
-                    decimals,
-                ));
-            } else {
-                // Token doesn't exist on this chain
-                row.push("-".to_string());
-                row.push("-".to_string());
-                row.push("-".to_string());
+                let symbol = &token_balance.token_info.symbol;
+
+                let wallet = format_balance_with_decimals(&chain_balance.wallet_balance, decimals);
+                let deposited =
+                    format_balance_with_decimals(&chain_balance.available_balance, decimals);
+                let locked =
+                    format_balance_with_decimals(&chain_balance.locked_balance, decimals);
+
+                table.add_row(vec![symbol.clone(), wallet, deposited, locked]);
             }
         }
-
-        table.add_row(row);
     }
 
     output.push_str(&table.to_string());
