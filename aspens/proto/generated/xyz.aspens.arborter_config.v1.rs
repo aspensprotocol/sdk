@@ -41,7 +41,7 @@ pub struct DeployContractRequest {
     /// The name of the chain to deploy the instance on. e.g. base-sepolia
     #[prost(string, tag = "1")]
     pub chain_network: ::prost::alloc::string::String,
-    /// The transaction hash (0x-prefixed hex) of the already-broadcast createInstance call
+    /// The signed transaction hash of the createInstance function call
     #[prost(string, tag = "2")]
     pub tx_hash: ::prost::alloc::string::String,
 }

@@ -160,6 +160,8 @@ message SendOrderResponse {
   repeated TransactionHash transaction_hashes = 4;
   // Current state of the orderbook after this operation
   repeated OrderbookEntry current_orderbook = 5;
+  // The unique identifier for this order
+  uint64 order_id = 6;
 }
 
 /* rpc: CancelOrder */
