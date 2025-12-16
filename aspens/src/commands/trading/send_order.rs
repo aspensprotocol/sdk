@@ -362,4 +362,3 @@ pub async fn call_send_order_from_config(
 
     result
 }
-
