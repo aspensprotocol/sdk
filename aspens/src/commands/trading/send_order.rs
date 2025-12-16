@@ -363,3 +363,96 @@ pub async fn call_send_order_from_config(
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_send_order_response_order_id() {
+        let response = SendOrderResponse {
+            order_id: 12345,
+            order_in_book: true,
+            order: None,
+            trades: vec![],
+            transaction_hashes: vec![],
+            current_orderbook: vec![],
+        };
+
+        assert_eq!(response.order_id, 12345);
+    }
+
+    #[test]
+    fn test_send_order_response_order_id_zero() {
+        let response = SendOrderResponse {
+            order_id: 0,
+            order_in_book: false,
+            order: None,
+            trades: vec![],
+            transaction_hashes: vec![],
+            current_orderbook: vec![],
+        };
+
+        assert_eq!(response.order_id, 0);
+    }
+
+    #[test]
+    fn test_send_order_response_order_id_max() {
+        let response = SendOrderResponse {
+            order_id: u64::MAX,
+            order_in_book: true,
+            order: None,
+            trades: vec![],
+            transaction_hashes: vec![],
+            current_orderbook: vec![],
+        };
+
+        assert_eq!(response.order_id, u64::MAX);
+    }
+
+    #[test]
+    fn test_send_order_response_display_includes_order_id() {
+        let response = SendOrderResponse {
+            order_id: 98765,
+            order_in_book: true,
+            order: None,
+            trades: vec![],
+            transaction_hashes: vec![],
+            current_orderbook: vec![],
+        };
+
+        let display_str = format!("{}", response);
+        assert!(
+            display_str.contains("order_id: 98765"),
+            "Display output should contain order_id: {}",
+            display_str
+        );
+    }
+
+    #[test]
+    fn test_send_order_response_with_order_and_order_id() {
+        let order = Order {
+            side: 1,
+            quantity: "1000".to_string(),
+            price: Some("50000".to_string()),
+            market_id: "test_market".to_string(),
+            base_account_address: "0x1234".to_string(),
+            quote_account_address: "0x5678".to_string(),
+            execution_type: 0,
+            matching_order_ids: vec![],
+        };
+
+        let response = SendOrderResponse {
+            order_id: 42,
+            order_in_book: true,
+            order: Some(order),
+            trades: vec![],
+            transaction_hashes: vec![],
+            current_orderbook: vec![],
+        };
+
+        assert_eq!(response.order_id, 42);
+        assert!(response.order.is_some());
+        assert!(response.order_in_book);
+    }
+}
