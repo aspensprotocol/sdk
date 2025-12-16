@@ -66,7 +66,7 @@ message GetDeployCalldataResponse {
 message DeployContractRequest {
   // The name of the chain to deploy the instance on. e.g. base-sepolia
   string chain_network = 1;
-  // The transaction hash (0x-prefixed hex) of the already-broadcast createInstance call
+  // The signed transaction hash of the createInstance function call
   string tx_hash = 2;
 }
 
