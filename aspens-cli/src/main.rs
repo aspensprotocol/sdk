@@ -496,7 +496,10 @@ async fn run() -> Result<()> {
                     ))
                 })?;
 
-            info!("Market buy order sent successfully (order_id: {})", result.order_id);
+            info!(
+                "Market buy order sent successfully (order_id: {})",
+                result.order_id
+            );
 
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
@@ -542,7 +545,10 @@ async fn run() -> Result<()> {
                     ))
                 })?;
 
-            info!("Limit buy order sent successfully (order_id: {})", result.order_id);
+            info!(
+                "Limit buy order sent successfully (order_id: {})",
+                result.order_id
+            );
 
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
@@ -581,7 +587,10 @@ async fn run() -> Result<()> {
                     ))
                 })?;
 
-            info!("Market sell order sent successfully (order_id: {})", result.order_id);
+            info!(
+                "Market sell order sent successfully (order_id: {})",
+                result.order_id
+            );
 
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
@@ -627,7 +636,10 @@ async fn run() -> Result<()> {
                     ))
                 })?;
 
-            info!("Limit sell order sent successfully (order_id: {})", result.order_id);
+            info!(
+                "Limit sell order sent successfully (order_id: {})",
+                result.order_id
+            );
 
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
