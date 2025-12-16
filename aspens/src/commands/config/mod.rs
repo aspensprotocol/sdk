@@ -170,6 +170,106 @@ pub async fn get_signer_public_key(
     Ok(response.into_inner())
 }
 
+/// Information about a signer including their public key and gas balance
+#[derive(Debug, Clone)]
+pub struct SignerInfo {
+    /// The chain ID
+    pub chain_id: u32,
+    /// The chain network name (e.g., "base-sepolia")
+    pub chain_network: String,
+    /// The signer's public key (address)
+    pub public_key: String,
+    /// The native gas balance in wei, or None if unable to fetch
+    pub gas_balance: Option<u128>,
+}
+
+impl SignerInfo {
+    /// Format the gas balance as a human-readable string with 18 decimals (standard for native tokens)
+    pub fn formatted_gas_balance(&self) -> String {
+        match self.gas_balance {
+            Some(balance) => {
+                let balance_f64 = balance as f64 / 1e18;
+                format!("{:.6}", balance_f64)
+            }
+            None => "error".to_string(),
+        }
+    }
+}
+
+/// Get native token balance for an address on a chain via RPC
+async fn get_native_balance(rpc_url: &str, address: &str) -> Result<u128> {
+    use alloy::primitives::Address;
+    use alloy::providers::{Provider, ProviderBuilder};
+    use url::Url;
+
+    let rpc_url = Url::parse(rpc_url)?;
+    let provider = ProviderBuilder::new().connect_http(rpc_url);
+
+    let address: Address = address.parse()?;
+    let balance = provider.get_balance(address).await?;
+
+    Ok(balance.to::<u128>())
+}
+
+/// Get signer public key(s) with their native gas balances
+///
+/// # Arguments
+/// * `url` - The Aspens stack gRPC URL
+/// * `chain_id` - Optional chain ID to filter by. If None, returns all chains.
+///
+/// # Returns
+/// A vector of SignerInfo containing public key and gas balance for each chain
+pub async fn get_signer_public_key_with_balances(
+    url: String,
+    chain_id: Option<u32>,
+) -> Result<Vec<SignerInfo>> {
+    // Get signer public keys
+    let signer_response = get_signer_public_key(url.clone(), chain_id).await?;
+
+    // Get config to find RPC URLs for each chain
+    let config_response = get_config(url).await?;
+    let config = config_response
+        .config
+        .ok_or_else(|| eyre::eyre!("No configuration found"))?;
+
+    // Build a map of chain_id -> rpc_url
+    let chain_rpc_map: std::collections::HashMap<u32, String> = config
+        .chains
+        .iter()
+        .map(|chain| (chain.chain_id, chain.rpc_url.clone()))
+        .collect();
+
+    // Fetch balances for each signer
+    let mut signer_infos = Vec::new();
+
+    for (chain_id, key_info) in signer_response.chain_keys {
+        let gas_balance = if let Some(rpc_url) = chain_rpc_map.get(&chain_id) {
+            match get_native_balance(rpc_url, &key_info.public_key).await {
+                Ok(balance) => Some(balance),
+                Err(e) => {
+                    tracing::warn!("Failed to get gas balance for chain {}: {}", chain_id, e);
+                    None
+                }
+            }
+        } else {
+            tracing::warn!("No RPC URL found for chain {}", chain_id);
+            None
+        };
+
+        signer_infos.push(SignerInfo {
+            chain_id,
+            chain_network: key_info.chain_network,
+            public_key: key_info.public_key,
+            gas_balance,
+        });
+    }
+
+    // Sort by chain_id for consistent output
+    signer_infos.sort_by_key(|info| info.chain_id);
+
+    Ok(signer_infos)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
