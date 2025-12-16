@@ -595,7 +595,7 @@ fn main() {
                 config,
             )) {
                 Ok(result) => {
-                    info!("Market buy order sent successfully");
+                    info!("Market buy order sent successfully (order_id: {})", result.order_id);
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {
@@ -644,7 +644,7 @@ fn main() {
                 config,
             )) {
                 Ok(result) => {
-                    info!("Limit buy order sent successfully");
+                    info!("Limit buy order sent successfully (order_id: {})", result.order_id);
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {
@@ -692,7 +692,7 @@ fn main() {
                 config,
             )) {
                 Ok(result) => {
-                    info!("Market sell order sent successfully");
+                    info!("Market sell order sent successfully (order_id: {})", result.order_id);
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {
@@ -741,7 +741,7 @@ fn main() {
                 config,
             )) {
                 Ok(result) => {
-                    info!("Limit sell order sent successfully");
+                    info!("Limit sell order sent successfully (order_id: {})", result.order_id);
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {

@@ -153,6 +153,9 @@ pub struct SendOrderResponse {
     /// Current state of the orderbook after this operation
     #[prost(message, repeated, tag = "5")]
     pub current_orderbook: ::prost::alloc::vec::Vec<OrderbookEntry>,
+    /// The unique identifier for this order
+    #[prost(uint64, tag = "6")]
+    pub order_id: u64,
 }
 /// rpc: CancelOrder
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

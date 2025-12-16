@@ -496,6 +496,8 @@ async fn run() -> Result<()> {
                     ))
                 })?;
 
+            info!("Market buy order sent successfully (order_id: {})", result.order_id);
+
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
                 info!("Transaction hashes:");
@@ -504,8 +506,6 @@ async fn run() -> Result<()> {
                 }
                 info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
-
-            info!("Market buy order sent successfully");
         }
         Commands::BuyLimit {
             market,
@@ -542,6 +542,8 @@ async fn run() -> Result<()> {
                     ))
                 })?;
 
+            info!("Limit buy order sent successfully (order_id: {})", result.order_id);
+
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
                 info!("Transaction hashes:");
@@ -550,8 +552,6 @@ async fn run() -> Result<()> {
                 }
                 info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
-
-            info!("Limit buy order sent successfully");
         }
         Commands::SellMarket { market, amount } => {
             info!("Sending market SELL order for {amount} on market {market}");
@@ -581,6 +581,8 @@ async fn run() -> Result<()> {
                     ))
                 })?;
 
+            info!("Market sell order sent successfully (order_id: {})", result.order_id);
+
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
                 info!("Transaction hashes:");
@@ -589,8 +591,6 @@ async fn run() -> Result<()> {
                 }
                 info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
-
-            info!("Market sell order sent successfully");
         }
         Commands::SellLimit {
             market,
@@ -627,6 +627,8 @@ async fn run() -> Result<()> {
                     ))
                 })?;
 
+            info!("Limit sell order sent successfully (order_id: {})", result.order_id);
+
             // Log transaction hashes if available
             if !result.transaction_hashes.is_empty() {
                 info!("Transaction hashes:");
@@ -635,8 +637,6 @@ async fn run() -> Result<()> {
                 }
                 info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
             }
-
-            info!("Limit sell order sent successfully");
         }
         Commands::CancelOrder {
             market,
