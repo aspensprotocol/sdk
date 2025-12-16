@@ -1,4 +1,4 @@
-use aspens::commands::trading::{balance, deposit, send_order, withdraw};
+use aspens::commands::trading::{balance, cancel_order, deposit, send_order, withdraw};
 use aspens::{AspensClient, AsyncExecutor, BlockingExecutor};
 use clap::Parser;
 use clap_repl::reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory};
@@ -397,6 +397,15 @@ enum ReplCommand {
         /// Limit price for the order
         price: String,
     },
+    /// Cancel an existing order by its ID
+    CancelOrder {
+        /// Market ID the order is on
+        market: String,
+        /// Order side: "buy" or "sell"
+        side: String,
+        /// The internal order ID to cancel
+        order_id: u64,
+    },
     /// Fetch the current balances for all supported tokens across all chains
     Balance,
     /// Show current configuration and connection status
@@ -747,6 +756,61 @@ fn main() {
                         "send limit sell order for {} at {} on {}",
                         amount, price, market
                     ),
+                )),
+            }
+        }
+        ReplCommand::CancelOrder {
+            market,
+            side,
+            order_id,
+        } => {
+            info!(
+                "Canceling order {} ({}) on market {}",
+                order_id, side, market
+            );
+
+            // Fetch configuration from server
+            let config = match app_state.get_config_sync() {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    print_error(&format_error(&e, "fetch configuration"));
+                    return;
+                }
+            };
+
+            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
+                Some(key) => key,
+                None => {
+                    print_missing_privkey_error();
+                    return;
+                }
+            };
+
+            match executor.execute(cancel_order::call_cancel_order_from_config(
+                app_state.stack_url(),
+                market.clone(),
+                side.clone(),
+                order_id,
+                privkey,
+                config,
+            )) {
+                Ok(result) => {
+                    if result.order_canceled {
+                        info!("Order {} canceled successfully", order_id);
+                    } else {
+                        info!("Order {} was not found or already canceled", order_id);
+                    }
+                    if !result.transaction_hashes.is_empty() {
+                        info!("Transaction hashes:");
+                        for formatted_hash in result.get_formatted_transaction_hashes() {
+                            info!("  {}", formatted_hash);
+                        }
+                        info!("Paste these hashes into your chain's block explorer");
+                    }
+                }
+                Err(e) => print_error(&format_error(
+                    &e,
+                    &format!("cancel order {} on {}", order_id, market),
                 )),
             }
         }

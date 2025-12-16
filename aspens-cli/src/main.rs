@@ -1,4 +1,4 @@
-use aspens::commands::trading::{balance, deposit, send_order, withdraw};
+use aspens::commands::trading::{balance, cancel_order, deposit, send_order, withdraw};
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use clap::Parser;
 use eyre::Result;
@@ -322,6 +322,15 @@ enum Commands {
         /// Limit price for the order
         price: String,
     },
+    /// Cancel an existing order by its ID
+    CancelOrder {
+        /// Market ID the order is on
+        market: String,
+        /// Order side: "buy" or "sell"
+        side: String,
+        /// The internal order ID to cancel
+        order_id: u64,
+    },
     /// Fetch the current balances for all supported tokens across all chains
     Balance,
     /// Show current configuration and connection status
@@ -628,6 +637,52 @@ async fn run() -> Result<()> {
             }
 
             info!("Limit sell order sent successfully");
+        }
+        Commands::CancelOrder {
+            market,
+            side,
+            order_id,
+        } => {
+            info!("Canceling order {order_id} ({side}) on market {market}");
+
+            // Fetch configuration from server
+            let stack_url = client.stack_url().to_string();
+            let config = executor
+                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
+
+            let privkey = get_trader_privkey()?;
+
+            let result = executor
+                .execute(cancel_order::call_cancel_order_from_config(
+                    stack_url,
+                    market.clone(),
+                    side.clone(),
+                    order_id,
+                    privkey,
+                    config,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("cancel order {} on {}", order_id, market)
+                    ))
+                })?;
+
+            if result.order_canceled {
+                info!("Order {} canceled successfully", order_id);
+            } else {
+                info!("Order {} was not found or already canceled", order_id);
+            }
+
+            // Log transaction hashes if available
+            if !result.transaction_hashes.is_empty() {
+                info!("Transaction hashes:");
+                for formatted_hash in result.get_formatted_transaction_hashes() {
+                    info!("  {}", formatted_hash);
+                }
+                info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
+            }
         }
         Commands::Balance => {
             use aspens::commands::config;
