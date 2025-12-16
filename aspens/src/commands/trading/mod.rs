@@ -21,6 +21,7 @@ sol! {
 }
 
 pub mod balance;
+pub mod cancel_order;
 pub mod deposit;
 pub mod send_order;
 pub mod withdraw;
