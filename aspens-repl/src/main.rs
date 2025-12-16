@@ -820,15 +820,19 @@ fn main() {
             use aspens::commands::config;
 
             let stack_url = app_state.stack_url();
-            info!("Fetching signer public key(s) from {}", stack_url);
-            match executor.execute(config::get_signer_public_key(stack_url, chain_id)) {
-                Ok(response) => {
+            info!(
+                "Fetching signer public key(s) and gas balances from {}",
+                stack_url
+            );
+            match executor.execute(config::get_signer_public_key_with_balances(
+                stack_url, chain_id,
+            )) {
+                Ok(signer_infos) => {
                     println!("Signer Public Keys:");
-                    for (id, key_info) in response.chain_keys.iter() {
-                        println!(
-                            "  Chain {} ({}): {}",
-                            id, key_info.chain_network, key_info.public_key
-                        );
+                    for info in &signer_infos {
+                        println!("  Chain {} ({}):", info.chain_id, info.chain_network);
+                        println!("    Address:     {}", info.public_key);
+                        println!("    Gas Balance: {} (native)", info.formatted_gas_balance());
                     }
                 }
                 Err(e) => print_error(&format_error(&e, "fetch signer public key(s)")),
