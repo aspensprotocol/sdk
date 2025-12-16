@@ -12,12 +12,16 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
     let err_string = err.to_string().to_lowercase();
     let root_cause = err.root_cause().to_string().to_lowercase();
 
+    // Helper to append the underlying error to the message
+    let with_underlying_error =
+        |msg: String| -> String { format!("{}\n\nUnderlying error: {}", msg, err) };
+
     // Connection errors
     if err_string.contains("failed to connect")
         || err_string.contains("connection refused")
         || root_cause.contains("connection refused")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Could not connect to the server\n\n\
              Possible causes:\n\
              - The Aspens server is not running\n\
@@ -28,7 +32,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
              - Verify the stack URL with 'aspens-cli status'\n\
              - Check ASPENS_MARKET_STACK_URL in your .env file",
             context
-        );
+        ));
     }
 
     // DNS/hostname resolution errors
@@ -37,7 +41,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("name or service not known")
         || root_cause.contains("dns")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Could not resolve server hostname\n\n\
              Possible causes:\n\
              - The server hostname is incorrect\n\
@@ -48,7 +52,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
              - Check your internet connection\n\
              - Try using an IP address instead of hostname",
             context
-        );
+        ));
     }
 
     // TLS/SSL errors
@@ -57,7 +61,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("certificate")
         || root_cause.contains("certificate")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: TLS/SSL error\n\n\
              Possible causes:\n\
              - The server's SSL certificate is invalid or expired\n\
@@ -68,7 +72,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
              - For local development, use http://localhost:50051\n\
              - For remote servers, use https://",
             context
-        );
+        ));
     }
 
     // Protocol/compression errors (HTTP/HTTPS mismatch)
@@ -76,7 +80,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("protocol error")
         || err_string.contains("invalid compression")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Protocol mismatch\n\n\
              Possible causes:\n\
              - Using HTTP to connect to an HTTPS server\n\
@@ -87,12 +91,12 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
              - For local development, use http://\n\
              - Verify ASPENS_MARKET_STACK_URL in your .env file",
             context
-        );
+        ));
     }
 
     // Timeout errors
     if err_string.contains("timeout") || err_string.contains("timed out") {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Request timed out\n\n\
              Possible causes:\n\
              - The server is overloaded or unresponsive\n\
@@ -103,7 +107,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
              - Check server status with 'aspens-cli status'\n\
              - Verify network connectivity",
             context
-        );
+        ));
     }
 
     // Chain/network not found
@@ -111,47 +115,47 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("network not found")
         || (err_string.contains("not found") && err_string.contains("chain"))
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Chain/network not found\n\n\
              Hints:\n\
              - Check available chains with 'aspens-cli config'\n\
              - Verify the network name is spelled correctly\n\
              - The chain may not be configured on this server",
             context
-        );
+        ));
     }
 
     // Token not found
     if err_string.contains("token not found")
         || (err_string.contains("not found") && err_string.contains("token"))
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Token not found\n\n\
              Hints:\n\
              - Check available tokens with 'aspens-cli config'\n\
              - Verify the token symbol is spelled correctly (case-sensitive)\n\
              - The token may not be configured on this chain",
             context
-        );
+        ));
     }
 
     // Market not found
     if err_string.contains("market not found")
         || (err_string.contains("not found") && err_string.contains("market"))
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Market not found\n\n\
              Hints:\n\
              - Check available markets with 'aspens-cli config'\n\
              - Verify the market ID is correct\n\
              - Markets are identified by their full ID (e.g., chain_id::token::chain_id::token)",
             context
-        );
+        ));
     }
 
     // Insufficient gas (check before general insufficient balance)
     if err_string.contains("insufficient gas") {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Insufficient gas for transaction fees\n\n\
              Your wallet needs native tokens (ETH, FLR, etc.) to pay for gas.\n\n\
              Hints:\n\
@@ -160,7 +164,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
                - Base Sepolia: https://www.alchemy.com/faucets/base-sepolia\n\
                - Flare Coston2: https://faucet.flare.network",
             context
-        );
+        ));
     }
 
     // Insufficient token balance
@@ -168,19 +172,19 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("not enough")
         || err_string.contains("balance too low")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Insufficient balance\n\n\
              Hints:\n\
              - Check your balances with 'aspens-cli balance'\n\
              - For trading: ensure you have deposited tokens first\n\
              - For deposits: ensure your wallet has enough tokens",
             context
-        );
+        ));
     }
 
     // Invalid string length (typically from decimal/amount formatting issues)
     if err_string.contains("invalid string length") {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Invalid amount format\n\n\
              The server rejected the order due to an invalid amount format.\n\n\
              Possible causes:\n\
@@ -191,7 +195,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
              - Check 'aspens-cli config' to see the market's pairDecimals setting\n\
              - For market with pairDecimals=4: '1' becomes '10000', '0.5' becomes '5000'",
             context
-        );
+        ));
     }
 
     // Transaction/RPC errors
@@ -199,7 +203,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("revert")
         || err_string.contains("execution reverted")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Transaction failed\n\n\
              Possible causes:\n\
              - Insufficient token balance or allowance\n\
@@ -210,7 +214,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
              - Verify you have approved the contract to spend tokens\n\
              - Try with a smaller amount",
             context
-        );
+        ));
     }
 
     // Private key errors
@@ -219,24 +223,24 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("secret key")
         || err_string.contains("hex decode")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Invalid private key\n\n\
              Hints:\n\
              - Ensure TRADER_PRIVKEY is set correctly in your .env file\n\
              - The private key should be a 64-character hex string\n\
              - Do not include the '0x' prefix",
             context
-        );
+        ));
     }
 
     // Generic fallback with the original error
     format!(
         "Failed to {}\n\n\
-         Error: {}\n\n\
          Hints:\n\
          - Check server status with 'aspens-cli status'\n\
          - Verify your configuration in .env file\n\
-         - Use -v flag for more detailed output",
+         - Use -v flag for more detailed output\n\n\
+         Underlying error: {}",
         context, err
     )
 }

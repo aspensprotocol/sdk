@@ -12,12 +12,16 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
     let err_string = err.to_string().to_lowercase();
     let root_cause = err.root_cause().to_string().to_lowercase();
 
+    // Helper to append the underlying error to the message
+    let with_underlying_error =
+        |msg: String| -> String { format!("{}\n\nUnderlying error: {}", msg, err) };
+
     // Connection errors
     if err_string.contains("failed to connect")
         || err_string.contains("connection refused")
         || root_cause.contains("connection refused")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Could not connect to the server\n\n\
              Possible causes:\n\
                - The Aspens server is not running\n\
@@ -27,7 +31,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
                - Check server status with 'status' command\n\
                - Verify ASPENS_MARKET_STACK_URL in your .env file",
             context
-        );
+        ));
     }
 
     // DNS/hostname resolution errors
@@ -36,7 +40,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("name or service not known")
         || root_cause.contains("dns")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Could not resolve server hostname\n\n\
              Possible causes:\n\
                - The server hostname is incorrect\n\
@@ -46,7 +50,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
                - Verify the stack URL is correct\n\
                - Check your internet connection",
             context
-        );
+        ));
     }
 
     // TLS/SSL errors
@@ -55,7 +59,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("certificate")
         || root_cause.contains("certificate")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: TLS/SSL error\n\n\
              Possible causes:\n\
                - Using HTTP URL for HTTPS server or vice versa\n\
@@ -64,7 +68,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
                - For local development, use http://localhost:50051\n\
                - For remote servers, use https://",
             context
-        );
+        ));
     }
 
     // Protocol/compression errors (HTTP/HTTPS mismatch)
@@ -72,7 +76,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("protocol error")
         || err_string.contains("invalid compression")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Protocol mismatch\n\n\
              Possible causes:\n\
                - Using HTTP to connect to an HTTPS server\n\
@@ -81,12 +85,12 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
                - For remote servers, use https://\n\
                - For local development, use http://",
             context
-        );
+        ));
     }
 
     // Timeout errors
     if err_string.contains("timeout") || err_string.contains("timed out") {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Request timed out\n\n\
              Possible causes:\n\
                - Server is overloaded or unresponsive\n\
@@ -95,7 +99,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
                - Try again in a few moments\n\
                - Check server status with 'status' command",
             context
-        );
+        ));
     }
 
     // Chain/network not found
@@ -103,44 +107,44 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("network not found")
         || (err_string.contains("not found") && err_string.contains("chain"))
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Chain/network not found\n\n\
              Hints:\n\
                - Check available chains with 'config' command\n\
                - Verify the network name is spelled correctly",
             context
-        );
+        ));
     }
 
     // Token not found
     if err_string.contains("token not found")
         || (err_string.contains("not found") && err_string.contains("token"))
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Token not found\n\n\
              Hints:\n\
                - Check available tokens with 'config' command\n\
                - Token symbols are case-sensitive (e.g., USDC, not usdc)",
             context
-        );
+        ));
     }
 
     // Market not found
     if err_string.contains("market not found")
         || (err_string.contains("not found") && err_string.contains("market"))
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Market not found\n\n\
              Hints:\n\
                - Check available markets with 'config' command\n\
                - Markets use format: chain_id::token::chain_id::token",
             context
-        );
+        ));
     }
 
     // Insufficient gas (check before general insufficient balance)
     if err_string.contains("insufficient gas") {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Insufficient gas for transaction fees\n\n\
              Your wallet needs native tokens (ETH, FLR, etc.) to pay for gas.\n\n\
              Hints:\n\
@@ -149,7 +153,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
                - Base Sepolia: https://www.alchemy.com/faucets/base-sepolia\n\
                - Flare Coston2: https://faucet.flare.network",
             context
-        );
+        ));
     }
 
     // Insufficient token balance
@@ -157,25 +161,24 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("not enough")
         || err_string.contains("balance too low")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Insufficient balance\n\n\
              Hints:\n\
                - Check your balances with 'balance' command\n\
                - For trading: deposit tokens first\n\
                - For deposits: ensure wallet has enough tokens",
             context
-        );
+        ));
     }
 
     // Invalid string length (typically from address parsing issues on server)
     if err_string.contains("invalid string length") {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Server error during on-chain operation\n\n\
-             Raw error: {}\n\n\
              This error typically occurs when the server fails to parse an address.\n\
              Please check server logs for more details.",
-            context, err
-        );
+            context
+        ));
     }
 
     // Transaction/RPC errors
@@ -183,7 +186,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("revert")
         || err_string.contains("execution reverted")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Transaction failed\n\n\
              Possible causes:\n\
                - Insufficient token balance or allowance\n\
@@ -192,7 +195,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
                - Check your wallet balance\n\
                - Try with a smaller amount",
             context
-        );
+        ));
     }
 
     // Private key errors
@@ -201,19 +204,23 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
         || err_string.contains("secret key")
         || err_string.contains("hex decode")
     {
-        return format!(
+        return with_underlying_error(format!(
             "Failed to {}: Invalid private key format\n\n\
              Hints:\n\
                - TRADER_PRIVKEY should be a 64-character hex string\n\
                - Do not include the '0x' prefix\n\
                - Check for extra whitespace or newlines",
             context
-        );
+        ));
     }
 
     // Generic fallback
     format!(
-        "Failed to {}\n\nError: {}\n\nHints:\n  - Check server status with 'status' command\n  - Verify your .env configuration",
+        "Failed to {}\n\n\
+         Hints:\n\
+           - Check server status with 'status' command\n\
+           - Verify your .env configuration\n\n\
+         Underlying error: {}",
         context, err
     )
 }
