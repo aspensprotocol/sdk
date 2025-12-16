@@ -18,80 +18,6 @@ use super::MidribV2;
 use crate::commands::config::config_pb::GetConfigResponse;
 use crate::grpc::create_channel;
 
-/// Convert a human-readable amount to pair decimals format
-///
-/// # Arguments
-/// * `amount` - The amount as a string (can be integer or decimal like "1.5")
-/// * `pair_decimals` - The number of decimal places for the pair
-///
-/// # Returns
-/// The amount in pair decimals format as a string (clean numeric, no leading zeros)
-fn to_pair_decimals(amount: &str, pair_decimals: i32) -> eyre::Result<String> {
-    // Handle empty or whitespace input
-    let amount = amount.trim();
-    if amount.is_empty() {
-        return Err(eyre::eyre!("Amount cannot be empty"));
-    }
-
-    // Parse the amount as a decimal number
-    let parts: Vec<&str> = amount.split('.').collect();
-
-    if parts.len() > 2 {
-        return Err(eyre::eyre!(
-            "Invalid amount format '{}': multiple decimal points",
-            amount
-        ));
-    }
-
-    let integer_part = parts[0];
-    let decimal_part = if parts.len() == 2 { parts[1] } else { "" };
-
-    // Calculate how many zeros to add
-    let decimal_places = decimal_part.len() as i32;
-    let zeros_to_add = pair_decimals - decimal_places;
-
-    let raw_result = if zeros_to_add < 0 {
-        // More decimal places than pair_decimals allows - truncate
-        let truncated_decimal = &decimal_part[..pair_decimals as usize];
-        format!("{}{}", integer_part, truncated_decimal)
-    } else {
-        // Add zeros to reach pair_decimals
-        let zeros = "0".repeat(zeros_to_add as usize);
-        format!("{}{}{}", integer_part, decimal_part, zeros)
-    };
-
-    // Parse as u128 to remove leading zeros and validate it's a number
-    let value: u128 = raw_result
-        .parse()
-        .map_err(|_| eyre::eyre!("Invalid amount '{}': could not parse as number", amount))?;
-
-    Ok(value.to_string())
-}
-
-/// Check if amount appears to already be in pair decimals format
-///
-/// Heuristic: if the amount is a large integer (no decimal point) and
-/// significantly larger than would be reasonable for human input,
-/// it's probably already in pair decimals format.
-fn appears_to_be_pair_decimals(amount: &str, pair_decimals: i32) -> bool {
-    // If it has a decimal point, it's human-readable
-    if amount.contains('.') {
-        return false;
-    }
-
-    // Parse as integer to check magnitude
-    if let Ok(value) = amount.parse::<u128>() {
-        // If value >= 10^(pair_decimals-2), it's likely already converted
-        // e.g., for pair_decimals=4, if value >= 100, it might be pair decimals
-        // This handles edge cases where user enters "1" meaning 1 unit
-        let threshold = 10u128.pow((pair_decimals.max(0) as u32).saturating_sub(2));
-        value >= threshold
-    } else {
-        // Can't parse as integer, treat as human-readable
-        false
-    }
-}
-
 impl fmt::Display for Order {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -289,16 +215,12 @@ fn format_balance_for_display(balance: U256, decimals: u32) -> String {
 /// This is the recommended way to send orders. It uses the configuration
 /// fetched from the server to look up the market and derive account addresses.
 ///
-/// Amounts can be provided in either format:
-/// - Human-readable: "1.5", "100", "0.001" (will be converted using pair_decimals)
-/// - Pair decimals: Already scaled values like "15000" for 1.5 with pair_decimals=4
-///
 /// # Arguments
 /// * `url` - The Aspens Market Stack URL
 /// * `market_id` - The market identifier from config
 /// * `side` - Order side (1 for BUY, 2 for SELL)
-/// * `quantity` - The quantity to trade (human-readable or pair decimals)
-/// * `price` - Optional limit price (human-readable or pair decimals)
+/// * `quantity` - The quantity to trade (in pair decimals format)
+/// * `price` - Optional limit price (in pair decimals format)
 /// * `privkey` - The private key of the user's wallet
 /// * `config` - The configuration response from the server
 pub async fn call_send_order_from_config(
@@ -332,47 +254,6 @@ pub async fn call_send_order_from_config(
 
     let pair_decimals = market.pair_decimals;
 
-    // Convert quantity to pair decimals if needed
-    let converted_quantity = if appears_to_be_pair_decimals(&quantity, pair_decimals) {
-        tracing::debug!(
-            "Quantity '{}' appears to already be in pair decimals format",
-            quantity
-        );
-        quantity.clone()
-    } else {
-        let converted = to_pair_decimals(&quantity, pair_decimals)?;
-        tracing::info!(
-            "Converting quantity {} -> {} (pair_decimals={})",
-            quantity,
-            converted,
-            pair_decimals
-        );
-        converted
-    };
-
-    // Convert price to pair decimals if provided
-    let converted_price = match price {
-        Some(p) => {
-            if appears_to_be_pair_decimals(&p, pair_decimals) {
-                tracing::debug!(
-                    "Price '{}' appears to already be in pair decimals format",
-                    p
-                );
-                Some(p)
-            } else {
-                let converted = to_pair_decimals(&p, pair_decimals)?;
-                tracing::info!(
-                    "Converting price {} -> {} (pair_decimals={})",
-                    p,
-                    converted,
-                    pair_decimals
-                );
-                Some(converted)
-            }
-        }
-        None => None,
-    };
-
     // Derive public key (account address) from private key
     let signer = privkey.parse::<PrivateKeySigner>()?;
     let user_address = signer.address();
@@ -382,8 +263,8 @@ pub async fn call_send_order_from_config(
         "Sending order: market={}, side={}, quantity={}, price={:?}, account={}",
         market.name,
         if side == 1 { "BUY" } else { "SELL" },
-        converted_quantity,
-        converted_price,
+        quantity,
+        price,
         account_address
     );
 
@@ -391,8 +272,8 @@ pub async fn call_send_order_from_config(
     let result = call_send_order(
         url,
         side,
-        converted_quantity.clone(),
-        converted_price.clone(),
+        quantity.clone(),
+        price.clone(),
         market_id,
         account_address.clone(),
         account_address,
@@ -439,8 +320,8 @@ pub async fn call_send_order_from_config(
                             // Calculate required amount
                             let required_str = if side == 1 {
                                 // BUY: need quantity * price
-                                if let Some(ref p) = converted_price {
-                                    let qty: u128 = converted_quantity.parse().unwrap_or(0);
+                                if let Some(ref p) = price {
+                                    let qty: u128 = quantity.parse().unwrap_or(0);
                                     let prc: u128 = p.parse().unwrap_or(0);
                                     let pair_dec_factor = 10_u128.pow(pair_decimals as u32);
                                     let required = qty * prc / pair_dec_factor;
@@ -453,7 +334,7 @@ pub async fn call_send_order_from_config(
                                 }
                             } else {
                                 // SELL: need quantity
-                                let qty: u128 = converted_quantity.parse().unwrap_or(0);
+                                let qty: u128 = quantity.parse().unwrap_or(0);
                                 format_balance_for_display(U256::from(qty), check_token_decimals)
                             };
 
@@ -480,84 +361,4 @@ pub async fn call_send_order_from_config(
     }
 
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_to_pair_decimals_integer() {
-        // Test integer conversion with pair_decimals=4
-        assert_eq!(to_pair_decimals("1", 4).unwrap(), "10000");
-        assert_eq!(to_pair_decimals("10", 4).unwrap(), "100000");
-        assert_eq!(to_pair_decimals("100", 4).unwrap(), "1000000");
-    }
-
-    #[test]
-    fn test_to_pair_decimals_decimal() {
-        // Test decimal conversion with pair_decimals=4
-        assert_eq!(to_pair_decimals("1.5", 4).unwrap(), "15000");
-        assert_eq!(to_pair_decimals("0.5", 4).unwrap(), "5000"); // Leading zero removed
-        assert_eq!(to_pair_decimals("1.25", 4).unwrap(), "12500");
-        assert_eq!(to_pair_decimals("0.0001", 4).unwrap(), "1");
-    }
-
-    #[test]
-    fn test_to_pair_decimals_truncation() {
-        // Test truncation when too many decimal places
-        assert_eq!(to_pair_decimals("1.12345", 4).unwrap(), "11234");
-        assert_eq!(to_pair_decimals("0.99999", 4).unwrap(), "9999");
-    }
-
-    #[test]
-    fn test_to_pair_decimals_different_precisions() {
-        // Test with different pair_decimals values
-        assert_eq!(to_pair_decimals("1", 6).unwrap(), "1000000");
-        assert_eq!(to_pair_decimals("1.5", 6).unwrap(), "1500000");
-        assert_eq!(to_pair_decimals("1", 8).unwrap(), "100000000");
-        assert_eq!(to_pair_decimals("1.5", 8).unwrap(), "150000000");
-        assert_eq!(to_pair_decimals("1", 18).unwrap(), "1000000000000000000");
-    }
-
-    #[test]
-    fn test_to_pair_decimals_invalid() {
-        // Test invalid input
-        assert!(to_pair_decimals("1.2.3", 4).is_err());
-    }
-
-    #[test]
-    fn test_appears_to_be_pair_decimals() {
-        // Test heuristic for detecting already-converted values
-        // With pair_decimals=4, threshold is 10^2 = 100
-
-        // Clearly human-readable (has decimal point)
-        assert!(!appears_to_be_pair_decimals("1.5", 4));
-        assert!(!appears_to_be_pair_decimals("100.0", 4));
-
-        // Small integers should be treated as human-readable
-        assert!(!appears_to_be_pair_decimals("1", 4));
-        assert!(!appears_to_be_pair_decimals("10", 4));
-        assert!(!appears_to_be_pair_decimals("99", 4));
-
-        // Large integers could be pair decimals
-        assert!(appears_to_be_pair_decimals("100", 4));
-        assert!(appears_to_be_pair_decimals("10000", 4));
-        assert!(appears_to_be_pair_decimals("1500000", 4));
-    }
-
-    #[test]
-    fn test_appears_to_be_pair_decimals_different_precisions() {
-        // With pair_decimals=6, threshold is 10^4 = 10000
-        assert!(!appears_to_be_pair_decimals("1", 6));
-        assert!(!appears_to_be_pair_decimals("1000", 6));
-        assert!(!appears_to_be_pair_decimals("9999", 6));
-        assert!(appears_to_be_pair_decimals("10000", 6));
-        assert!(appears_to_be_pair_decimals("1000000", 6));
-
-        // With pair_decimals=18, threshold is 10^16
-        assert!(!appears_to_be_pair_decimals("1", 18));
-        assert!(!appears_to_be_pair_decimals("1000000000000000", 18)); // 10^15
-        assert!(appears_to_be_pair_decimals("10000000000000000", 18)); // 10^16
-    }
 }
