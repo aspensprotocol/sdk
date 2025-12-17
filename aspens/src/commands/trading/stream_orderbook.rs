@@ -30,7 +30,13 @@ impl fmt::Display for OrderbookEntry {
         write!(
             f,
             "[{}] #{} {} {} @ {} (maker: {}) [{}]",
-            self.timestamp, self.order_id, side_str, self.quantity, self.price, self.maker_base_address, state_str
+            self.timestamp,
+            self.order_id,
+            side_str,
+            self.quantity,
+            self.price,
+            self.maker_base_address,
+            state_str
         )
     }
 }
@@ -58,7 +64,11 @@ pub struct StreamOrderbookOptions {
 ///
 /// # Returns
 /// This function runs until the stream is closed or an error occurs.
-pub async fn stream_orderbook<F>(url: String, options: StreamOrderbookOptions, mut callback: F) -> Result<()>
+pub async fn stream_orderbook<F>(
+    url: String,
+    options: StreamOrderbookOptions,
+    mut callback: F,
+) -> Result<()>
 where
     F: FnMut(OrderbookEntry),
 {
@@ -115,7 +125,10 @@ where
 pub async fn stream_orderbook_channel(
     url: String,
     options: StreamOrderbookOptions,
-) -> Result<(mpsc::Receiver<OrderbookEntry>, tokio::task::JoinHandle<Result<()>>)> {
+) -> Result<(
+    mpsc::Receiver<OrderbookEntry>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let (tx, rx) = mpsc::channel(100);
 
     let handle = tokio::spawn(async move {
@@ -180,7 +193,7 @@ fn format_timestamp(timestamp: u64) -> String {
 /// Truncate an address for display
 fn truncate_address(address: &str) -> String {
     if address.len() > 12 {
-        format!("{}...{}", &address[..6], &address[address.len()-4..])
+        format!("{}...{}", &address[..6], &address[address.len() - 4..])
     } else {
         address.to_string()
     }
@@ -192,7 +205,10 @@ mod tests {
 
     #[test]
     fn test_truncate_address() {
-        assert_eq!(truncate_address("0x1234567890abcdef1234567890abcdef12345678"), "0x1234...5678");
+        assert_eq!(
+            truncate_address("0x1234567890abcdef1234567890abcdef12345678"),
+            "0x1234...5678"
+        );
         assert_eq!(truncate_address("short"), "short");
     }
 
