@@ -1,4 +1,6 @@
-use aspens::commands::trading::{balance, cancel_order, deposit, send_order, withdraw};
+use aspens::commands::trading::{
+    balance, cancel_order, deposit, send_order, stream_orderbook, withdraw,
+};
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use clap::Parser;
 use eyre::Result;
@@ -342,6 +344,17 @@ enum Commands {
         /// Optional chain ID to filter by. If not provided, returns all chains.
         #[arg(long)]
         chain_id: Option<u32>,
+    },
+    /// Stream orderbook entries in real-time
+    StreamOrderbook {
+        /// Market ID to stream orders for
+        market: String,
+        /// Include historical open orders when stream starts
+        #[arg(long, short = 'H')]
+        historical: bool,
+        /// Filter by a specific trader address
+        #[arg(long, short = 't')]
+        trader: Option<String>,
     },
 }
 
@@ -841,6 +854,46 @@ async fn run() -> Result<()> {
                 println!("    Address:     {}", info.public_key);
                 println!("    Gas Balance: {} (native)", info.formatted_gas_balance());
             }
+        }
+        Commands::StreamOrderbook {
+            market,
+            historical,
+            trader,
+        } => {
+            info!("Streaming orderbook for market {market}");
+            if historical {
+                info!("Including historical open orders");
+            }
+            if let Some(ref t) = trader {
+                info!("Filtering by trader: {}", t);
+            }
+
+            let stack_url = client.stack_url().to_string();
+            let options = stream_orderbook::StreamOrderbookOptions {
+                market_id: market.clone(),
+                historical_open_orders: historical,
+                filter_by_trader: trader,
+            };
+
+            println!("Streaming orderbook for market: {}", market);
+            println!("Press Ctrl+C to stop");
+            println!();
+            println!("{}", "-".repeat(120));
+
+            executor
+                .execute(stream_orderbook::stream_orderbook(
+                    stack_url,
+                    options,
+                    |entry| {
+                        println!("{}", stream_orderbook::format_orderbook_entry(&entry));
+                    },
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("stream orderbook for market {}", market)
+                    ))
+                })?;
         }
     }
 
