@@ -204,43 +204,6 @@ pub struct OrderbookEntry {
     #[prost(enumeration = "OrderState", tag = "9")]
     pub state: i32,
 }
-/// Request to set a new orderbook
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SetOrderbookRequest {
-    /// The market ID to set the orderbook for
-    #[prost(string, tag = "1")]
-    pub market_id: ::prost::alloc::string::String,
-    /// The number of decimal places for the orderbook
-    #[prost(int32, tag = "2")]
-    pub decimal_places: i32,
-}
-/// Response for setting a new orderbook
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SetOrderbookResponse {
-    /// Whether the orderbook was set successfully
-    #[prost(bool, tag = "1")]
-    pub success: bool,
-    /// The market ID of the created orderbook
-    #[prost(string, tag = "2")]
-    pub market_id: ::prost::alloc::string::String,
-}
-/// Request to remove an orderbook
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct RemoveOrderbookRequest {
-    /// The market ID to remove the orderbook for
-    #[prost(string, tag = "1")]
-    pub market_id: ::prost::alloc::string::String,
-}
-/// Response for removing an orderbook
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct RemoveOrderbookResponse {
-    /// Whether the orderbook was removed successfully
-    #[prost(bool, tag = "1")]
-    pub success: bool,
-    /// The market ID of the removed orderbook
-    #[prost(string, tag = "2")]
-    pub market_id: ::prost::alloc::string::String,
-}
 /// Converts a value in pair decimals to the correct token decimals for a given market and side
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnNormalizeDecimalsRequest {
@@ -632,64 +595,6 @@ pub mod arborter_service_client {
                     ),
                 );
             self.inner.server_streaming(req, path, codec).await
-        }
-        pub async fn set_orderbook(
-            &mut self,
-            request: impl tonic::IntoRequest<super::SetOrderbookRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SetOrderbookResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/xyz.aspens.arborter.v1.ArborterService/SetOrderbook",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new(
-                        "xyz.aspens.arborter.v1.ArborterService",
-                        "SetOrderbook",
-                    ),
-                );
-            self.inner.unary(req, path, codec).await
-        }
-        pub async fn remove_orderbook(
-            &mut self,
-            request: impl tonic::IntoRequest<super::RemoveOrderbookRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::RemoveOrderbookResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/xyz.aspens.arborter.v1.ArborterService/RemoveOrderbook",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new(
-                        "xyz.aspens.arborter.v1.ArborterService",
-                        "RemoveOrderbook",
-                    ),
-                );
-            self.inner.unary(req, path, codec).await
         }
         pub async fn un_normalize_decimals(
             &mut self,

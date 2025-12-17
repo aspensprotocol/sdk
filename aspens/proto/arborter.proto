@@ -9,8 +9,6 @@ service ArborterService {
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {}
   rpc Trades(TradeRequest) returns (stream Trade) {}
   rpc Orderbook(OrderbookRequest) returns (stream OrderbookEntry) {}
-  rpc SetOrderbook(SetOrderbookRequest) returns (SetOrderbookResponse) {}
-  rpc RemoveOrderbook(RemoveOrderbookRequest) returns (RemoveOrderbookResponse) {}
   rpc UnNormalizeDecimals(UnNormalizeDecimalsRequest) returns (UnNormalizeDecimalsResponse);
   rpc GetSignerPublicKey(GetSignerPublicKeyRequest) returns (GetSignerPublicKeyResponse);
 }
@@ -197,36 +195,6 @@ message OrderbookEntry {
   string market_id = 8;
   // The actual state of the order (Pending, Confirmed, Matched, Canceled, Settled)
   OrderState state = 9;
-}
-
-// Request to set a new orderbook
-message SetOrderbookRequest {
-  // The market ID to set the orderbook for
-  string market_id = 1;
-  // The number of decimal places for the orderbook
-  int32 decimal_places = 2;
-}
-
-// Response for setting a new orderbook
-message SetOrderbookResponse {
-  // Whether the orderbook was set successfully
-  bool success = 1;
-  // The market ID of the created orderbook
-  string market_id = 2;
-}
-
-// Request to remove an orderbook
-message RemoveOrderbookRequest {
-  // The market ID to remove the orderbook for
-  string market_id = 1;
-}
-
-// Response for removing an orderbook
-message RemoveOrderbookResponse {
-  // Whether the orderbook was removed successfully
-  bool success = 1;
-  // The market ID of the removed orderbook
-  string market_id = 2;
 }
 
 // Converts a value in pair decimals to the correct token decimals for a given market and side
