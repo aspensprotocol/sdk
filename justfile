@@ -68,3 +68,60 @@ test-anvil:
 
 test-testnet:
     ./scripts/ammit.sh testnet
+
+# Update JWT token in .env file (requires running Aspens Market Stack)
+update-jwt:
+    #!/usr/bin/env bash
+    source .env
+    ADDRESS=$(cast wallet address $ADMIN_PRIVKEY | tr '[:upper:]' '[:lower:]')
+
+    echo "Attempting to obtain JWT for admin address: $ADDRESS"
+
+    # Try init-admin first (in case server was reset)
+    OUTPUT=$(cargo run -p aspens-admin -- init-admin --address $ADDRESS 2>&1) || true
+
+    if echo "$OUTPUT" | grep -q "JWT Token:"; then
+        echo "✓ Admin initialized"
+        JWT=$(echo "$OUTPUT" | grep "JWT Token:" | awk '{print $3}')
+    elif echo "$OUTPUT" | grep -q "Admin already initialized"; then
+        # Admin exists, try login
+        echo "Admin already exists, attempting login..."
+        OUTPUT=$(cargo run -p aspens-admin -- login 2>&1) || true
+
+        if echo "$OUTPUT" | grep -q "JWT Token:"; then
+            echo "✓ Login successful"
+            JWT=$(echo "$OUTPUT" | grep "JWT Token:" | awk '{print $3}')
+        else
+            echo ""
+            echo "❌ Cannot obtain JWT - server admin state is inconsistent"
+            echo ""
+            echo "The server has an admin initialized but login failed."
+            echo "This usually happens when:"
+            echo "  1. JWT expired and server was restarted with different admin"
+            echo "  2. Server database has stale admin data"
+            echo ""
+            echo "To fix this, restart your Aspens Market Stack server with a clean state."
+            echo "The server should reset admin state on fresh startup."
+            exit 1
+        fi
+    else
+        echo "Error communicating with server:"
+        echo "$OUTPUT"
+        exit 1
+    fi
+
+    if [ -z "$JWT" ]; then
+        echo "Error: Failed to extract JWT from output"
+        exit 1
+    fi
+
+    # Update .env file (macOS-compatible)
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "s|^ASPENS_JWT=.*|ASPENS_JWT=$JWT|" .env
+    else
+        sed -i "s|^ASPENS_JWT=.*|ASPENS_JWT=$JWT|" .env
+    fi
+
+    echo ""
+    echo "✓ JWT updated successfully in .env"
+    echo "New JWT: $JWT"

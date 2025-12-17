@@ -85,11 +85,15 @@ def find_cli_binary() -> str:
     """Find the aspens-cli binary in target/release or target/debug."""
     import os
 
-    # Check release first, then debug
-    for build_type in ["release", "debug"]:
-        binary_path = f"target/{build_type}/aspens-cli"
-        if os.path.isfile(binary_path) and os.access(binary_path, os.X_OK):
-            return binary_path
+    # Check both current directory and parent directory (for when running from scripts/)
+    search_paths = [".", ".."]
+
+    for base_path in search_paths:
+        # Check release first, then debug
+        for build_type in ["release", "debug"]:
+            binary_path = os.path.join(base_path, "target", build_type, "aspens-cli")
+            if os.path.isfile(binary_path) and os.access(binary_path, os.X_OK):
+                return binary_path
 
     # Fallback to just the binary name (might be in PATH)
     return "aspens-cli"
@@ -112,7 +116,30 @@ def build_cli_command(config: Config, *args: str) -> List[str]:
     return cmd
 
 
-def run_cli(config: Config, *args: str) -> Optional[subprocess.CompletedProcess]:
+def build_cli_binary() -> bool:
+    """Build the aspens-cli binary. Returns True if successful."""
+    print_info("CLI binary not found. Building it now...")
+    try:
+        result = subprocess.run(
+            ["cargo", "build", "-p", "aspens-cli"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+
+        if result.returncode == 0:
+            print_success("✓ CLI binary built successfully")
+            return True
+        else:
+            print_error(f"Failed to build CLI binary: {result.stderr}")
+            return False
+
+    except Exception as e:
+        print_error(f"Error building CLI binary: {e}")
+        return False
+
+
+def run_cli(config: Config, *args: str, _auto_build_attempted: bool = False) -> Optional[subprocess.CompletedProcess]:
     """Run a CLI command and return the result."""
     cmd = build_cli_command(config, *args)
     cmd_str = " ".join(cmd)
@@ -149,6 +176,14 @@ def run_cli(config: Config, *args: str) -> Optional[subprocess.CompletedProcess]
         return result
 
     except FileNotFoundError:
+        if not _auto_build_attempted:
+            print_warning(f"CLI binary not found at '{config.cli_binary}'")
+            if build_cli_binary():
+                # Update binary path and retry
+                config.cli_binary = find_cli_binary()
+                print_info("Retrying command with newly built binary...")
+                return run_cli(config, *args, _auto_build_attempted=True)
+
         print_error(f"Error: CLI binary not found at '{config.cli_binary}'")
         print_error("Build it first with 'just build' or 'cargo build'")
         return None
