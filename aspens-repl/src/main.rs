@@ -1,4 +1,6 @@
-use aspens::commands::trading::{balance, cancel_order, deposit, send_order, stream_orderbook, withdraw};
+use aspens::commands::trading::{
+    balance, cancel_order, deposit, send_order, stream_orderbook, withdraw,
+};
 use aspens::{AspensClient, AsyncExecutor, BlockingExecutor};
 use clap::Parser;
 use clap_repl::reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory};
