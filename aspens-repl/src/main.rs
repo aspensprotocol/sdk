@@ -1,4 +1,4 @@
-use aspens::commands::trading::{balance, cancel_order, deposit, send_order, withdraw};
+use aspens::commands::trading::{balance, cancel_order, deposit, send_order, stream_orderbook, withdraw};
 use aspens::{AspensClient, AsyncExecutor, BlockingExecutor};
 use clap::Parser;
 use clap_repl::reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory};
@@ -417,6 +417,17 @@ enum ReplCommand {
         /// Optional chain ID to filter by. If not provided, returns all chains.
         #[arg(long)]
         chain_id: Option<u32>,
+    },
+    /// Stream orderbook entries in real-time (press Ctrl+C to stop)
+    StreamOrderbook {
+        /// Market ID to stream orders for
+        market: String,
+        /// Include historical open orders when stream starts
+        #[arg(long, short = 'H')]
+        historical: bool,
+        /// Filter by a specific trader address
+        #[arg(long, short = 't')]
+        trader: Option<String>,
     },
     /// Quit the REPL
     Quit,
@@ -919,6 +930,45 @@ fn main() {
                     }
                 }
                 Err(e) => print_error(&format_error(&e, "fetch signer public key(s)")),
+            }
+        }
+        ReplCommand::StreamOrderbook {
+            market,
+            historical,
+            trader,
+        } => {
+            info!("Streaming orderbook for market {}", market);
+            if historical {
+                info!("Including historical open orders");
+            }
+            if let Some(ref t) = trader {
+                info!("Filtering by trader: {}", t);
+            }
+
+            let stack_url = app_state.stack_url();
+            let options = stream_orderbook::StreamOrderbookOptions {
+                market_id: market.clone(),
+                historical_open_orders: historical,
+                filter_by_trader: trader,
+            };
+
+            println!("Streaming orderbook for market: {}", market);
+            println!("Press Ctrl+C to stop");
+            println!();
+            println!("{}", "-".repeat(120));
+
+            match executor.execute(stream_orderbook::stream_orderbook(
+                stack_url,
+                options,
+                |entry| {
+                    println!("{}", stream_orderbook::format_orderbook_entry(&entry));
+                },
+            )) {
+                Ok(_) => info!("Stream ended"),
+                Err(e) => print_error(&format_error(
+                    &e,
+                    &format!("stream orderbook for market {}", market),
+                )),
             }
         }
         ReplCommand::Quit => {
