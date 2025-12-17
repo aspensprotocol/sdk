@@ -14,6 +14,7 @@ A comprehensive SDK and CLI tools for interacting with an [Aspens Markets Stack]
 | `sell-market <market> <amount>` | Send a market SELL order (executes at best available price) |
 | `sell-limit <market> <amount> <price>` | Send a limit SELL order (executes at specified price or better) |
 | `cancel-order <market> <side> <order_id>` | Cancel an existing order by its ID |
+| `stream-orderbook <market> [--historical] [--trader <addr>]` | Stream orderbook entries in real-time |
 | `balance` | Fetch the current balances for all supported tokens across all chains |
 | `status` | Show current configuration and connection status |
 | `trader-public-key` | Get the public key and address for the trader wallet |
