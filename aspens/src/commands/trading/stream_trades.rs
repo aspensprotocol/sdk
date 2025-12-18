@@ -55,7 +55,11 @@ pub struct StreamTradesOptions {
 ///
 /// # Returns
 /// This function runs until the stream is closed or an error occurs.
-pub async fn stream_trades<F>(url: String, options: StreamTradesOptions, mut callback: F) -> Result<()>
+pub async fn stream_trades<F>(
+    url: String,
+    options: StreamTradesOptions,
+    mut callback: F,
+) -> Result<()>
 where
     F: FnMut(Trade),
 {
@@ -112,10 +116,7 @@ where
 pub async fn stream_trades_channel(
     url: String,
     options: StreamTradesOptions,
-) -> Result<(
-    mpsc::Receiver<Trade>,
-    tokio::task::JoinHandle<Result<()>>,
-)> {
+) -> Result<(mpsc::Receiver<Trade>, tokio::task::JoinHandle<Result<()>>)> {
     let (tx, rx) = mpsc::channel(100);
 
     let handle = tokio::spawn(async move {
