@@ -1,5 +1,5 @@
 use aspens::commands::trading::{
-    balance, cancel_order, deposit, send_order, stream_orderbook, withdraw,
+    balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
 };
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use clap::Parser;
@@ -350,6 +350,17 @@ enum Commands {
         /// Market ID to stream orders for
         market: String,
         /// Include historical open orders when stream starts
+        #[arg(long, short = 'H')]
+        historical: bool,
+        /// Filter by a specific trader address
+        #[arg(long, short = 't')]
+        trader: Option<String>,
+    },
+    /// Stream executed trades in real-time
+    StreamTrades {
+        /// Market ID to stream trades for
+        market: String,
+        /// Include historical closed trades when stream starts
         #[arg(long, short = 'H')]
         historical: bool,
         /// Filter by a specific trader address
@@ -892,6 +903,42 @@ async fn run() -> Result<()> {
                     eyre::eyre!(format_error(
                         &e,
                         &format!("stream orderbook for market {}", market)
+                    ))
+                })?;
+        }
+        Commands::StreamTrades {
+            market,
+            historical,
+            trader,
+        } => {
+            info!("Streaming trades for market {market}");
+            if historical {
+                info!("Including historical closed trades");
+            }
+            if let Some(ref t) = trader {
+                info!("Filtering by trader: {}", t);
+            }
+
+            let stack_url = client.stack_url().to_string();
+            let options = stream_trades::StreamTradesOptions {
+                market_id: market.clone(),
+                historical_closed_trades: historical,
+                filter_by_trader: trader,
+            };
+
+            println!("Streaming trades for market: {}", market);
+            println!("Press Ctrl+C to stop");
+            println!();
+            println!("{}", "-".repeat(140));
+
+            executor
+                .execute(stream_trades::stream_trades(stack_url, options, |trade| {
+                    println!("{}", stream_trades::format_trade(&trade));
+                }))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("stream trades for market {}", market)
                     ))
                 })?;
         }
