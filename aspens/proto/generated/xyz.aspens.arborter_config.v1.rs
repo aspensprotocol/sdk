@@ -270,6 +270,34 @@ pub struct Token {
     #[prost(uint32, tag = "5")]
     pub decimals: u32,
 }
+/// Request to get signer public key(s)
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetSignerPublicKeyRequest {
+    /// Optional: Request specific chain_id
+    /// If omitted, returns all chains
+    #[prost(uint32, optional, tag = "1")]
+    pub chain_id: ::core::option::Option<u32>,
+}
+/// Single chain's public key information
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChainPublicKey {
+    /// The chain ID
+    #[prost(uint32, tag = "1")]
+    pub chain_id: u32,
+    /// The chain network name (e.g., "anvil-1", "base-sepolia")
+    #[prost(string, tag = "2")]
+    pub chain_network: ::prost::alloc::string::String,
+    /// The signer's public key (address) for this chain
+    #[prost(string, tag = "3")]
+    pub public_key: ::prost::alloc::string::String,
+}
+/// Response with public keys per chain
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetSignerPublicKeyResponse {
+    /// Map of chain_id to public key info
+    #[prost(map = "uint32, message", tag = "1")]
+    pub chain_keys: ::std::collections::HashMap<u32, ChainPublicKey>,
+}
 /// Delete market request
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteMarketRequest {
@@ -726,6 +754,36 @@ pub mod config_service_client {
                     GrpcMethod::new(
                         "xyz.aspens.arborter_config.v1.ConfigService",
                         "GetVersion",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// rpc service to get the TPM signer public key
+        pub async fn get_signer_public_key(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetSignerPublicKeyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetSignerPublicKeyResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/GetSignerPublicKey",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "GetSignerPublicKey",
                     ),
                 );
             self.inner.unary(req, path, codec).await
