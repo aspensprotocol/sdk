@@ -10,7 +10,6 @@ service ArborterService {
   rpc Trades(TradeRequest) returns (stream Trade) {}
   rpc Orderbook(OrderbookRequest) returns (stream OrderbookEntry) {}
   rpc UnNormalizeDecimals(UnNormalizeDecimalsRequest) returns (UnNormalizeDecimalsResponse);
-  rpc GetSignerPublicKey(GetSignerPublicKeyRequest) returns (GetSignerPublicKeyResponse);
 }
 
 message Empty {}
@@ -174,7 +173,6 @@ message OrderToCancel {
   uint64 order_id = 4;
 }
 
-
 /* rpc: Orderbook */
 message OrderbookEntry {
   // when the order first landed in The Orderbook
@@ -211,27 +209,4 @@ message UnNormalizeDecimalsResponse {
   uint32 base_token_decimals = 3;
   uint32 quote_token_decimals = 4;
   uint32 pair_decimals = 5;
-}
-
-// Request to get signer public key(s)
-message GetSignerPublicKeyRequest {
-  // Optional: Request specific chain_id
-  // If omitted, returns all chains
-  optional uint32 chain_id = 1;
-}
-
-// Single chain's public key information
-message ChainPublicKey {
-  // The chain ID
-  uint32 chain_id = 1;
-  // The chain network name (e.g., "anvil-1", "base-sepolia")
-  string chain_network = 2;
-  // The signer's public key (address) for this chain
-  string public_key = 3;
-}
-
-// Response with public keys per chain
-message GetSignerPublicKeyResponse {
-  // Map of chain_id to public key info
-  map<uint32, ChainPublicKey> chain_keys = 1;
 }

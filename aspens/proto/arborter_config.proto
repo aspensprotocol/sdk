@@ -24,6 +24,8 @@ service ConfigService {
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse) {}
   // rpc service to get version information
   rpc GetVersion(Empty) returns (VersionInfo) {}
+  // rpc service to get the TPM signer public key
+  rpc GetSignerPublicKey(GetSignerPublicKeyRequest) returns (GetSignerPublicKeyResponse);
   // rpc service to delete a market
   rpc DeleteMarket(DeleteMarketRequest) returns (DeleteMarketResponse) {}
   // rpc service to delete a token
@@ -226,6 +228,29 @@ message Token {
   optional string token_id = 4;
   // The number of decimal places the token is defined with
   uint32 decimals = 5;
+}
+
+// Request to get signer public key(s)
+message GetSignerPublicKeyRequest {
+  // Optional: Request specific chain_id
+  // If omitted, returns all chains
+  optional uint32 chain_id = 1;
+}
+
+// Single chain's public key information
+message ChainPublicKey {
+  // The chain ID
+  uint32 chain_id = 1;
+  // The chain network name (e.g., "anvil-1", "base-sepolia")
+  string chain_network = 2;
+  // The signer's public key (address) for this chain
+  string public_key = 3;
+}
+
+// Response with public keys per chain
+message GetSignerPublicKeyResponse {
+  // Map of chain_id to public key info
+  map<uint32, ChainPublicKey> chain_keys = 1;
 }
 
 // Delete market request
