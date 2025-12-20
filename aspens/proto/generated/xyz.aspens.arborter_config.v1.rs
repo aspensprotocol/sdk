@@ -788,6 +788,40 @@ pub mod config_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// rpc service to get TEE attestation from the signer
+        pub async fn get_attestation(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                crate::attestation::v1::GetAttestationRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<
+                crate::attestation::v1::GetAttestationResponse,
+            >,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/GetAttestation",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "GetAttestation",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /// rpc service to delete a market
         pub async fn delete_market(
             &mut self,
