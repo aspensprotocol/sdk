@@ -260,7 +260,7 @@ struct Cli {
     env_file: Option<String>,
 
     #[command(flatten)]
-    verbose: clap_verbosity::Verbosity,
+    verbose: clap_verbosity::Verbosity<clap_verbosity::InfoLevel>,
 
     #[command(subcommand)]
     command: Commands,
