@@ -267,7 +267,9 @@ pub async fn get_signer_public_key_with_balances(
 }
 
 // Re-export attestation types for external use
-pub use crate::attestation::v1::{AttestationReport, GetAttestationRequest, GetAttestationResponse};
+pub use crate::attestation::v1::{
+    AttestationReport, GetAttestationRequest, GetAttestationResponse,
+};
 
 /// Get TEE attestation from the signer
 ///
