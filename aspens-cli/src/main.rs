@@ -252,15 +252,15 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
 #[command(about = "Aspens CLI for trading operations")]
 struct Cli {
     /// The Aspens stack URL (overrides ASPENS_MARKET_STACK_URL from .env)
-    #[arg(short = 's', long = "stack")]
+    #[arg(short = 's', long = "stack", global = true)]
     stack_url: Option<Url>,
 
     /// Path to environment file (defaults to .env in current directory)
-    #[arg(short = 'e', long = "env-file")]
+    #[arg(short = 'e', long = "env-file", global = true)]
     env_file: Option<String>,
 
     #[command(flatten)]
-    verbose: clap_verbosity::Verbosity,
+    verbose: clap_verbosity::Verbosity<clap_verbosity::InfoLevel>,
 
     #[command(subcommand)]
     command: Commands,
