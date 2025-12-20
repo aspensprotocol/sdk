@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package xyz.aspens.attestation.v1;
+
+option optimize_for = SPEED;
+
+service AttestationService {
+  rpc GetAttestation(GetAttestationRequest) returns (GetAttestationResponse) {}
+}
+
+message GetAttestationRequest {
+  // Optional user-provided data to bind to the attestation report.
+  // Must be at most 64 bytes. If provided, it will be included in the
+  // REPORTDATA field of the TDX attestation report.
+  optional bytes report_data = 1;
+}
+
+message GetAttestationResponse {
+  AttestationReport report = 1;
+}
+
+message AttestationReport {
+  // TEE TCB Security Version Number
+  string tee_tcb_svn = 1;
+  // Measurement of the SEAM module
+  string mr_seam = 2;
+  // Signer of the SEAM module
+  string mr_signer_seam = 3;
+  // SEAM attributes
+  string seam_attributes = 4;
+  // TD attributes
+  string td_attributes = 5;
+  // Extended feature attribute mask
+  string xfam = 6;
+  // Measurement of the TD
+  string mr_td = 7;
+  // Configuration ID
+  string mr_config_id = 8;
+  // Owner measurement
+  string mr_owner = 9;
+  // Owner configuration
+  string mr_owner_config = 10;
+  // Runtime measurement register 0
+  string rt_mr0 = 11;
+  // Runtime measurement register 1
+  string rt_mr1 = 12;
+  // Runtime measurement register 2
+  string rt_mr2 = 13;
+  // Runtime measurement register 3
+  string rt_mr3 = 14;
+  // Report data (user-provided data bound to the report)
+  string report_data = 15;
+}

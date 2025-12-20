@@ -4,6 +4,12 @@ pub mod executor;
 pub mod grpc;
 pub mod health;
 
+pub mod attestation {
+    pub mod v1 {
+        include!("../proto/generated/xyz.aspens.attestation.v1.rs");
+    }
+}
+
 pub mod proto {
     pub mod config {
         include!("../proto/generated/xyz.aspens.arborter_config.v1.rs");

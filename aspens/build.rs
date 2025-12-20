@@ -5,6 +5,7 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=proto/arborter.proto");
     println!("cargo:rerun-if-changed=proto/arborter_auth.proto");
     println!("cargo:rerun-if-changed=proto/arborter_config.proto");
+    println!("cargo:rerun-if-changed=proto/attestation.proto");
 
     build_protos()?;
     Ok(())
@@ -79,5 +80,26 @@ fn build_protos() -> Result<()> {
         )
         .compile_protos(&["proto/arborter_config.proto"], &["proto"])?;
 
+    // Post-process the generated arborter_config file to fix attestation type references.
+    // The generated code uses relative `super::super::super::attestation::v1::` paths,
+    // but we need absolute `crate::attestation::v1::` paths for proper module resolution.
+    fix_attestation_paths()?;
+
+    Ok(())
+}
+
+fn fix_attestation_paths() -> Result<()> {
+    use std::fs;
+
+    let config_file = "proto/generated/xyz.aspens.arborter_config.v1.rs";
+    let content = fs::read_to_string(config_file)?;
+
+    // Replace relative attestation paths with absolute crate paths
+    let fixed_content = content.replace(
+        "super::super::super::attestation::v1::",
+        "crate::attestation::v1::",
+    );
+
+    fs::write(config_file, fixed_content)?;
     Ok(())
 }

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package xyz.aspens.arborter_config.v1;
 
+import "attestation.proto";
+
 option optimize_for = SPEED;
 
 // The Configuration service definition
@@ -26,6 +28,8 @@ service ConfigService {
   rpc GetVersion(Empty) returns (VersionInfo) {}
   // rpc service to get the TPM signer public key
   rpc GetSignerPublicKey(GetSignerPublicKeyRequest) returns (GetSignerPublicKeyResponse);
+  // rpc service to get TEE attestation from the signer
+  rpc GetAttestation(xyz.aspens.attestation.v1.GetAttestationRequest) returns (xyz.aspens.attestation.v1.GetAttestationResponse);
   // rpc service to delete a market
   rpc DeleteMarket(DeleteMarketRequest) returns (DeleteMarketResponse) {}
   // rpc service to delete a token
