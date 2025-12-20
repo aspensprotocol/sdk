@@ -326,10 +326,6 @@ enum Commands {
         #[arg(long)]
         chain_id: u32,
 
-        /// Instance signer address
-        #[arg(long)]
-        instance_signer_address: String,
-
         /// RPC URL for the chain
         #[arg(long)]
         rpc_url: String,
@@ -645,7 +641,6 @@ async fn run() -> Result<()> {
             canonical_name,
             network,
             chain_id,
-            instance_signer_address,
             rpc_url,
             factory_address,
             permit2_address,
@@ -659,7 +654,7 @@ async fn run() -> Result<()> {
                 canonical_name,
                 network: network.clone(),
                 chain_id,
-                instance_signer_address,
+                instance_signer_address: String::new(), // Derived server-side
                 explorer_url,
                 rpc_url,
                 factory_address,
