@@ -259,15 +259,15 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
 #[command(version)]
 struct Cli {
     /// The Aspens stack URL
-    #[arg(short = 's', long = "stack")]
+    #[arg(short = 's', long = "stack", global = true)]
     stack_url: Option<Url>,
 
     /// Path to environment file (defaults to .env in current directory)
-    #[arg(short = 'e', long = "env-file")]
+    #[arg(short = 'e', long = "env-file", global = true)]
     env_file: Option<String>,
 
-    /// JWT token for authentication (can also be set via ASPENS_JWT env var)
-    #[arg(long, env = "ASPENS_JWT")]
+    /// JWT token for authentication (can also be set via ASPENS_JWT in .env file)
+    #[arg(long, global = true)]
     jwt: Option<String>,
 
     #[command(flatten)]
