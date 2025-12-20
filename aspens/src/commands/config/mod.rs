@@ -266,6 +266,51 @@ pub async fn get_signer_public_key_with_balances(
     Ok(signer_infos)
 }
 
+// Re-export attestation types for external use
+pub use crate::attestation::v1::{AttestationReport, GetAttestationRequest, GetAttestationResponse};
+
+/// Get TEE attestation from the signer
+///
+/// # Arguments
+/// * `url` - The Aspens stack gRPC URL
+/// * `report_data` - Optional user-provided data to bind to the attestation report (max 64 bytes)
+pub async fn get_attestation(
+    url: String,
+    report_data: Option<Vec<u8>>,
+) -> Result<GetAttestationResponse> {
+    use config_pb::config_service_client::ConfigServiceClient;
+
+    let channel = create_channel(&url).await?;
+    let mut client = ConfigServiceClient::new(channel);
+
+    let request = tonic::Request::new(GetAttestationRequest { report_data });
+    let response = client.get_attestation(request).await?;
+
+    Ok(response.into_inner())
+}
+
+/// Format attestation report for display
+pub fn format_attestation_report(report: &AttestationReport) -> String {
+    let mut output = String::new();
+    output.push_str("TEE Attestation Report:\n");
+    output.push_str(&format!("  TEE TCB SVN:      {}\n", report.tee_tcb_svn));
+    output.push_str(&format!("  MR SEAM:          {}\n", report.mr_seam));
+    output.push_str(&format!("  MR Signer SEAM:   {}\n", report.mr_signer_seam));
+    output.push_str(&format!("  SEAM Attributes:  {}\n", report.seam_attributes));
+    output.push_str(&format!("  TD Attributes:    {}\n", report.td_attributes));
+    output.push_str(&format!("  XFAM:             {}\n", report.xfam));
+    output.push_str(&format!("  MR TD:            {}\n", report.mr_td));
+    output.push_str(&format!("  MR Config ID:     {}\n", report.mr_config_id));
+    output.push_str(&format!("  MR Owner:         {}\n", report.mr_owner));
+    output.push_str(&format!("  MR Owner Config:  {}\n", report.mr_owner_config));
+    output.push_str(&format!("  RTMR[0]:          {}\n", report.rt_mr0));
+    output.push_str(&format!("  RTMR[1]:          {}\n", report.rt_mr1));
+    output.push_str(&format!("  RTMR[2]:          {}\n", report.rt_mr2));
+    output.push_str(&format!("  RTMR[3]:          {}\n", report.rt_mr3));
+    output.push_str(&format!("  Report Data:      {}\n", report.report_data));
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

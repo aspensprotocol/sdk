@@ -442,6 +442,15 @@ enum ReplCommand {
         #[arg(long, short = 't')]
         trader: Option<String>,
     },
+    /// Get TEE attestation report from the signer
+    GetAttestation {
+        /// Optional hex-encoded data to bind to the attestation report (max 64 bytes)
+        #[arg(long)]
+        report_data: Option<String>,
+        /// Output format: "text" (default) or "json"
+        #[arg(long, short = 'o', default_value = "text")]
+        output: String,
+    },
     /// Quit the REPL
     Quit,
 }
@@ -1017,6 +1026,85 @@ fn main() {
                     &e,
                     &format!("stream trades for market {}", market),
                 )),
+            }
+        }
+        ReplCommand::GetAttestation {
+            report_data,
+            output,
+        } => {
+            use aspens::commands::config;
+
+            info!("Fetching TEE attestation from signer");
+
+            let stack_url = app_state.stack_url();
+
+            // Parse report_data from hex if provided
+            let report_data_bytes = if let Some(hex_data) = report_data {
+                let hex_data = hex_data.strip_prefix("0x").unwrap_or(&hex_data);
+                match hex::decode(hex_data) {
+                    Ok(data) => {
+                        if data.len() > 64 {
+                            print_error(&format!(
+                                "Report data too long: {} bytes (max 64 bytes)",
+                                data.len()
+                            ));
+                            return;
+                        }
+                        Some(data)
+                    }
+                    Err(e) => {
+                        print_error(&format!(
+                            "Invalid hex data for --report-data: {}\n\n\
+                             Hints:\n\
+                               - Provide data as hex string (with or without 0x prefix)\n\
+                               - Maximum 64 bytes (128 hex characters)",
+                            e
+                        ));
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+
+            match executor.execute(config::get_attestation(stack_url, report_data_bytes)) {
+                Ok(response) => match output.as_str() {
+                    "json" => {
+                        if let Some(report) = &response.report {
+                            let json = serde_json::json!({
+                                "tee_tcb_svn": report.tee_tcb_svn,
+                                "mr_seam": report.mr_seam,
+                                "mr_signer_seam": report.mr_signer_seam,
+                                "seam_attributes": report.seam_attributes,
+                                "td_attributes": report.td_attributes,
+                                "xfam": report.xfam,
+                                "mr_td": report.mr_td,
+                                "mr_config_id": report.mr_config_id,
+                                "mr_owner": report.mr_owner,
+                                "mr_owner_config": report.mr_owner_config,
+                                "rt_mr0": report.rt_mr0,
+                                "rt_mr1": report.rt_mr1,
+                                "rt_mr2": report.rt_mr2,
+                                "rt_mr3": report.rt_mr3,
+                                "report_data": report.report_data,
+                            });
+                            match serde_json::to_string_pretty(&json) {
+                                Ok(s) => println!("{}", s),
+                                Err(e) => println!("Failed to format JSON: {}", e),
+                            }
+                        } else {
+                            println!("null");
+                        }
+                    }
+                    _ => {
+                        if let Some(report) = &response.report {
+                            print!("{}", config::format_attestation_report(report));
+                        } else {
+                            println!("No attestation report available");
+                        }
+                    }
+                },
+                Err(e) => print_error(&format_error(&e, "fetch TEE attestation")),
             }
         }
         ReplCommand::Quit => {
