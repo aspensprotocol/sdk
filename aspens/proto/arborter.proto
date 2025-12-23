@@ -9,7 +9,6 @@ service ArborterService {
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {}
   rpc Trades(TradeRequest) returns (stream Trade) {}
   rpc Orderbook(OrderbookRequest) returns (stream OrderbookEntry) {}
-  rpc UnNormalizeDecimals(UnNormalizeDecimalsRequest) returns (UnNormalizeDecimalsResponse);
 }
 
 message Empty {}
@@ -193,20 +192,4 @@ message OrderbookEntry {
   string market_id = 8;
   // The actual state of the order (Pending, Confirmed, Matched, Canceled, Settled)
   OrderState state = 9;
-}
-
-// Converts a value in pair decimals to the correct token decimals for a given market and side
-message UnNormalizeDecimalsRequest {
-  string market_id = 1;
-  string side = 2; // "buy" or "sell"
-  string quantity = 3; // in pair decimals
-  string price = 4;    // in pair decimals
-}
-
-message UnNormalizeDecimalsResponse {
-  string base_token_quantity = 1; // in base token decimals
-  string quote_token_quantity = 2; // in quote token decimals
-  uint32 base_token_decimals = 3;
-  uint32 quote_token_decimals = 4;
-  uint32 pair_decimals = 5;
 }
