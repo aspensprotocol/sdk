@@ -204,36 +204,6 @@ pub struct OrderbookEntry {
     #[prost(enumeration = "OrderState", tag = "9")]
     pub state: i32,
 }
-/// Converts a value in pair decimals to the correct token decimals for a given market and side
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct UnNormalizeDecimalsRequest {
-    #[prost(string, tag = "1")]
-    pub market_id: ::prost::alloc::string::String,
-    /// "buy" or "sell"
-    #[prost(string, tag = "2")]
-    pub side: ::prost::alloc::string::String,
-    /// in pair decimals
-    #[prost(string, tag = "3")]
-    pub quantity: ::prost::alloc::string::String,
-    /// in pair decimals
-    #[prost(string, tag = "4")]
-    pub price: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct UnNormalizeDecimalsResponse {
-    /// in base token decimals
-    #[prost(string, tag = "1")]
-    pub base_token_quantity: ::prost::alloc::string::String,
-    /// in quote token decimals
-    #[prost(string, tag = "2")]
-    pub quote_token_quantity: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "3")]
-    pub base_token_decimals: u32,
-    #[prost(uint32, tag = "4")]
-    pub quote_token_decimals: u32,
-    #[prost(uint32, tag = "5")]
-    pub pair_decimals: u32,
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum Side {
@@ -567,35 +537,6 @@ pub mod arborter_service_client {
                     ),
                 );
             self.inner.server_streaming(req, path, codec).await
-        }
-        pub async fn un_normalize_decimals(
-            &mut self,
-            request: impl tonic::IntoRequest<super::UnNormalizeDecimalsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::UnNormalizeDecimalsResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/xyz.aspens.arborter.v1.ArborterService/UnNormalizeDecimals",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new(
-                        "xyz.aspens.arborter.v1.ArborterService",
-                        "UnNormalizeDecimals",
-                    ),
-                );
-            self.inner.unary(req, path, codec).await
         }
     }
 }
