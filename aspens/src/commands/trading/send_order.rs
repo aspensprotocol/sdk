@@ -236,7 +236,9 @@ fn convert_to_pair_decimals(amount: &str, decimals: u32) -> Result<String> {
     let integer: u128 = if integer_part.is_empty() {
         0
     } else {
-        integer_part.parse().map_err(|_| eyre::eyre!("Invalid integer part: {}", integer_part))?
+        integer_part
+            .parse()
+            .map_err(|_| eyre::eyre!("Invalid integer part: {}", integer_part))?
     };
 
     // Handle fractional part - pad or truncate to match decimals
@@ -251,7 +253,9 @@ fn convert_to_pair_decimals(amount: &str, decimals: u32) -> Result<String> {
     let fractional: u128 = if fractional_str.is_empty() {
         0
     } else {
-        fractional_str.parse().map_err(|_| eyre::eyre!("Invalid fractional part: {}", fractional_str))?
+        fractional_str
+            .parse()
+            .map_err(|_| eyre::eyre!("Invalid fractional part: {}", fractional_str))?
     };
 
     // Calculate the multiplier for padding
@@ -584,8 +588,14 @@ mod tests {
     #[test]
     fn test_convert_to_pair_decimals_18_decimals() {
         // 18 decimals (like ETH)
-        assert_eq!(convert_to_pair_decimals("1", 18).unwrap(), "1000000000000000000");
-        assert_eq!(convert_to_pair_decimals("0.1", 18).unwrap(), "100000000000000000");
+        assert_eq!(
+            convert_to_pair_decimals("1", 18).unwrap(),
+            "1000000000000000000"
+        );
+        assert_eq!(
+            convert_to_pair_decimals("0.1", 18).unwrap(),
+            "100000000000000000"
+        );
     }
 
     #[test]
