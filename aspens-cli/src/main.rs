@@ -513,7 +513,7 @@ async fn run() -> Result<()> {
             let privkey = get_trader_privkey()?;
 
             let result = executor
-                .execute(send_order::call_send_order_from_config(
+                .execute(send_order::send_order(
                     stack_url,
                     market.clone(),
                     1, // Buy side
@@ -559,7 +559,7 @@ async fn run() -> Result<()> {
             let privkey = get_trader_privkey()?;
 
             let result = executor
-                .execute(send_order::call_send_order_from_config(
+                .execute(send_order::send_order(
                     stack_url,
                     market.clone(),
                     1, // Buy side
@@ -604,7 +604,7 @@ async fn run() -> Result<()> {
             let privkey = get_trader_privkey()?;
 
             let result = executor
-                .execute(send_order::call_send_order_from_config(
+                .execute(send_order::send_order(
                     stack_url,
                     market.clone(),
                     2, // Sell side
@@ -650,7 +650,7 @@ async fn run() -> Result<()> {
             let privkey = get_trader_privkey()?;
 
             let result = executor
-                .execute(send_order::call_send_order_from_config(
+                .execute(send_order::send_order(
                     stack_url,
                     market.clone(),
                     2, // Sell side

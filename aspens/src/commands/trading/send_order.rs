@@ -109,7 +109,7 @@ impl fmt::Display for SendOrderResponse {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn call_send_order(
+async fn call_send_order(
     url: String,
     side: i32,
     quantity: String,
@@ -211,30 +211,71 @@ fn format_balance_for_display(balance: U256, decimals: u32) -> String {
     )
 }
 
-/// Send an order using configuration from the server
-///
-/// This is the recommended way to send orders. It uses the configuration
-/// fetched from the server to look up the market and derive account addresses.
+/// Convert a human-readable amount (e.g., "1.001") to pair decimals format
 ///
 /// # Arguments
-/// * `url` - The Aspens Market Stack URL
-/// * `market_id` - The market identifier from config
-/// * `side` - Order side (1 for BUY, 2 for SELL)
-/// * `quantity` - The quantity to trade (in pair decimals format)
-/// * `price` - Optional limit price (in pair decimals format)
-/// * `privkey` - The private key of the user's wallet
-/// * `config` - The configuration response from the server
-pub async fn call_send_order_from_config(
-    url: String,
-    market_id: String,
-    side: i32,
-    quantity: String,
-    price: Option<String>,
-    privkey: String,
-    config: GetConfigResponse,
-) -> Result<SendOrderResponse> {
-    // Look up market info
-    let market = config.get_market_by_id(&market_id).ok_or_else(|| {
+/// * `amount` - Human-readable amount string (e.g., "1.001", "100", "0.5")
+/// * `decimals` - Number of decimal places for the pair
+///
+/// # Returns
+/// * The amount as an integer string in pair decimals format
+fn convert_to_pair_decimals(amount: &str, decimals: u32) -> Result<String> {
+    // Parse the amount as a decimal number
+    let amount = amount.trim();
+
+    // Split on decimal point
+    let parts: Vec<&str> = amount.split('.').collect();
+
+    let (integer_part, fractional_part) = match parts.len() {
+        1 => (parts[0], ""),
+        2 => (parts[0], parts[1]),
+        _ => return Err(eyre::eyre!("Invalid amount format: {}", amount)),
+    };
+
+    // Parse integer part
+    let integer: u128 = if integer_part.is_empty() {
+        0
+    } else {
+        integer_part.parse().map_err(|_| eyre::eyre!("Invalid integer part: {}", integer_part))?
+    };
+
+    // Handle fractional part - pad or truncate to match decimals
+    let fractional_str = if fractional_part.len() >= decimals as usize {
+        // Truncate to decimals places
+        &fractional_part[..decimals as usize]
+    } else {
+        // Will need to pad with zeros
+        fractional_part
+    };
+
+    let fractional: u128 = if fractional_str.is_empty() {
+        0
+    } else {
+        fractional_str.parse().map_err(|_| eyre::eyre!("Invalid fractional part: {}", fractional_str))?
+    };
+
+    // Calculate the multiplier for padding
+    let padding_zeros = decimals as usize - fractional_str.len().min(decimals as usize);
+    let fractional_padded = fractional * 10_u128.pow(padding_zeros as u32);
+
+    // Combine: integer * 10^decimals + fractional
+    let multiplier = 10_u128.pow(decimals);
+    let result = integer
+        .checked_mul(multiplier)
+        .and_then(|v| v.checked_add(fractional_padded))
+        .ok_or_else(|| eyre::eyre!("Amount overflow: {}", amount))?;
+
+    Ok(result.to_string())
+}
+
+/// Look up a market by ID from the configuration
+///
+/// Returns the market info or an error listing available markets.
+pub fn lookup_market<'a>(
+    config: &'a GetConfigResponse,
+    market_id: &str,
+) -> Result<&'a crate::commands::config::config_pb::Market> {
+    config.get_market_by_id(market_id).ok_or_else(|| {
         let available_markets = config
             .config
             .as_ref()
@@ -251,30 +292,74 @@ pub async fn call_send_order_from_config(
             market_id,
             available_markets
         )
-    })?;
+    })
+}
 
-    let pair_decimals = market.pair_decimals;
-
-    // Derive public key (account address) from private key
+/// Derive the account address from a private key
+pub fn derive_address(privkey: &str) -> Result<(Address, String)> {
     let signer = privkey.parse::<PrivateKeySigner>()?;
-    let user_address = signer.address();
-    let account_address = user_address.to_checksum(None);
+    let address = signer.address();
+    let checksum = address.to_checksum(None);
+    Ok((address, checksum))
+}
+
+/// Send an order using configuration from the server
+///
+/// This is the recommended way to send orders. It:
+/// - Looks up the market to get pair decimals
+/// - Converts human-readable amounts (e.g., "1.5") to raw format
+/// - Derives account address from private key
+///
+/// # Arguments
+/// * `url` - The Aspens Market Stack URL
+/// * `market_id` - The market identifier
+/// * `side` - Order side (1 for BUY, 2 for SELL)
+/// * `quantity` - The quantity to trade (human-readable, e.g., "1.5")
+/// * `price` - Optional limit price (human-readable, e.g., "100.50")
+/// * `privkey` - The private key of the user's wallet
+/// * `config` - The configuration response from the server
+pub async fn send_order(
+    url: String,
+    market_id: String,
+    side: i32,
+    quantity: String,
+    price: Option<String>,
+    privkey: String,
+    config: GetConfigResponse,
+) -> Result<SendOrderResponse> {
+    // Look up market
+    let market = lookup_market(&config, &market_id)?;
+    let pair_decimals = market.pair_decimals as u32;
+
+    // Convert amounts
+    let quantity_raw = convert_to_pair_decimals(&quantity, pair_decimals)
+        .map_err(|e| eyre::eyre!("Invalid quantity '{}': {}", quantity, e))?;
+    let price_raw = price
+        .as_ref()
+        .map(|p| convert_to_pair_decimals(p, pair_decimals))
+        .transpose()
+        .map_err(|e| eyre::eyre!("Invalid price: {}", e))?;
+
+    // Derive address
+    let (user_address, account_address) = derive_address(&privkey)?;
 
     tracing::info!(
-        "Sending order: market={}, side={}, quantity={}, price={:?}, account={}",
+        "Sending order: market={}, side={}, quantity={} (raw: {}), price={:?} (raw: {:?}), account={}",
         market.name,
         if side == 1 { "BUY" } else { "SELL" },
         quantity,
+        quantity_raw,
         price,
+        price_raw,
         account_address
     );
 
-    // Call the low-level send_order function
+    // Send
     let result = call_send_order(
         url,
         side,
-        quantity.clone(),
-        price.clone(),
+        quantity_raw.clone(),
+        price_raw.clone(),
         market_id,
         account_address.clone(),
         account_address,
@@ -282,86 +367,102 @@ pub async fn call_send_order_from_config(
     )
     .await;
 
-    // If we get an insufficient balance error, query and display actual balances
+    // Enhance balance errors with actual balance info
     if let Err(ref e) = result {
         let err_str = e.to_string().to_lowercase();
         if err_str.contains("insufficient") || err_str.contains("balance") {
-            // Determine which chain/token to check based on side
-            // BUY: need quote token, SELL: need base token
-            let (check_chain_network, check_token_symbol, check_token_decimals) = if side == 1 {
-                (
-                    &market.quote_chain_network,
-                    &market.quote_chain_token_symbol,
-                    market.quote_chain_token_decimals as u32,
-                )
-            } else {
-                (
-                    &market.base_chain_network,
-                    &market.base_chain_token_symbol,
-                    market.base_chain_token_decimals as u32,
-                )
-            };
-
-            // Try to query the actual deposited balance for more helpful error
-            if let Some(chain) = config.get_chain(check_chain_network) {
-                if let Some(trade_contract) = &chain.trade_contract {
-                    if let Some(token) = chain.tokens.get(check_token_symbol) {
-                        if let Ok(deposited_balance) = query_deposited_balance(
-                            &chain.rpc_url,
-                            &token.address,
-                            &trade_contract.address,
-                            user_address,
-                            chain.chain_id,
-                        )
-                        .await
-                        {
-                            let deposited_formatted =
-                                format_balance_for_display(deposited_balance, check_token_decimals);
-
-                            // Calculate required amount
-                            let required_str = if side == 1 {
-                                // BUY: need quantity * price
-                                if let Some(ref p) = price {
-                                    let qty: u128 = quantity.parse().unwrap_or(0);
-                                    let prc: u128 = p.parse().unwrap_or(0);
-                                    let pair_dec_factor = 10_u128.pow(pair_decimals as u32);
-                                    let required = qty * prc / pair_dec_factor;
-                                    format_balance_for_display(
-                                        U256::from(required),
-                                        check_token_decimals,
-                                    )
-                                } else {
-                                    "unknown (market order)".to_string()
-                                }
-                            } else {
-                                // SELL: need quantity
-                                let qty: u128 = quantity.parse().unwrap_or(0);
-                                format_balance_for_display(U256::from(qty), check_token_decimals)
-                            };
-
-                            return Err(eyre::eyre!(
-                                "Insufficient deposited balance on {}.\n\
-                                 Token: {}\n\
-                                 Required: {} {}\n\
-                                 Available: {} {}\n\n\
-                                 Deposit more {} on {} before placing this order.",
-                                check_chain_network,
-                                check_token_symbol,
-                                required_str,
-                                check_token_symbol,
-                                deposited_formatted,
-                                check_token_symbol,
-                                check_token_symbol,
-                                check_chain_network
-                            ));
-                        }
-                    }
-                }
+            if let Some(enhanced) = enhance_balance_error(
+                &config,
+                market,
+                side,
+                &quantity_raw,
+                price_raw.as_deref(),
+                user_address,
+                pair_decimals,
+            )
+            .await
+            {
+                return Err(enhanced);
             }
         }
     }
 
     result
+}
+
+/// Try to provide a more helpful error message for balance issues
+async fn enhance_balance_error(
+    config: &GetConfigResponse,
+    market: &crate::commands::config::config_pb::Market,
+    side: i32,
+    quantity_raw: &str,
+    price_raw: Option<&str>,
+    user_address: Address,
+    pair_decimals: u32,
+) -> Option<eyre::Report> {
+    // BUY: need quote token, SELL: need base token
+    let (chain_network, token_symbol, token_decimals) = if side == 1 {
+        (
+            &market.quote_chain_network,
+            &market.quote_chain_token_symbol,
+            market.quote_chain_token_decimals as u32,
+        )
+    } else {
+        (
+            &market.base_chain_network,
+            &market.base_chain_token_symbol,
+            market.base_chain_token_decimals as u32,
+        )
+    };
+
+    let chain = config.get_chain(chain_network)?;
+    let trade_contract = chain.trade_contract.as_ref()?;
+    let token = chain.tokens.get(token_symbol)?;
+
+    let deposited_balance = query_deposited_balance(
+        &chain.rpc_url,
+        &token.address,
+        &trade_contract.address,
+        user_address,
+        chain.chain_id,
+    )
+    .await
+    .ok()?;
+
+    let deposited_formatted = format_balance_for_display(deposited_balance, token_decimals);
+
+    let required_str = if side == 1 {
+        // BUY: need quantity * price
+        if let Some(p) = price_raw {
+            let qty: u128 = quantity_raw.parse().unwrap_or(0);
+            let prc: u128 = p.parse().unwrap_or(0);
+            let pair_dec_factor = 10_u128.pow(pair_decimals);
+            let required = qty * prc / pair_dec_factor;
+            format_balance_for_display(U256::from(required), token_decimals)
+        } else {
+            "unknown (market order)".to_string()
+        }
+    } else {
+        // SELL: need quantity
+        let qty: u128 = quantity_raw.parse().unwrap_or(0);
+        format_balance_for_display(U256::from(qty), token_decimals)
+    };
+
+    Some(eyre::eyre!(
+        "Insufficient deposited balance on {}.\n\
+         Token: {}\n\
+         Required: {} {}\n\
+         Available: {} {}\n\n\
+         Deposit more {} on {} before placing this order.",
+        chain_network,
+        token_symbol,
+        required_str,
+        token_symbol,
+        deposited_formatted,
+        token_symbol,
+        token_symbol,
+        chain_network
+    ))
 }
 
 #[cfg(test)]
@@ -454,5 +555,41 @@ mod tests {
         assert_eq!(response.order_id, 42);
         assert!(response.order.is_some());
         assert!(response.order_in_book);
+    }
+
+    #[test]
+    fn test_convert_to_pair_decimals_integer() {
+        // 6 decimals (like USDC)
+        assert_eq!(convert_to_pair_decimals("1", 6).unwrap(), "1000000");
+        assert_eq!(convert_to_pair_decimals("100", 6).unwrap(), "100000000");
+        assert_eq!(convert_to_pair_decimals("0", 6).unwrap(), "0");
+    }
+
+    #[test]
+    fn test_convert_to_pair_decimals_with_fraction() {
+        // 6 decimals
+        assert_eq!(convert_to_pair_decimals("1.5", 6).unwrap(), "1500000");
+        assert_eq!(convert_to_pair_decimals("1.001", 6).unwrap(), "1001000");
+        assert_eq!(convert_to_pair_decimals("0.5", 6).unwrap(), "500000");
+        assert_eq!(convert_to_pair_decimals("0.000001", 6).unwrap(), "1");
+    }
+
+    #[test]
+    fn test_convert_to_pair_decimals_truncates_extra_precision() {
+        // 6 decimals - extra precision should be truncated
+        assert_eq!(convert_to_pair_decimals("1.0000001", 6).unwrap(), "1000000");
+        assert_eq!(convert_to_pair_decimals("1.1234567", 6).unwrap(), "1123456");
+    }
+
+    #[test]
+    fn test_convert_to_pair_decimals_18_decimals() {
+        // 18 decimals (like ETH)
+        assert_eq!(convert_to_pair_decimals("1", 18).unwrap(), "1000000000000000000");
+        assert_eq!(convert_to_pair_decimals("0.1", 18).unwrap(), "100000000000000000");
+    }
+
+    #[test]
+    fn test_convert_to_pair_decimals_whitespace() {
+        assert_eq!(convert_to_pair_decimals("  1.5  ", 6).unwrap(), "1500000");
     }
 }

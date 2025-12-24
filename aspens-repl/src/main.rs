@@ -618,7 +618,7 @@ fn main() {
                 }
             };
 
-            match executor.execute(send_order::call_send_order_from_config(
+            match executor.execute(send_order::send_order(
                 app_state.stack_url(),
                 market.clone(),
                 1, // Buy side
@@ -670,7 +670,7 @@ fn main() {
                 }
             };
 
-            match executor.execute(send_order::call_send_order_from_config(
+            match executor.execute(send_order::send_order(
                 app_state.stack_url(),
                 market.clone(),
                 1, // Buy side
@@ -721,7 +721,7 @@ fn main() {
                 }
             };
 
-            match executor.execute(send_order::call_send_order_from_config(
+            match executor.execute(send_order::send_order(
                 app_state.stack_url(),
                 market.clone(),
                 2, // Sell side
@@ -773,7 +773,7 @@ fn main() {
                 }
             };
 
-            match executor.execute(send_order::call_send_order_from_config(
+            match executor.execute(send_order::send_order(
                 app_state.stack_url(),
                 market.clone(),
                 2, // Sell side
