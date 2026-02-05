@@ -15,10 +15,10 @@ repository = "https://github.com/aspensprotocol/sdk"
 
 [workspace.dependencies]
 # Blockchain & Ethereum
-alloy = { version = "1.6.1", default-features = false, features = ["contract", "network", "providers", "reqwest", "reqwest-rustls-tls", "rpc-types", "signer-local", "signers", "sol-types"] }
+alloy = { version = "1.5.4", default-features = false, features = ["contract", "network", "providers", "reqwest", "reqwest-rustls-tls", "rpc-types", "signer-local", "signers", "sol-types"] }
 alloy-chains = "0.2.30"
 alloy-contract = "1.6.1"
-alloy-sol-types = { version = "1.5.3", features = ["json"] }
+alloy-sol-types = { version = "1.5.4", features = ["json"] }
 
 # gRPC & Protobuf
 tonic = { version = "0.14.3", default-features = false, features = ["codegen", "transport", "tls-native-roots", "tls-ring"] }
