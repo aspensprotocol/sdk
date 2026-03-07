@@ -15,19 +15,19 @@ repository = "https://github.com/aspensprotocol/sdk"
 
 [workspace.dependencies]
 # Blockchain & Ethereum
-alloy = { version = "1.5.4", default-features = false, features = ["contract", "network", "providers", "reqwest", "reqwest-rustls-tls", "rpc-types", "signer-local", "signers", "sol-types"] }
+alloy = { version = "1.7.3", default-features = false, features = ["contract", "network", "providers", "reqwest", "reqwest-rustls-tls", "rpc-types", "signer-local", "signers", "sol-types"] }
 alloy-chains = "0.2.30"
-alloy-contract = "1.6.1"
-alloy-sol-types = { version = "1.5.4", features = ["json"] }
+alloy-contract = "1.7.3"
+alloy-sol-types = { version = "1.5.7", features = ["json"] }
 
 # gRPC & Protobuf
-tonic = { version = "0.14.3", default-features = false, features = ["codegen", "transport", "tls-native-roots", "tls-ring"] }
+tonic = { version = "0.14.5", default-features = false, features = ["codegen", "transport", "tls-native-roots", "tls-ring"] }
 tonic-reflection = "0.14.3"
 tonic-prost = "0.14.3"
 prost = "0.14.3"
 
 # Async runtime
-tokio = { version = "1.49.0", features = ["rt-multi-thread"] }
+tokio = { version = "1.50.0", features = ["rt-multi-thread"] }
 tokio-stream = "0.1"
 futures = "0.3"
 
@@ -37,7 +37,7 @@ serde_json = "1.0"
 toml = "0.9.8"
 
 # CLI (only for binaries)
-clap = { version = "4.5.57", features = ["derive"] }
+clap = { version = "4.5.60", features = ["derive"] }
 clap-repl = "0.3.2"
 clap-verbosity = "2.1.0"
 
@@ -54,11 +54,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Build dependencies
-tonic-build = "0.14.3"
-tonic-prost-build = "0.14.3"
+tonic-build = "0.14.5"
+tonic-prost-build = "0.14.5"
 
 # Dev dependencies
-tempfile = "3.24.0"
+tempfile = "3.26.0"
 
 [profile.release]
 opt-level = 3
