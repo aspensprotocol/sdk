@@ -458,15 +458,15 @@ enum Commands {
         #[arg(long)]
         address: String,
 
-        /// Chain ID to associate with
+        /// Chain network to associate with (e.g., "base-sepolia")
         #[arg(long)]
-        chain_id: u32,
+        chain_network: String,
     },
 
     /// Delete a trade contract from a chain
     DeleteTradeContract {
-        /// Chain ID to remove contract from
-        chain_id: u32,
+        /// Chain network to remove contract from (e.g., "base-sepolia")
+        chain_network: String,
     },
 
     // ========================================================================
@@ -1003,20 +1003,20 @@ async fn run() -> Result<()> {
             println!("Trade contract deployed at: {}", result.contract_address);
         }
 
-        Commands::SetTradeContract { address, chain_id } => {
+        Commands::SetTradeContract { address, chain_network } => {
             let jwt = get_jwt()?;
-            info!("Setting trade contract {} on chain {}", address, chain_id);
+            info!("Setting trade contract {} on chain {}", address, chain_network);
             let result = executor
                 .execute(admin::set_trade_contract(
                     stack_url.clone(),
                     jwt,
                     address.clone(),
-                    chain_id,
+                    chain_network.clone(),
                 ))
                 .map_err(|e| {
                     eyre::eyre!(format_error(
                         &e,
-                        &format!("set trade contract on chain {}", chain_id)
+                        &format!("set trade contract on chain {}", chain_network)
                     ))
                 })?;
             if let Some(tc) = result.trade_contract {
@@ -1026,34 +1026,34 @@ async fn run() -> Result<()> {
             }
         }
 
-        Commands::DeleteTradeContract { chain_id } => {
+        Commands::DeleteTradeContract { chain_network } => {
             let jwt = get_jwt()?;
-            info!("Deleting trade contract from chain {}", chain_id);
+            info!("Deleting trade contract from chain {}", chain_network);
             let result = executor
                 .execute(admin::delete_trade_contract(
                     stack_url.clone(),
                     jwt,
-                    chain_id,
+                    chain_network.clone(),
                 ))
                 .map_err(|e| {
                     eyre::eyre!(format_error(
                         &e,
-                        &format!("delete trade contract from chain {}", chain_id)
+                        &format!("delete trade contract from chain {}", chain_network)
                     ))
                 })?;
             if result.success {
                 println!(
                     "Trade contract deleted from chain {} successfully!",
-                    chain_id
+                    chain_network
                 );
             } else {
                 return Err(eyre::eyre!(
                     "Failed to delete trade contract from chain {}\n\n\
                      Hints:\n\
-                     - Verify the chain ID is correct\n\
+                     - Verify the chain network is correct\n\
                      - Check that a trade contract exists on this chain\n\
                      - The contract may have active trades",
-                    chain_id
+                    chain_network
                 ));
             }
         }

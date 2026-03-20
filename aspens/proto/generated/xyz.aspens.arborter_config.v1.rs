@@ -128,9 +128,9 @@ pub struct SetTradeContractRequest {
     /// The chain address of the trading instance
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
-    /// The chain ID to associate the trading instance with
-    #[prost(uint32, tag = "2")]
-    pub chain_id: u32,
+    /// The chain network to associate the trading instance with
+    #[prost(string, tag = "2")]
+    pub chain_network: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SetTradeContractResponse {
@@ -245,7 +245,7 @@ pub struct Market {
     /// The pair decimals (this is chosen by the stack admin)
     #[prost(int32, tag = "8")]
     pub pair_decimals: i32,
-    /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
+    /// Identity the market: concat(base_network "::" token_address "::" quote_network "::" token_address)
     #[prost(string, tag = "9")]
     pub market_id: ::prost::alloc::string::String,
 }
@@ -271,12 +271,12 @@ pub struct Token {
     pub decimals: u32,
 }
 /// Request to get signer public key(s)
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSignerPublicKeyRequest {
-    /// Optional: Request specific chain_id
+    /// Optional: Request specific chain by network name
     /// If omitted, returns all chains
-    #[prost(uint32, optional, tag = "1")]
-    pub chain_id: ::core::option::Option<u32>,
+    #[prost(string, optional, tag = "1")]
+    pub chain_network: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// Single chain's public key information
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -294,9 +294,12 @@ pub struct ChainPublicKey {
 /// Response with public keys per chain
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetSignerPublicKeyResponse {
-    /// Map of chain_id to public key info
-    #[prost(map = "uint32, message", tag = "1")]
-    pub chain_keys: ::std::collections::HashMap<u32, ChainPublicKey>,
+    /// Map of chain network name to public key info
+    #[prost(map = "string, message", tag = "1")]
+    pub chain_keys: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ChainPublicKey,
+    >,
 }
 /// Delete market request
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -353,11 +356,11 @@ pub struct DeleteChainResponse {
     pub config: ::core::option::Option<Configuration>,
 }
 /// Delete trading instance request
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteTradeContractRequest {
-    /// The chain ID to delete the trading instance from
-    #[prost(uint32, tag = "1")]
-    pub chain_id: u32,
+    /// The chain network to delete the trading instance from
+    #[prost(string, tag = "1")]
+    pub chain_network: ::prost::alloc::string::String,
 }
 /// Delete trading instance response
 #[derive(Clone, PartialEq, ::prost::Message)]

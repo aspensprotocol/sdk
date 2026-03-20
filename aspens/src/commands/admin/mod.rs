@@ -260,17 +260,17 @@ pub async fn broadcast_transaction(rpc_url: String, signed_tx: Vec<u8>) -> Resul
 /// * `url` - The Aspens stack gRPC URL
 /// * `jwt` - Valid JWT token
 /// * `address` - Contract address
-/// * `chain_id` - Chain ID to associate with
+/// * `chain_network` - Chain to associate with
 pub async fn set_trade_contract(
     url: String,
     jwt: String,
     address: String,
-    chain_id: u32,
+    chain_network: String,
 ) -> Result<SetTradeContractResponse> {
     let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
-    let request = authenticated_request(&jwt, SetTradeContractRequest { address, chain_id });
+    let request = authenticated_request(&jwt, SetTradeContractRequest { address, chain_network });
     let response = client.set_trade_contract(request).await?;
 
     Ok(response.into_inner())
@@ -281,16 +281,16 @@ pub async fn set_trade_contract(
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
 /// * `jwt` - Valid JWT token
-/// * `chain_id` - Chain ID to remove contract from
+/// * `chain_network` - Chain to remove contract from
 pub async fn delete_trade_contract(
     url: String,
     jwt: String,
-    chain_id: u32,
+    chain_network: String,
 ) -> Result<DeleteTradeContractResponse> {
     let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
-    let request = authenticated_request(&jwt, DeleteTradeContractRequest { chain_id });
+    let request = authenticated_request(&jwt, DeleteTradeContractRequest { chain_network });
     let response = client.delete_trade_contract(request).await?;
 
     Ok(response.into_inner())

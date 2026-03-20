@@ -341,9 +341,9 @@ enum Commands {
     TraderPublicKey,
     /// Get the signer public key(s) for the trading instance
     SignerPublicKey {
-        /// Optional chain ID to filter by. If not provided, returns all chains.
+        /// Optional chain network to filter by (e.g., "base-sepolia"). If not provided, returns all chains.
         #[arg(long)]
-        chain_id: Option<u32>,
+        chain_network: Option<String>,
     },
     /// Stream orderbook entries in real-time
     StreamOrderbook {
@@ -857,14 +857,14 @@ async fn run() -> Result<()> {
                 println!("{}", json);
             }
         }
-        Commands::SignerPublicKey { chain_id } => {
+        Commands::SignerPublicKey { chain_network } => {
             use aspens::commands::config;
 
             let stack_url = client.stack_url().to_string();
             info!("Fetching signer public key(s) and gas balances from {stack_url}");
             let signer_infos = executor
                 .execute(config::get_signer_public_key_with_balances(
-                    stack_url, chain_id,
+                    stack_url, chain_network,
                 ))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch signer public key(s)")))?;
 
