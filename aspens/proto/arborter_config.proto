@@ -138,8 +138,8 @@ message SetMarketResponse {
 message SetTradeContractRequest {
   // The chain address of the trading instance
   string address = 1;
-  // The chain ID to associate the trading instance with
-  uint32 chain_id = 2;
+  // The chain network to associate the trading instance with
+  string chain_network = 2;
 }
 
 message SetTradeContractResponse {
@@ -216,7 +216,7 @@ message Market {
   int32 quote_chain_token_decimals = 7;
   // The pair decimals (this is chosen by the stack admin)
   int32 pair_decimals = 8;
-  // Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
+  // Identity the market: concat(base_network "::" token_address "::" quote_network "::" token_address)
   string market_id = 9;
 }
 
@@ -236,9 +236,9 @@ message Token {
 
 // Request to get signer public key(s)
 message GetSignerPublicKeyRequest {
-  // Optional: Request specific chain_id
+  // Optional: Request specific chain by network name
   // If omitted, returns all chains
-  optional uint32 chain_id = 1;
+  optional string chain_network = 1;
 }
 
 // Single chain's public key information
@@ -253,8 +253,8 @@ message ChainPublicKey {
 
 // Response with public keys per chain
 message GetSignerPublicKeyResponse {
-  // Map of chain_id to public key info
-  map<uint32, ChainPublicKey> chain_keys = 1;
+  // Map of chain network name to public key info
+  map<string, ChainPublicKey> chain_keys = 1;
 }
 
 // Delete market request
@@ -303,8 +303,8 @@ message DeleteChainResponse {
 
 // Delete trading instance request
 message DeleteTradeContractRequest {
-  // The chain ID to delete the trading instance from
-  uint32 chain_id = 1;
+  // The chain network to delete the trading instance from
+  string chain_network = 1;
 }
 
 // Delete trading instance response

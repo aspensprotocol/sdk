@@ -416,9 +416,9 @@ enum ReplCommand {
     TraderPublicKey,
     /// Get the signer public key(s) for the trading instance
     SignerPublicKey {
-        /// Optional chain ID to filter by. If not provided, returns all chains.
+        /// Optional chain network to filter by (e.g., "base-sepolia"). If not provided, returns all chains.
         #[arg(long)]
-        chain_id: Option<u32>,
+        chain_network: Option<String>,
     },
     /// Stream orderbook entries in real-time (press Ctrl+C to stop)
     StreamOrderbook {
@@ -932,7 +932,7 @@ fn main() {
                 None => print_missing_privkey_error(),
             }
         }
-        ReplCommand::SignerPublicKey { chain_id } => {
+        ReplCommand::SignerPublicKey { chain_network } => {
             use aspens::commands::config;
 
             let stack_url = app_state.stack_url();
@@ -941,7 +941,8 @@ fn main() {
                 stack_url
             );
             match executor.execute(config::get_signer_public_key_with_balances(
-                stack_url, chain_id,
+                stack_url,
+                chain_network,
             )) {
                 Ok(signer_infos) => {
                     println!("Signer Public Keys:");

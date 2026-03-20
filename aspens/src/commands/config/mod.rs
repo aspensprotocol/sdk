@@ -149,10 +149,10 @@ pub use config_pb::{ChainPublicKey, GetSignerPublicKeyResponse};
 ///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
-/// * `chain_id` - Optional chain ID to filter by. If None, returns all chains.
+/// * `chain_network` - Optional chain name to filter by. If None, returns all chains.
 pub async fn get_signer_public_key(
     url: String,
-    chain_id: Option<u32>,
+    chain_network: Option<String>,
 ) -> Result<GetSignerPublicKeyResponse> {
     use config_pb::config_service_client::ConfigServiceClient;
     use config_pb::GetSignerPublicKeyRequest;
@@ -160,7 +160,7 @@ pub async fn get_signer_public_key(
     let channel = create_channel(&url).await?;
 
     let mut client = ConfigServiceClient::new(channel);
-    let request = tonic::Request::new(GetSignerPublicKeyRequest { chain_id });
+    let request = tonic::Request::new(GetSignerPublicKeyRequest { chain_network });
     let response = client.get_signer_public_key(request).await?;
 
     Ok(response.into_inner())
@@ -211,16 +211,16 @@ async fn get_native_balance(rpc_url: &str, address: &str) -> Result<u128> {
 ///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
-/// * `chain_id` - Optional chain ID to filter by. If None, returns all chains.
+/// * `chain_network` - Optional chain to filter by. If None, returns all chains.
 ///
 /// # Returns
 /// A vector of SignerInfo containing public key and gas balance for each chain
 pub async fn get_signer_public_key_with_balances(
     url: String,
-    chain_id: Option<u32>,
+    chain_network: Option<String>,
 ) -> Result<Vec<SignerInfo>> {
     // Get signer public keys
-    let signer_response = get_signer_public_key(url.clone(), chain_id).await?;
+    let signer_response = get_signer_public_key(url.clone(), chain_network).await?;
 
     // Get config to find RPC URLs for each chain
     let config_response = get_config(url).await?;
@@ -228,40 +228,44 @@ pub async fn get_signer_public_key_with_balances(
         .config
         .ok_or_else(|| eyre::eyre!("No configuration found"))?;
 
-    // Build a map of chain_id -> rpc_url
-    let chain_rpc_map: std::collections::HashMap<u32, String> = config
+    // Build a map of chain_network -> rpc_url
+    let chain_rpc_map: std::collections::HashMap<String, String> = config
         .chains
         .iter()
-        .map(|chain| (chain.chain_id, chain.rpc_url.clone()))
+        .map(|chain| (chain.network.clone(), chain.rpc_url.clone()))
         .collect();
 
     // Fetch balances for each signer
     let mut signer_infos = Vec::new();
 
-    for (chain_id, key_info) in signer_response.chain_keys {
-        let gas_balance = if let Some(rpc_url) = chain_rpc_map.get(&chain_id) {
+    for (chain_network_key, key_info) in signer_response.chain_keys {
+        let gas_balance = if let Some(rpc_url) = chain_rpc_map.get(&chain_network_key) {
             match get_native_balance(rpc_url, &key_info.public_key).await {
                 Ok(balance) => Some(balance),
                 Err(e) => {
-                    tracing::warn!("Failed to get gas balance for chain {}: {}", chain_id, e);
+                    tracing::warn!(
+                        "Failed to get gas balance for chain {}: {}",
+                        chain_network_key,
+                        e
+                    );
                     None
                 }
             }
         } else {
-            tracing::warn!("No RPC URL found for chain {}", chain_id);
+            tracing::warn!("No RPC URL found for chain {}", chain_network_key);
             None
         };
 
         signer_infos.push(SignerInfo {
-            chain_id,
-            chain_network: key_info.chain_network,
+            chain_id: key_info.chain_id,
+            chain_network: chain_network_key,
             public_key: key_info.public_key,
             gas_balance,
         });
     }
 
-    // Sort by chain_id for consistent output
-    signer_infos.sort_by_key(|info| info.chain_id);
+    // Sort by chain_network for consistent output
+    signer_infos.sort_by_key(|info| info.chain_network.clone());
 
     Ok(signer_infos)
 }
