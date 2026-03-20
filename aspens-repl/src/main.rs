@@ -941,7 +941,8 @@ fn main() {
                 stack_url
             );
             match executor.execute(config::get_signer_public_key_with_balances(
-                stack_url, chain_network,
+                stack_url,
+                chain_network,
             )) {
                 Ok(signer_infos) => {
                     println!("Signer Public Keys:");

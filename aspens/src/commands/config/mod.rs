@@ -243,7 +243,11 @@ pub async fn get_signer_public_key_with_balances(
             match get_native_balance(rpc_url, &key_info.public_key).await {
                 Ok(balance) => Some(balance),
                 Err(e) => {
-                    tracing::warn!("Failed to get gas balance for chain {}: {}", chain_network_key, e);
+                    tracing::warn!(
+                        "Failed to get gas balance for chain {}: {}",
+                        chain_network_key,
+                        e
+                    );
                     None
                 }
             }

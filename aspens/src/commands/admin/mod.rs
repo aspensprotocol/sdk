@@ -270,7 +270,13 @@ pub async fn set_trade_contract(
     let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
-    let request = authenticated_request(&jwt, SetTradeContractRequest { address, chain_network });
+    let request = authenticated_request(
+        &jwt,
+        SetTradeContractRequest {
+            address,
+            chain_network,
+        },
+    );
     let response = client.set_trade_contract(request).await?;
 
     Ok(response.into_inner())

@@ -1003,9 +1003,15 @@ async fn run() -> Result<()> {
             println!("Trade contract deployed at: {}", result.contract_address);
         }
 
-        Commands::SetTradeContract { address, chain_network } => {
+        Commands::SetTradeContract {
+            address,
+            chain_network,
+        } => {
             let jwt = get_jwt()?;
-            info!("Setting trade contract {} on chain {}", address, chain_network);
+            info!(
+                "Setting trade contract {} on chain {}",
+                address, chain_network
+            );
             let result = executor
                 .execute(admin::set_trade_contract(
                     stack_url.clone(),

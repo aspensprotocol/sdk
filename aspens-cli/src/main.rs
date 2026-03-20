@@ -864,7 +864,8 @@ async fn run() -> Result<()> {
             info!("Fetching signer public key(s) and gas balances from {stack_url}");
             let signer_infos = executor
                 .execute(config::get_signer_public_key_with_balances(
-                    stack_url, chain_network,
+                    stack_url,
+                    chain_network,
                 ))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch signer public key(s)")))?;
 
