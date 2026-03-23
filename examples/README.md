@@ -1,177 +1,68 @@
-# Aspens Decimal Conversion Examples
+# Aspens SDK Examples
 
-This directory contains practical examples demonstrating how to use the Aspens CLI and REPL with proper decimal conversions for crosschain trading.
+## Quickstart
 
-## Files
+The core trading workflow in five steps: **connect, check balances, deposit, trade, withdraw**.
 
-- `decimal_conversion_examples.sh` - Comprehensive script showing decimal conversions for various token pairs
-- `README.md` - This file
+### Using the CLI
 
-## Quick Start
-
-### Running the Examples
-
-1. **View the Examples**
-   ```bash
-   cd aspens/examples
-   chmod +x decimal_conversion_examples.sh
-   ./decimal_conversion_examples.sh
-   ```
-
-2. **Run Individual Examples**
-   ```bash
-   # ETH/USDC limit buy order
-   aspens-cli buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
-
-   # BTC/USDT limit sell order
-   aspens-cli sell-limit <market_id> 50000000 4500000000000
-
-   # USDC/DAI limit buy order
-   aspens-cli buy-limit <market_id> 1000000000000000 1001000000000
-   ```
-
-## Key Concepts Explained
-
-### Decimal Conversion Formula
-
-The fundamental formula for converting human-readable amounts to pair decimal format:
-
-```
-pair_amount = human_amount * 10^pair_decimals
-```
-
-### Examples by Token Pair
-
-#### 1. ETH/USDC (18/6 decimals, pair_decimals=18)
-- **Human**: 1.5 ETH at $2,500 USDC
-- **Pair**: 1,500,000,000,000,000,000 at 2,500,000,000,000,000,000,000,000,000,000,000
-- **CLI**: `aspens-cli buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000`
-
-#### 2. BTC/USDT (8/6 decimals, pair_decimals=8)
-- **Human**: 0.5 BTC at $45,000 USDT
-- **Pair**: 50,000,000 at 4,500,000,000,000
-- **CLI**: `aspens-cli sell-limit <market_id> 50000000 4500000000000`
-
-#### 3. USDC/DAI (6/18 decimals, pair_decimals=12)
-- **Human**: 1,000 USDC at 1.001 DAI
-- **Pair**: 1,000,000,000,000,000 at 1,001,000,000,000
-- **CLI**: `aspens-cli buy-limit <market_id> 1000000000000000 1001000000000`
-
-## Common Patterns
-
-### Market Orders (No Price)
 ```bash
-# Buy 0.75 WBTC at market price
-aspens-cli buy-market <market_id> 7500000000
+# 1. Connect & check status
+aspens-cli status
 
-# Sell 0.25 WBTC at market price
-aspens-cli sell-market <market_id> 2500000000
+# 2. View balances
+aspens-cli balance
+
+# 3. Deposit tokens (network, token symbol, amount in smallest unit)
+aspens-cli deposit anvil-1 USDC 1000000
+
+# 4. Trade
+aspens-cli buy-limit <MARKET_ID> 1.5 100.50    # limit buy: quantity, price
+aspens-cli sell-market <MARKET_ID> 0.5          # market sell: quantity
+
+# 5. Withdraw tokens back to your wallet
+aspens-cli withdraw anvil-1 USDC 500000
 ```
 
-### Small Amount Trading
-```bash
-# Buy 1,000,000 SHIB at $0.00001 USDT
-aspens-cli buy-limit <market_id> 1000000000000 10
-```
+### Using the Rust SDK
 
-### REPL Interactive Trading
+See [`quickstart.rs`](quickstart.rs) for a complete example showing how to use
+the `aspens` library crate directly.
+
+### Using the REPL
+
 ```bash
 aspens-repl
 aspens> config
-aspens> buy-limit <market_id> 1500000000000000000 2500000000000000000000000000000000000
-aspens> sell-market <market_id> 50000000
 aspens> balance
+aspens> deposit anvil-1 USDC 1000000
+aspens> buy-limit <MARKET_ID> 1.5 100.50
+aspens> withdraw anvil-1 USDC 500000
 aspens> quit
 ```
 
-## Testing Your Setup
+## Setup
 
-### 1. Check the Aspens Market Stack Configuration & Status
-```bash
-aspens-repl
-aspens> config
-```
+1. Copy `.env.sample` to `.env` and fill in:
+   ```
+   ASPENS_MARKET_STACK_URL=http://localhost:50051
+   TRADER_PRIVKEY=<64-char-hex-private-key>
+   ```
 
-### 2. Stream Orderbook
-```bash
-# View real-time orderbook with decimal formatting
-just stream-orderbook "your-market-id"
-```
+2. Verify connectivity:
+   ```bash
+   aspens-cli status
+   aspens-cli config
+   ```
 
-### 3. Test Small Orders
-```bash
-# Always test with small amounts first
-aspens-cli buy-limit <market_id> 100000000000000000 100000000000000000000000000000000000
-```
+## Other Examples
 
-## Troubleshooting
+- [`quickstart.rs`](quickstart.rs) — Full SDK workflow (connect, deposit, trade, withdraw)
+- [`transaction_hash_example.rs`](transaction_hash_example.rs) — Working with transaction hashes from order responses
 
-### Common Issues
+## Key Concepts
 
-1. **"Invalid amount" errors**
-   - Ensure you're using pair decimal format, not human amounts
-   - Check that your amounts don't exceed u64 limits
-
-2. **"Precision loss" warnings**
-   - This is expected when scaling down from higher to lower decimals
-   - The system handles this automatically
-
-3. **"Order not found" errors**
-   - Verify your market ID is correct
-   - Check that Aspens Market Stack running and configured and reachable
-
-### Debug Commands
-
-```bash
-# View orderbook in real-time
-just stream-orderbook "your-market-id"
-
-# Test gRPC connection
-grpcurl -plaintext localhost:50051 xyz.aspens.arborter_config.v1.ConfigService.GetConfig
-```
-
-## Advanced Usage
-
-### Custom Decimal Calculations
-
-For custom token pairs, calculate pair decimals manually:
-
-```bash
-# Example: Token with 27 decimals vs USDC with 6 decimals
-# Pair decimals: 18
-HUMAN_AMOUNT=0.000000000000000000000001
-PAIR_DECIMALS=18
-PAIR_AMOUNT=$(echo "scale=0; $HUMAN_AMOUNT * 10^$PAIR_DECIMALS / 1" | bc)
-echo "Pair amount: $PAIR_AMOUNT"
-```
-
-### Batch Trading
-
-Create scripts for automated trading:
-
-```bash
-#!/bin/bash
-# batch_trading.sh
-
-# Calculate amounts
-ETH_AMOUNT=$(echo "scale=0; 1.5 * 10^18 / 1" | bc)
-ETH_PRICE=$(echo "scale=0; 2500.0 * 10^18 / 1" | bc)
-
-# Place orders
-aspens-cli buy-limit <market_id> $ETH_AMOUNT $ETH_PRICE
-aspens-cli sell-limit <market_id> $ETH_AMOUNT $ETH_PRICE
-```
-
-## References
-
-- [Main Decimal Documentation](../decimals.md) - Comprehensive guide to decimal conversions
-- [CLI Documentation](../aspens-cli/src/main.rs) - CLI command reference
-- [REPL Documentation](../aspens-repl/src/main.rs) - REPL command reference
-
-## Support
-
-For issues or questions:
-1. Check the troubleshooting section above
-2. Review the main decimal documentation
-3. Test with the provided examples
-4. Check logs for detailed error messages 
+- **Deposit/withdraw amounts** are in the token's smallest unit (e.g., `1000000` = 1 USDC with 6 decimals)
+- **Order quantities and prices** are human-readable strings (e.g., `"1.5"`, `"100.50"`) — the SDK converts to pair decimals automatically
+- **Market IDs** follow the format: `chain_network::token_address::chain_network::token_address`
+- Run `aspens-cli config` to see available chains, tokens, and markets
