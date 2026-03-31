@@ -189,5 +189,13 @@ pub async fn call_cancel_order_from_config(
         token_address
     );
 
-    call_cancel_order(url, market.market_id.clone(), side_value, token_address, order_id, privkey).await
+    call_cancel_order(
+        url,
+        market.market_id.clone(),
+        side_value,
+        token_address,
+        order_id,
+        privkey,
+    )
+    .await
 }
