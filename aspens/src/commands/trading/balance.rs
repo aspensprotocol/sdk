@@ -1,5 +1,5 @@
 use alloy::primitives::{Address, Uint};
-use alloy::providers::ProviderBuilder;
+use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
 use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
@@ -35,6 +35,13 @@ struct ChainBalance {
     wallet_balance: String,
     available_balance: String,
     locked_balance: String,
+}
+
+/// Native gas token balance for a chain
+#[derive(Debug)]
+struct NativeBalance {
+    chain_network: String,
+    balance: String,
 }
 
 /// Aggregated balance for a single token across all chains
@@ -191,7 +198,10 @@ fn format_balance_with_decimals(balance_str: &str, decimals: u32) -> String {
 }
 
 /// Display all token balances in a single table grouped by chain
-fn display_all_token_balances(all_token_balances: &[TokenBalance]) -> String {
+fn display_all_token_balances(
+    all_token_balances: &[TokenBalance],
+    native_balances: &[NativeBalance],
+) -> String {
     if all_token_balances.is_empty() {
         return String::new();
     }
@@ -238,6 +248,17 @@ fn display_all_token_balances(all_token_balances: &[TokenBalance]) -> String {
             String::new(),
             String::new(),
         ]);
+
+        // Add native gas balance for this chain
+        if let Some(native) = native_balances.iter().find(|nb| nb.chain_network == *chain) {
+            let gas_balance = format_balance_with_decimals(&native.balance, 18);
+            table.add_row(vec![
+                "GAS".to_string(),
+                gas_balance,
+                String::new(),
+                String::new(),
+            ]);
+        }
 
         // Add tokens for this chain
         for token_balance in all_token_balances {
@@ -303,8 +324,31 @@ pub async fn balance_from_config(config: GetConfigResponse, privkey: String) -> 
     // Sort tokens by symbol for consistent display
     all_token_balances.sort_by(|a, b| a.token_info.symbol.cmp(&b.token_info.symbol));
 
+    // Query native gas balance for each chain
+    let mut native_balances: Vec<NativeBalance> = Vec::new();
+    let mut seen_rpcs: HashMap<String, String> = HashMap::new();
+    for chain in &configuration.chains {
+        if seen_rpcs.contains_key(&chain.rpc_url) {
+            continue;
+        }
+        seen_rpcs.insert(chain.rpc_url.clone(), chain.network.clone());
+        let balance = call_get_native_balance(&chain.rpc_url, &privkey)
+            .await
+            .map_or_else(
+                |e| {
+                    warn!("Failed to get native balance on {}: {}", chain.network, e);
+                    "error".to_string()
+                },
+                |v| v.to_string(),
+            );
+        native_balances.push(NativeBalance {
+            chain_network: chain.network.clone(),
+            balance,
+        });
+    }
+
     // Display all token balances
-    let output = display_all_token_balances(&all_token_balances);
+    let output = display_all_token_balances(&all_token_balances, &native_balances);
     info!("{}", output);
 
     Ok(())
@@ -441,6 +485,15 @@ pub async fn call_get_erc20_balance(
     let contract = IERC20::new(token_addr, &provider);
     let result = contract.balanceOf(depositer_address).call().await?;
     Ok(result)
+}
+
+pub async fn call_get_native_balance(rpc_url: &str, privkey: &str) -> Result<Uint<256, 4>> {
+    let signer = privkey.parse::<PrivateKeySigner>()?;
+    let address = signer.address();
+    let rpc_url = Url::parse(rpc_url)?;
+    let provider = ProviderBuilder::new().connect_http(rpc_url);
+    let balance = provider.get_balance(address).await?;
+    Ok(balance)
 }
 
 pub fn balance_table(
