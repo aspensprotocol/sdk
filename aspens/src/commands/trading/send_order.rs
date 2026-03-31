@@ -147,7 +147,7 @@ async fn call_send_order(
     // Create the request with the original order and signature
     let request = SendOrderRequest {
         order: Some(order_for_sending),
-        signature_hash: signature.as_bytes().to_vec(),
+        signature_hash: signature.as_bytes()[..64].to_vec(),
     };
 
     // Create a tonic request
@@ -272,31 +272,69 @@ fn convert_to_pair_decimals(amount: &str, decimals: u32) -> Result<String> {
     Ok(result.to_string())
 }
 
-/// Look up a market by ID from the configuration
+/// Look up a market from the configuration
+///
+/// Supports multiple formats:
+/// - Shorthand: `base_network/base_symbol::quote_network/quote_symbol`
+///   e.g. `flare-coston2/fXRP::flare-coston2-quote/USDT0`
+/// - Full market ID: `base_network::token_address::quote_network::token_address`
+/// - Market name: e.g. `Base Sepolia USDC - OP Sepolia USDC`
 ///
 /// Returns the market info or an error listing available markets.
 pub fn lookup_market<'a>(
     config: &'a GetConfigResponse,
     market_id: &str,
 ) -> Result<&'a crate::commands::config::config_pb::Market> {
-    config.get_market_by_id(market_id).ok_or_else(|| {
-        let available_markets = config
-            .config
-            .as_ref()
-            .map(|c| {
-                c.markets
-                    .iter()
-                    .map(|m| format!("{} ({})", m.name, m.market_id))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default();
-        eyre::eyre!(
-            "Market '{}' not found in configuration. Available markets: {}",
-            market_id,
-            available_markets
-        )
-    })
+    // Strip surrounding quotes if present (e.g. from shell env vars)
+    let market_id = market_id.trim_matches('"').trim_matches('\'');
+
+    // Try shorthand format: base_network/symbol::quote_network/symbol
+    if let Some((base, quote)) = market_id.split_once("::") {
+        if let (Some((base_network, base_symbol)), Some((quote_network, quote_symbol))) =
+            (base.split_once('/'), quote.split_once('/'))
+        {
+            if let Some(market) =
+                config.get_market_by_tokens(base_network, base_symbol, quote_network, quote_symbol)
+            {
+                return Ok(market);
+            }
+        }
+    }
+
+    // Try exact market_id match
+    if let Some(market) = config.get_market_by_id(market_id) {
+        return Ok(market);
+    }
+
+    // Try market name match
+    if let Some(market) = config.get_market(market_id) {
+        return Ok(market);
+    }
+
+    let available_markets = config
+        .config
+        .as_ref()
+        .map(|c| {
+            c.markets
+                .iter()
+                .map(|m| {
+                    format!(
+                        "{}/{}::{}/{}",
+                        m.base_chain_network,
+                        m.base_chain_token_symbol,
+                        m.quote_chain_network,
+                        m.quote_chain_token_symbol
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    Err(eyre::eyre!(
+        "Market '{}' not found in configuration. Available markets: {}",
+        market_id,
+        available_markets
+    ))
 }
 
 /// Derive the account address from a private key
@@ -358,13 +396,14 @@ pub async fn send_order(
         account_address
     );
 
-    // Send
+    // Send using the resolved market_id from config
+    let resolved_market_id = market.market_id.clone();
     let result = call_send_order(
         url,
         side,
         quantity_raw.clone(),
         price_raw.clone(),
-        market_id,
+        resolved_market_id,
         account_address.clone(),
         account_address,
         privkey,
@@ -435,22 +474,29 @@ async fn enhance_balance_error(
 
     let deposited_formatted = format_balance_for_display(deposited_balance, token_decimals);
 
-    let required_str = if side == 1 {
+    let required_amount = if side == 1 {
         // BUY: need quantity * price
         if let Some(p) = price_raw {
             let qty: u128 = quantity_raw.parse().unwrap_or(0);
             let prc: u128 = p.parse().unwrap_or(0);
             let pair_dec_factor = 10_u128.pow(pair_decimals);
-            let required = qty * prc / pair_dec_factor;
-            format_balance_for_display(U256::from(required), token_decimals)
+            Some(U256::from(qty * prc / pair_dec_factor))
         } else {
-            "unknown (market order)".to_string()
+            None
         }
     } else {
         // SELL: need quantity
         let qty: u128 = quantity_raw.parse().unwrap_or(0);
-        format_balance_for_display(U256::from(qty), token_decimals)
+        Some(U256::from(qty))
     };
+
+    // Only enhance if we can confirm the balance is actually insufficient
+    let required = required_amount?;
+    if deposited_balance >= required {
+        return None;
+    }
+
+    let required_str = format_balance_for_display(required, token_decimals);
 
     Some(eyre::eyre!(
         "Insufficient deposited balance on {}.\n\
