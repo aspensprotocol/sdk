@@ -156,8 +156,7 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
     }
 
     // Insufficient gas (check before general insufficient balance)
-    if err_string.contains("insufficient gas")
-        || err_string.contains("insufficient funds for gas")
+    if err_string.contains("insufficient gas") || err_string.contains("insufficient funds for gas")
     {
         return with_underlying_error(format!(
             "Failed to {}: Insufficient gas for transaction fees\n\n\
