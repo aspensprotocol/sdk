@@ -87,7 +87,7 @@ pub async fn call_cancel_order(
     // Create the request
     let request = CancelOrderRequest {
         order: Some(order_to_cancel),
-        signature_hash: signature.as_bytes().to_vec(),
+        signature_hash: signature.as_bytes()[..64].to_vec(),
     };
 
     // Create a tonic request
@@ -125,24 +125,7 @@ pub async fn call_cancel_order_from_config(
     config: GetConfigResponse,
 ) -> Result<CancelOrderResponse> {
     // Look up market info
-    let market = config.get_market_by_id(&market_id).ok_or_else(|| {
-        let available_markets = config
-            .config
-            .as_ref()
-            .map(|c| {
-                c.markets
-                    .iter()
-                    .map(|m| format!("{} ({})", m.name, m.market_id))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default();
-        eyre::eyre!(
-            "Market '{}' not found in configuration. Available markets: {}",
-            market_id,
-            available_markets
-        )
-    })?;
+    let market = super::send_order::lookup_market(&config, &market_id)?;
 
     // Convert side string to Side enum value
     let (side_value, token_address) = match side.to_lowercase().as_str() {
@@ -206,5 +189,13 @@ pub async fn call_cancel_order_from_config(
         token_address
     );
 
-    call_cancel_order(url, market_id, side_value, token_address, order_id, privkey).await
+    call_cancel_order(
+        url,
+        market.market_id.clone(),
+        side_value,
+        token_address,
+        order_id,
+        privkey,
+    )
+    .await
 }
