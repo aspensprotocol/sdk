@@ -32,7 +32,10 @@ message SignRequest {
 message PingRequest {}
 
 // Create a new signing key in the TPM
-message CreateKeyRequest {}
+message CreateKeyRequest {
+  // Curve type for the key (default: SECP256K1 for EVM compatibility)
+  optional CurveType curve_type = 1;
+}
 
 // Sign with an ephemeral (temporary) key
 message SignEphemeralRequest {
@@ -43,6 +46,9 @@ message SignEphemeralRequest {
 
   // Signature type (default: RAW for backward compatibility)
   optional SignatureType signature_type = 2;
+
+  // Curve type (default: SECP256K1 for EVM compatibility)
+  optional CurveType curve_type = 3;
 }
 
 // Sign with a previously created and saved key
@@ -57,12 +63,18 @@ message SignWithKeyRequest {
 
   // Signature type (default: RAW for backward compatibility)
   optional SignatureType signature_type = 3;
+
+  // Curve type (default: SECP256K1 for EVM compatibility)
+  optional CurveType curve_type = 4;
 }
 
 // Get public key from a saved key blob
 message GetPublicKeyRequest {
   // Key blob containing TPM private and public key data
   KeyBlob key_blob = 1;
+
+  // Curve type (default: SECP256K1 for EVM compatibility)
+  optional CurveType curve_type = 2;
 }
 
 // Sign a transaction hash
@@ -72,6 +84,9 @@ message SignTransactionRequest {
 
   // Transaction hash to sign (32 bytes, hex-encoded)
   string hash = 2;
+
+  // Curve type (default: SECP256K1 for EVM compatibility)
+  optional CurveType curve_type = 3;
 }
 
 // ============================================================================
@@ -88,7 +103,9 @@ message SignResponse {
 
 // Successful response containing optional fields based on the request type
 message SuccessResponse {
-  // Hex-encoded signature (65 bytes: r || s || v, with recovery ID)
+  // Hex-encoded signature
+  // - secp256k1: 65 bytes (r || s || v, with recovery ID)
+  // - Ed25519: 64 bytes
   // Present for: sign_ephemeral, sign_with_key, sign_transaction
   optional string signature = 1;
 
@@ -100,8 +117,10 @@ message SuccessResponse {
   // Present for: create_key
   optional KeyBlob key_blob = 3;
 
-  // EVM (Ethereum) address derived from the public key
-  // Present for: create_key, get_public_key (when evm feature is enabled)
+  // Address derived from the public key
+  // - secp256k1: hex-encoded EVM (Ethereum) address
+  // - Ed25519: base58-encoded Solana address
+  // Present for: create_key, get_public_key
   optional string address = 4;
 
   // Human-readable status message
@@ -172,6 +191,15 @@ enum SignatureType {
   // Message must be hex-encoded 32-byte EIP712 digest
   // Signer will wrap with: "\x19Ethereum Signed Message:\n32" + digest
   SIGNATURE_TYPE_EIP191 = 2;
+}
+
+// Cryptographic curve type for key generation and signing
+enum CurveType {
+  // secp256k1 ECDSA (default) — EVM-compatible chains
+  CURVE_TYPE_SECP256K1 = 0;
+
+  // Ed25519 EdDSA — Solana-compatible chains
+  CURVE_TYPE_ED25519 = 1;
 }
 
 // Error codes for structured error handling
