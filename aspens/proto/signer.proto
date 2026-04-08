@@ -106,6 +106,7 @@ message SuccessResponse {
   // Hex-encoded signature
   // - secp256k1: 65 bytes (r || s || v, with recovery ID)
   // - Ed25519: 64 bytes
+  //
   // Present for: sign_ephemeral, sign_with_key, sign_transaction
   optional string signature = 1;
 
@@ -120,6 +121,7 @@ message SuccessResponse {
   // Address derived from the public key
   // - secp256k1: hex-encoded EVM (Ethereum) address
   // - Ed25519: base58-encoded Solana address
+  //
   // Present for: create_key, get_public_key
   optional string address = 4;
 
