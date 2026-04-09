@@ -36,3 +36,4 @@ chrono.workspace = true
 # Crypto for wallet address derivation
 alloy.workspace = true
 hex.workspace = true
+comfy-table.workspace = true
