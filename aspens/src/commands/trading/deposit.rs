@@ -7,27 +7,118 @@ use eyre::Result;
 use url::Url;
 
 use super::{MidribV2, IERC20};
+use crate::chain_client::ARCH_SOLANA;
 use crate::commands::config::config_pb::GetConfigResponse;
+use crate::wallet::{CurveType, Wallet};
 
 /// Minimum gas balance required for transactions (0.0001 ETH = 100000 gwei)
 const MIN_GAS_BALANCE: u128 = 100_000_000_000_000; // 0.0001 ETH in wei
 
-/// Deposit tokens using configuration from the server
+/// Deposit tokens using configuration from the server (legacy EVM API).
 ///
-/// This is the recommended way to deposit tokens. It uses the configuration
-/// fetched from the server to determine RPC URLs, contract addresses, and token addresses.
-///
-/// # Arguments
-/// * `network` - The network name (e.g., "anvil-1", "base-sepolia")
-/// * `token_symbol` - The token symbol (e.g., "USDC", "WETH")
-/// * `amount` - The amount to deposit (in token's smallest unit)
-/// * `privkey` - The private key of the user's wallet
-/// * `config` - The configuration response from the server
+/// Wraps `call_deposit_from_config_with_wallet` for backward compatibility.
 pub async fn call_deposit_from_config(
     network: String,
     token_symbol: String,
     amount: u64,
     privkey: String,
+    config: GetConfigResponse,
+) -> Result<()> {
+    let wallet = Wallet::from_evm_hex(&privkey)?;
+    call_deposit_from_config_with_wallet(network, token_symbol, amount, &wallet, config).await
+}
+
+/// Deposit tokens using a curve-agnostic wallet.
+///
+/// Branches on `chain.architecture`:
+/// - **EVM**: existing MidribV2 deposit flow
+/// - **Solana**: scaffolded — returns a clear error until the on-chain
+///   trade program is finalized and its instruction layout is known
+pub async fn call_deposit_from_config_with_wallet(
+    network: String,
+    token_symbol: String,
+    amount: u64,
+    wallet: &Wallet,
+    config: GetConfigResponse,
+) -> Result<()> {
+    // Look up chain to determine the dispatch path
+    let chain_for_arch = config
+        .get_chain(&network)
+        .ok_or_else(|| eyre::eyre!("Chain '{}' not found in configuration", network))?;
+
+    if chain_for_arch
+        .architecture
+        .eq_ignore_ascii_case(ARCH_SOLANA)
+    {
+        return solana_deposit_scaffold(chain_for_arch, &token_symbol, amount, wallet);
+    }
+
+    // EVM path requires an EVM wallet
+    if wallet.curve() != CurveType::Secp256k1 {
+        return Err(eyre::eyre!(
+            "EVM chain '{}' requires a secp256k1 wallet, got Ed25519",
+            network
+        ));
+    }
+    let signer = wallet
+        .as_evm()
+        .ok_or_else(|| eyre::eyre!("expected EVM wallet for chain '{}'", network))?
+        .clone();
+
+    call_deposit_from_config_evm(network, token_symbol, amount, signer, config).await
+}
+
+/// Solana deposit scaffold — structure is in place but instruction encoding
+/// is pending the on-chain trade program design.
+fn solana_deposit_scaffold(
+    chain: &crate::commands::config::config_pb::Chain,
+    token_symbol: &str,
+    amount: u64,
+    wallet: &Wallet,
+) -> Result<()> {
+    let program_id = chain
+        .trade_contract
+        .as_ref()
+        .and_then(|tc| tc.contract_id.clone())
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "Solana chain '{}' has no trade_contract.contract_id (program ID) configured",
+                chain.network
+            )
+        })?;
+    let _token = chain.tokens.get(token_symbol).ok_or_else(|| {
+        eyre::eyre!(
+            "Token '{}' not found on Solana chain '{}'",
+            token_symbol,
+            chain.network
+        )
+    })?;
+    let _owner = wallet.address();
+    let _amount = amount;
+    let _program_id = program_id;
+
+    // TODO: Build and submit Solana deposit instruction once the on-chain
+    // trade program's instruction layout is finalized. Structure:
+    //   1. Resolve owner ATA for `_token.address` (SPL mint)
+    //   2. Build deposit instruction targeting `_program_id` with
+    //      accounts [owner, owner_ata, program_pda, mint, token_program, ...]
+    //      and data [discriminator, _amount as u64 LE]
+    //   3. Wrap in a Transaction, recent blockhash, sign with `wallet.as_solana()`
+    //   4. Submit via `ChainClient::Solana`
+    Err(eyre::eyre!(
+        "Solana deposit is not yet implemented — the on-chain trade program \
+         instruction layout is pending. Configure trade_contract.contract_id \
+         in the chain config to point at the eventual program."
+    ))
+}
+
+/// Original EVM deposit logic — kept private and called from the wallet-aware
+/// dispatcher above.
+async fn call_deposit_from_config_evm(
+    network: String,
+    token_symbol: String,
+    amount: u64,
+    signer: PrivateKeySigner,
     config: GetConfigResponse,
 ) -> Result<()> {
     // Look up chain info
@@ -113,7 +204,6 @@ pub async fn call_deposit_from_config(
     let deposit_amount = U160::from(amount);
     let contract_addr: Address = Address::parse_checksummed(&contract_address, None)?;
     let token_addr: Address = token.address.parse()?;
-    let signer = privkey.parse::<PrivateKeySigner>()?;
     let signer_address = signer.address();
     let wallet = EthereumWallet::new(signer);
     let rpc_url = Url::parse(&chain.rpc_url)?;
