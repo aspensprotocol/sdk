@@ -490,10 +490,46 @@ pub async fn call_get_erc20_balance(
 pub async fn call_get_native_balance(rpc_url: &str, privkey: &str) -> Result<Uint<256, 4>> {
     let signer = privkey.parse::<PrivateKeySigner>()?;
     let address = signer.address();
+    call_get_native_balance_for_address(rpc_url, address).await
+}
+
+pub async fn call_get_native_balance_for_address(
+    rpc_url: &str,
+    address: Address,
+) -> Result<Uint<256, 4>> {
     let rpc_url = Url::parse(rpc_url)?;
     let provider = ProviderBuilder::new().connect_http(rpc_url);
     let balance = provider.get_balance(address).await?;
     Ok(balance)
+}
+
+pub async fn call_get_erc20_balance_for_address(
+    rpc_url: &str,
+    token_address: &str,
+    holder: Address,
+) -> Result<Uint<256, 4>> {
+    let token_addr: Address = token_address.parse()?;
+    let rpc_url = Url::parse(rpc_url)?;
+    let provider = ProviderBuilder::new().connect_http(rpc_url);
+    let contract = IERC20::new(token_addr, &provider);
+    let result = contract.balanceOf(holder).call().await?;
+    Ok(result)
+}
+
+pub fn format_balance(value: Uint<256, 4>, decimals: u32) -> String {
+    let s = value.to_string();
+    if decimals == 0 {
+        return s;
+    }
+    let dec = decimals as usize;
+    if s.len() <= dec {
+        let padded = format!("{:0>width$}", s, width = dec + 1);
+        let (int_part, frac_part) = padded.split_at(padded.len() - dec);
+        format!("{}.{}", int_part, frac_part)
+    } else {
+        let (int_part, frac_part) = s.split_at(s.len() - dec);
+        format!("{}.{}", int_part, frac_part)
+    }
 }
 
 pub fn balance_table(
