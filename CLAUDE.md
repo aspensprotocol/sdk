@@ -177,6 +177,49 @@ Build script (`aspens/build.rs`) uses `tonic-prost-build` to generate client cod
 
 All order quantities and prices must be in pair decimal format when sent to the gRPC API. See `decimals.md` for detailed conversion examples.
 
+### Multi-Curve Wallet Support (Solana)
+
+The SDK supports both EVM (secp256k1) and Solana (Ed25519) wallets via the
+`Wallet` enum in `aspens/src/wallet.rs`:
+
+```rust
+use aspens::{Wallet, CurveType, load_trader_wallet};
+
+// Load from env based on the desired curve
+let wallet = load_trader_wallet(CurveType::Secp256k1)?;  // reads TRADER_PRIVKEY
+let wallet = load_trader_wallet(CurveType::Ed25519)?;    // reads TRADER_PRIVKEY_SOLANA
+
+// Curve-agnostic API
+let address = wallet.address();   // hex for EVM, base58 for Solana
+let sig = wallet.sign_message(b"...").await?;
+```
+
+**Curve-aware API**: Trading and auth functions have `*_with_wallet` variants
+that accept a `&Wallet` and dispatch internally:
+- `auth::authenticate_with_wallet`
+- `send_order::send_order_with_wallet`
+- `cancel_order::call_cancel_order_with_wallet` (and `_from_config_with_wallet`)
+- `balance::balance_from_config_with_wallet`
+- `deposit::call_deposit_from_config_with_wallet`
+- `withdraw::call_withdraw_from_config_with_wallet`
+
+The legacy `privkey: String` functions still exist as thin wrappers that
+construct an `Wallet::Evm` and delegate, so existing EVM callers are unchanged.
+
+**Chain-aware RPC**: `aspens/src/chain_client.rs` defines a `ChainClient` enum
+that dispatches between Alloy (EVM) and `solana-client` based on
+`Chain.architecture` (`"EVM"` or `"Solana"`). It handles native and token
+balance queries. SPL token balances use the Associated Token Account derived
+inline (see `derive_associated_token_account`).
+
+**Gap — Solana on-chain trade program**: The deposit and withdraw flows for
+Solana chains are scaffolded but return a clear "not yet implemented" error.
+The structure is in place — wallet → RPC client → transaction build → sign →
+submit — but the actual instruction encoding is gated on the on-chain trade
+program design. When that lands, fill in the `TODO` blocks in
+`solana_deposit_scaffold` / `solana_withdraw_scaffold` with the program's
+instruction layout.
+
 ### Environment Configuration
 
 The project uses a single `.env` file for configuration:
@@ -187,8 +230,10 @@ The project uses a single `.env` file for configuration:
 
 | Variable | Used By | Purpose |
 |----------|---------|---------|
-| `TRADER_PRIVKEY` | aspens-cli, aspens-repl | Wallet for trading operations (deposit, withdraw, buy, sell, balance) |
-| `ADMIN_PRIVKEY` | aspens-admin | Wallet for admin authentication (EIP-712 login) |
+| `TRADER_PRIVKEY` | aspens-cli, aspens-repl | EVM wallet (hex) for trading on EVM chains |
+| `TRADER_PRIVKEY_SOLANA` | aspens-cli, aspens-repl | Solana keypair (base58) for trading on Solana chains |
+| `ADMIN_PRIVKEY` | aspens-admin | EVM wallet (hex) for admin EIP-712 login |
+| `ADMIN_PRIVKEY_SOLANA` | aspens-admin | Solana keypair (base58) for admin Ed25519 login |
 | `ASPENS_JWT` | aspens-admin | JWT token for authenticated admin operations |
 | `ASPENS_MARKET_STACK_URL` | all | Aspens Market Stack URL (e.g., `http://localhost:50051`) |
 

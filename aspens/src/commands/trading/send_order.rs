@@ -4,9 +4,10 @@ pub mod arborter_pb {
 
 use std::fmt;
 
-use alloy::primitives::{Address, Signature, U256};
+use crate::wallet::Wallet;
+use alloy::primitives::{Address, U256};
 use alloy::providers::ProviderBuilder;
-use alloy::signers::{local::PrivateKeySigner, Signer};
+use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{Order, SendOrderRequest, SendOrderResponse, TransactionHash};
@@ -117,7 +118,7 @@ async fn call_send_order(
     market_id: String,
     base_account_address: String,
     quote_account_address: String,
-    privkey: String,
+    wallet: &Wallet,
 ) -> Result<SendOrderResponse> {
     // Create a channel to connect to the gRPC server (with TLS support for HTTPS)
     let channel = create_channel(&url).await?;
@@ -141,13 +142,14 @@ async fn call_send_order(
     let mut buffer = Vec::new();
     order_for_sending.encode(&mut buffer)?;
 
-    // Sign the order using the same values that will be sent
-    let signature = sign_transaction(&buffer, &privkey).await?;
+    // Sign the order. EVM signatures are 65 bytes (r||s||v); Solana Ed25519 are 64 bytes.
+    // The wire format takes the first 64 bytes, which works for both.
+    let signature_bytes = wallet.sign_message(&buffer).await?;
 
     // Create the request with the original order and signature
     let request = SendOrderRequest {
         order: Some(order_for_sending),
-        signature_hash: signature.as_bytes()[..64].to_vec(),
+        signature_hash: signature_bytes[..64].to_vec(),
     };
 
     // Create a tonic request
@@ -163,12 +165,6 @@ async fn call_send_order(
     tracing::info!("Response received: {}", response_data);
 
     Ok(response_data)
-}
-
-async fn sign_transaction(msg_bytes: &[u8], privkey: &str) -> Result<Signature> {
-    let signer = privkey.parse::<PrivateKeySigner>()?;
-    let signature = signer.sign_message(msg_bytes).await?;
-    Ok(signature)
 }
 
 /// Query deposited (available) balance for a token on a specific chain
@@ -345,21 +341,10 @@ pub fn derive_address(privkey: &str) -> Result<(Address, String)> {
     Ok((address, checksum))
 }
 
-/// Send an order using configuration from the server
+/// Send an order using configuration from the server (EVM private key, legacy API).
 ///
-/// This is the recommended way to send orders. It:
-/// - Looks up the market to get pair decimals
-/// - Converts human-readable amounts (e.g., "1.5") to raw format
-/// - Derives account address from private key
-///
-/// # Arguments
-/// * `url` - The Aspens Market Stack URL
-/// * `market_id` - The market identifier
-/// * `side` - Order side (1 for BUY, 2 for SELL)
-/// * `quantity` - The quantity to trade (human-readable, e.g., "1.5")
-/// * `price` - Optional limit price (human-readable, e.g., "100.50")
-/// * `privkey` - The private key of the user's wallet
-/// * `config` - The configuration response from the server
+/// This wraps `send_order_with_wallet` for backward compatibility. New callers
+/// should use `send_order_with_wallet` to support both EVM and Solana wallets.
 pub async fn send_order(
     url: String,
     market_id: String,
@@ -367,6 +352,32 @@ pub async fn send_order(
     quantity: String,
     price: Option<String>,
     privkey: String,
+    config: GetConfigResponse,
+) -> Result<SendOrderResponse> {
+    let wallet = Wallet::from_evm_hex(&privkey)?;
+    send_order_with_wallet(url, market_id, side, quantity, price, &wallet, config).await
+}
+
+/// Send an order using a curve-agnostic wallet.
+///
+/// This is the recommended way to send orders. It supports both EVM (secp256k1)
+/// and Solana (Ed25519) wallets transparently.
+///
+/// # Arguments
+/// * `url` - The Aspens Market Stack URL
+/// * `market_id` - The market identifier
+/// * `side` - Order side (1 for BUY, 2 for SELL)
+/// * `quantity` - The quantity to trade (human-readable, e.g., "1.5")
+/// * `price` - Optional limit price (human-readable, e.g., "100.50")
+/// * `wallet` - The user's wallet (EVM or Solana)
+/// * `config` - The configuration response from the server
+pub async fn send_order_with_wallet(
+    url: String,
+    market_id: String,
+    side: i32,
+    quantity: String,
+    price: Option<String>,
+    wallet: &Wallet,
     config: GetConfigResponse,
 ) -> Result<SendOrderResponse> {
     // Look up market
@@ -382,8 +393,7 @@ pub async fn send_order(
         .transpose()
         .map_err(|e| eyre::eyre!("Invalid price: {}", e))?;
 
-    // Derive address
-    let (user_address, account_address) = derive_address(&privkey)?;
+    let account_address = wallet.address();
 
     tracing::info!(
         "Sending order: market={}, side={}, quantity={} (raw: {}), price={:?} (raw: {:?}), account={}",
@@ -405,27 +415,33 @@ pub async fn send_order(
         price_raw.clone(),
         resolved_market_id,
         account_address.clone(),
-        account_address,
-        privkey,
+        account_address.clone(),
+        wallet,
     )
     .await;
 
-    // Enhance balance errors with actual balance info
+    // Enhance balance errors with actual balance info (EVM only — Solana balance
+    // queries via Alloy don't apply).
     if let Err(ref e) = result {
         let err_str = e.to_string().to_lowercase();
-        if err_str.contains("insufficient") || err_str.contains("balance") {
-            if let Some(enhanced) = enhance_balance_error(
-                &config,
-                market,
-                side,
-                &quantity_raw,
-                price_raw.as_deref(),
-                user_address,
-                pair_decimals,
-            )
-            .await
-            {
-                return Err(enhanced);
+        if (err_str.contains("insufficient") || err_str.contains("balance"))
+            && wallet.curve() == crate::wallet::CurveType::Secp256k1
+        {
+            // Re-parse the EVM address for the balance enhancement helper.
+            if let Ok(user_address) = account_address.parse::<Address>() {
+                if let Some(enhanced) = enhance_balance_error(
+                    &config,
+                    market,
+                    side,
+                    &quantity_raw,
+                    price_raw.as_deref(),
+                    user_address,
+                    pair_decimals,
+                )
+                .await
+                {
+                    return Err(enhanced);
+                }
             }
         }
     }

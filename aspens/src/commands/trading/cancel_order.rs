@@ -4,8 +4,6 @@ pub mod arborter_pb {
 
 use std::fmt;
 
-use alloy::primitives::Signature;
-use alloy::signers::{local::PrivateKeySigner, Signer};
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{CancelOrderRequest, CancelOrderResponse, OrderToCancel, Side};
 use eyre::Result;
@@ -13,6 +11,7 @@ use prost::Message;
 
 use crate::commands::config::config_pb::GetConfigResponse;
 use crate::grpc::create_channel;
+use crate::wallet::Wallet;
 
 impl fmt::Display for CancelOrderResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -39,22 +38,9 @@ impl CancelOrderResponse {
     }
 }
 
-/// Sign the cancel order request
-async fn sign_cancel_request(msg_bytes: &[u8], privkey: &str) -> Result<Signature> {
-    let signer = privkey.parse::<PrivateKeySigner>()?;
-    let signature = signer.sign_message(msg_bytes).await?;
-    Ok(signature)
-}
-
-/// Cancel an order by its ID
+/// Cancel an order by its ID (legacy API; takes EVM private key).
 ///
-/// # Arguments
-/// * `url` - The Aspens Market Stack URL
-/// * `market_id` - The market identifier
-/// * `side` - Order side (1 for BID, 2 for ASK)
-/// * `token_address` - The token address
-/// * `order_id` - The internal order ID to cancel
-/// * `privkey` - The private key of the user's wallet
+/// Wraps `call_cancel_order_with_wallet` for backward compatibility.
 pub async fn call_cancel_order(
     url: String,
     market_id: String,
@@ -62,6 +48,19 @@ pub async fn call_cancel_order(
     token_address: String,
     order_id: u64,
     privkey: String,
+) -> Result<CancelOrderResponse> {
+    let wallet = Wallet::from_evm_hex(&privkey)?;
+    call_cancel_order_with_wallet(url, market_id, side, token_address, order_id, &wallet).await
+}
+
+/// Cancel an order using a curve-agnostic wallet (EVM or Solana).
+pub async fn call_cancel_order_with_wallet(
+    url: String,
+    market_id: String,
+    side: i32,
+    token_address: String,
+    order_id: u64,
+    wallet: &Wallet,
 ) -> Result<CancelOrderResponse> {
     // Create a channel to connect to the gRPC server
     let channel = create_channel(&url).await?;
@@ -81,13 +80,14 @@ pub async fn call_cancel_order(
     let mut buffer = Vec::new();
     order_to_cancel.encode(&mut buffer)?;
 
-    // Sign the cancel request
-    let signature = sign_cancel_request(&buffer, &privkey).await?;
+    // Sign the cancel request. Wire format takes the first 64 signature bytes
+    // (Ed25519 is 64 bytes; secp256k1 r||s without v).
+    let signature_bytes = wallet.sign_message(&buffer).await?;
 
     // Create the request
     let request = CancelOrderRequest {
         order: Some(order_to_cancel),
-        signature_hash: signature.as_bytes()[..64].to_vec(),
+        signature_hash: signature_bytes[..64].to_vec(),
     };
 
     // Create a tonic request
@@ -122,6 +122,19 @@ pub async fn call_cancel_order_from_config(
     side: String,
     order_id: u64,
     privkey: String,
+    config: GetConfigResponse,
+) -> Result<CancelOrderResponse> {
+    let wallet = Wallet::from_evm_hex(&privkey)?;
+    call_cancel_order_from_config_with_wallet(url, market_id, side, order_id, &wallet, config).await
+}
+
+/// Cancel an order using configuration from the server with a curve-agnostic wallet.
+pub async fn call_cancel_order_from_config_with_wallet(
+    url: String,
+    market_id: String,
+    side: String,
+    order_id: u64,
+    wallet: &Wallet,
     config: GetConfigResponse,
 ) -> Result<CancelOrderResponse> {
     // Look up market info
@@ -189,13 +202,13 @@ pub async fn call_cancel_order_from_config(
         token_address
     );
 
-    call_cancel_order(
+    call_cancel_order_with_wallet(
         url,
         market.market_id.clone(),
         side_value,
         token_address,
         order_id,
-        privkey,
+        wallet,
     )
     .await
 }

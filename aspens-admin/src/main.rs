@@ -5,9 +5,12 @@
 
 use aspens::commands::admin::{self, Chain, CreateInstanceParams, SetMarketParams, Token};
 use aspens::commands::auth;
+use aspens::commands::config;
+use aspens::commands::trading::balance;
 use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
+use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
 use eyre::Result;
 use std::collections::HashMap;
 use std::process::ExitCode;
@@ -480,6 +483,9 @@ enum Commands {
 
     /// Get the public key and address for the admin wallet (from ADMIN_PRIVKEY)
     AdminPublicKey,
+
+    /// Show balances for owner, signers, and contracts across all chains
+    Balances,
 }
 
 #[tokio::main]
@@ -1182,6 +1188,125 @@ async fn run() -> Result<()> {
                 "  Public Key: 0x{}",
                 hex::encode(pubkey.to_encoded_point(false).as_bytes())
             );
+        }
+
+        Commands::Balances => {
+            use alloy::primitives::Address;
+
+            info!("Fetching configuration and signer info...");
+
+            let config_response = executor
+                .execute(config::get_config(stack_url.clone()))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
+
+            let configuration = config_response
+                .config
+                .as_ref()
+                .ok_or_else(|| eyre::eyre!("No configuration found"))?;
+
+            let signer_response = executor
+                .execute(config::get_signer_public_key(stack_url.clone(), None))
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch signer public keys")))?;
+
+            // Get owner address from ADMIN_PRIVKEY if available
+            let owner_address: Option<Address> = client
+                .get_env("ADMIN_PRIVKEY")
+                .and_then(|pk| {
+                    use alloy::signers::local::PrivateKeySigner;
+                    pk.parse::<PrivateKeySigner>().ok()
+                })
+                .map(|s| s.address());
+
+            println!("═══════════════════════════════════════════════════════════════════════════");
+            println!("                            ADMIN BALANCES");
+            println!("═══════════════════════════════════════════════════════════════════════════");
+            println!();
+
+            for chain in &configuration.chains {
+                let signer_key = signer_response.chain_keys.get(&chain.network);
+                let signer_addr: Option<Address> =
+                    signer_key.and_then(|k| k.public_key.parse().ok());
+
+                let contract_addr: Option<Address> = chain.trade_contract.as_ref().and_then(|tc| {
+                    if tc.address.is_empty() {
+                        None
+                    } else {
+                        tc.address.parse().ok()
+                    }
+                });
+
+                let mut table = Table::new();
+                table.load_preset(UTF8_BORDERS_ONLY);
+                table.set_header(vec![
+                    "Address",
+                    "Role",
+                    "Gas",
+                    &chain
+                        .tokens
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("  |  "),
+                ]);
+
+                // Build header with individual token columns
+                let token_symbols: Vec<String> = {
+                    let mut syms: Vec<_> = chain.tokens.keys().cloned().collect();
+                    syms.sort();
+                    syms
+                };
+                let mut header = vec!["Role".to_string(), "Address".to_string(), "Gas".to_string()];
+                for sym in &token_symbols {
+                    header.push(sym.clone());
+                }
+                let mut table = Table::new();
+                table.load_preset(UTF8_BORDERS_ONLY);
+                table.set_header(&header);
+
+                println!("── {} (chain_id: {}) ──", chain.network, chain.chain_id);
+
+                let addresses: Vec<(Address, &str)> = [
+                    owner_address.map(|a| (a, "Owner")),
+                    signer_addr.map(|a| (a, "Signer")),
+                    contract_addr.map(|a| (a, "Contract")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+
+                for (addr, role) in &addresses {
+                    let gas = balance::call_get_native_balance_for_address(&chain.rpc_url, *addr)
+                        .await
+                        .map(|v| balance::format_balance(v, 18))
+                        .unwrap_or_else(|_| "error".into());
+
+                    let mut row = vec![
+                        role.to_string(),
+                        format!("{}...{}", &addr.to_string()[..6], &addr.to_string()[38..]),
+                        gas,
+                    ];
+
+                    for sym in &token_symbols {
+                        if let Some(token) = chain.tokens.get(sym) {
+                            let bal = balance::call_get_erc20_balance_for_address(
+                                &chain.rpc_url,
+                                &token.address,
+                                *addr,
+                            )
+                            .await
+                            .map(|v| balance::format_balance(v, token.decimals))
+                            .unwrap_or_else(|_| "error".into());
+                            row.push(bal);
+                        } else {
+                            row.push("-".into());
+                        }
+                    }
+                    table.add_row(row);
+                }
+
+                println!("{}", table);
+                println!();
+            }
         }
     }
 
