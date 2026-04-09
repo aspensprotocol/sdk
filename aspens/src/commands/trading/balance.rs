@@ -9,7 +9,9 @@ use tracing::{info, warn};
 use url::Url;
 
 use super::{MidribV2, IERC20};
-use crate::commands::config::config_pb::{Configuration, GetConfigResponse};
+use crate::chain_client::{ChainClient, ARCH_SOLANA};
+use crate::commands::config::config_pb::{Chain, Configuration, GetConfigResponse};
+use crate::wallet::Wallet;
 
 /// Represents a unique token across all chains
 #[derive(Debug, Clone)]
@@ -287,6 +289,214 @@ fn display_all_token_balances(
     output
 }
 
+/// Query a token balance on a specific chain using a curve-aware client.
+///
+/// Used by `balance_from_config_with_wallet`. For Solana chains, locked/deposited
+/// balances come from the trade program — currently returns "not deployed" until
+/// the on-chain Solana program is wired up.
+async fn query_token_balance_via_client(
+    chain: &Chain,
+    token_symbol: &str,
+    owner_address: &str,
+) -> ChainBalance {
+    let chain_network = chain.network.clone();
+    let token = match chain.tokens.get(token_symbol) {
+        Some(t) => t,
+        None => {
+            return ChainBalance {
+                chain_network,
+                wallet_balance: "missing token".to_string(),
+                available_balance: "missing token".to_string(),
+                locked_balance: "missing token".to_string(),
+            };
+        }
+    };
+
+    let client = match ChainClient::from_chain_config(chain) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to build client for {}: {}", chain_network, e);
+            return ChainBalance {
+                chain_network,
+                wallet_balance: "error".to_string(),
+                available_balance: "error".to_string(),
+                locked_balance: "error".to_string(),
+            };
+        }
+    };
+
+    let wallet_balance = client
+        .token_balance(token, owner_address)
+        .await
+        .map_or_else(
+            |e| {
+                warn!("Failed to get wallet balance on {}: {}", chain_network, e);
+                "error".to_string()
+            },
+            |v| v.to_string(),
+        );
+
+    // Locked/deposited balances come from the trade contract.
+    // Solana side is not yet wired up; EVM uses MidribV2.
+    let (available_balance, locked_balance) =
+        if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
+            ("not deployed".to_string(), "not deployed".to_string())
+        } else {
+            let contract_address = chain
+                .trade_contract
+                .as_ref()
+                .map(|tc| tc.address.clone())
+                .unwrap_or_default();
+
+            if contract_address.is_empty() {
+                ("not deployed".to_string(), "not deployed".to_string())
+            } else {
+                let named_chain =
+                    NamedChain::try_from(chain.chain_id as u64).unwrap_or(NamedChain::BaseSepolia);
+                // Reuse existing EVM helpers — they need a privkey to derive the address,
+                // but we already have the address. Use *_for_address variants.
+                let owner: Address = match owner_address.parse() {
+                    Ok(a) => a,
+                    Err(_) => {
+                        return ChainBalance {
+                            chain_network,
+                            wallet_balance,
+                            available_balance: "bad address".to_string(),
+                            locked_balance: "bad address".to_string(),
+                        };
+                    }
+                };
+                let available = call_get_balance_for_address(
+                    named_chain,
+                    &chain.rpc_url,
+                    &token.address,
+                    &contract_address,
+                    owner,
+                )
+                .await
+                .map_or_else(
+                    |e| {
+                        warn!(
+                            "Failed to get available balance on {}: {}",
+                            chain_network, e
+                        );
+                        "error".to_string()
+                    },
+                    |v| v.to_string(),
+                );
+                let locked = call_get_locked_balance_for_address(
+                    &chain.rpc_url,
+                    &token.address,
+                    &contract_address,
+                    owner,
+                )
+                .await
+                .map_or_else(
+                    |e| {
+                        warn!("Failed to get locked balance on {}: {}", chain_network, e);
+                        "error".to_string()
+                    },
+                    |v| v.to_string(),
+                );
+                (available, locked)
+            }
+        };
+
+    ChainBalance {
+        chain_network,
+        wallet_balance,
+        available_balance,
+        locked_balance,
+    }
+}
+
+/// Curve-agnostic config-driven balance function.
+///
+/// Dispatches per-chain based on `chain.architecture`:
+/// - EVM chains query via Alloy + MidribV2
+/// - Solana chains query via solana-client (SOL + SPL); deposited/locked
+///   balances are scaffolded as "not deployed" until the on-chain program lands
+pub async fn balance_from_config_with_wallet(
+    config: GetConfigResponse,
+    wallet: &Wallet,
+) -> Result<()> {
+    let configuration = config
+        .config
+        .ok_or_else(|| eyre::eyre!("No configuration found in response"))?;
+
+    let owner_address = wallet.address();
+
+    // Extract all unique tokens from configuration
+    let tokens = extract_all_tokens_from_config(&configuration);
+
+    if tokens.is_empty() {
+        info!("No tokens found in configuration");
+        return Ok(());
+    }
+
+    info!("Found {} unique token(s) across all chains", tokens.len());
+
+    let mut all_token_balances: Vec<TokenBalance> = Vec::new();
+
+    // For each token, walk every chain it appears on and query the balance
+    // via the curve-aware client.
+    for (symbol, token_info) in tokens {
+        let mut chain_balances = Vec::new();
+
+        for chain in &configuration.chains {
+            if !chain.tokens.contains_key(&symbol) {
+                continue;
+            }
+            let cb = query_token_balance_via_client(chain, &symbol, &owner_address).await;
+            chain_balances.push(cb);
+        }
+
+        all_token_balances.push(TokenBalance {
+            token_info: token_info.clone(),
+            chain_balances,
+        });
+    }
+
+    all_token_balances.sort_by(|a, b| a.token_info.symbol.cmp(&b.token_info.symbol));
+
+    // Native gas balances per chain
+    let mut native_balances: Vec<NativeBalance> = Vec::new();
+    let mut seen: HashMap<String, ()> = HashMap::new();
+    for chain in &configuration.chains {
+        if seen.contains_key(&chain.network) {
+            continue;
+        }
+        seen.insert(chain.network.clone(), ());
+        let client = match ChainClient::from_chain_config(chain) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to build client for {}: {}", chain.network, e);
+                native_balances.push(NativeBalance {
+                    chain_network: chain.network.clone(),
+                    balance: "error".to_string(),
+                });
+                continue;
+            }
+        };
+        let balance = client.native_balance(&owner_address).await.map_or_else(
+            |e| {
+                warn!("Failed to get native balance on {}: {}", chain.network, e);
+                "error".to_string()
+            },
+            |v| v.to_string(),
+        );
+        native_balances.push(NativeBalance {
+            chain_network: chain.network.clone(),
+            balance,
+        });
+    }
+
+    let output = display_all_token_balances(&all_token_balances, &native_balances);
+    info!("{}", output);
+
+    Ok(())
+}
+
 /// New config-driven balance function
 pub async fn balance_from_config(config: GetConfigResponse, privkey: String) -> Result<()> {
     let configuration = config
@@ -459,6 +669,48 @@ pub async fn call_get_locked_balance(
     let token_addr: Address = token_address.parse()?;
     let signer = privkey.parse::<PrivateKeySigner>()?;
     let depositer_address: Address = signer.address();
+    let rpc_url = Url::parse(rpc_url)?;
+    let provider = ProviderBuilder::new().connect_http(rpc_url);
+    let contract = MidribV2::new(contract_addr, &provider);
+    let result = contract
+        .lockedTradeBalance(depositer_address, token_addr)
+        .call()
+        .await?;
+    Ok(result)
+}
+
+/// Variant of `call_get_balance` that takes an `Address` directly instead of
+/// deriving it from a private key. Used by curve-aware balance queries.
+pub async fn call_get_balance_for_address(
+    chain: NamedChain,
+    rpc_url: &str,
+    token_address: &str,
+    contract_address: &str,
+    depositer_address: Address,
+) -> Result<Uint<256, 4>> {
+    let contract_addr: Address = Address::parse_checksummed(contract_address, None)?;
+    let token_addr: Address = token_address.parse()?;
+    let rpc_url = Url::parse(rpc_url)?;
+    let provider = ProviderBuilder::new()
+        .with_chain(chain)
+        .connect_http(rpc_url);
+    let contract = MidribV2::new(contract_addr, &provider);
+    let result = contract
+        .tradeBalance(depositer_address, token_addr)
+        .call()
+        .await?;
+    Ok(result)
+}
+
+/// Variant of `call_get_locked_balance` that takes an `Address` directly.
+pub async fn call_get_locked_balance_for_address(
+    rpc_url: &str,
+    token_address: &str,
+    contract_address: &str,
+    depositer_address: Address,
+) -> Result<Uint<256, 4>> {
+    let contract_addr: Address = Address::parse_checksummed(contract_address, None)?;
+    let token_addr: Address = token_address.parse()?;
     let rpc_url = Url::parse(rpc_url)?;
     let provider = ProviderBuilder::new().connect_http(rpc_url);
     let contract = MidribV2::new(contract_addr, &provider);
