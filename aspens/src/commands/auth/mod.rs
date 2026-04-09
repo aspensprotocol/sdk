@@ -11,10 +11,11 @@ use alloy::primitives::{keccak256, Address, B256, U256};
 use alloy::signers::{local::PrivateKeySigner, Signer};
 use auth_pb::auth_service_client::AuthServiceClient;
 use auth_pb::{AuthRequest, AuthResponse, InitializeAdminRequest, InitializeAdminResponse};
-use eyre::Result;
+use eyre::{eyre, Result};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::grpc::create_channel;
+use crate::wallet::{CurveType, Wallet};
 
 /// EIP-712 domain separator for Arborter authentication
 const EIP712_DOMAIN_NAME: &str = "Arborter";
@@ -71,38 +72,67 @@ pub async fn initialize_admin(url: String, address: String) -> Result<AuthToken>
     Ok(response.into_inner().into())
 }
 
-/// Authenticate with EIP-712 signature to obtain a JWT token
+/// Authenticate with EIP-712 signature to obtain a JWT token (legacy EVM API).
 ///
-/// This function creates an EIP-712 typed data structure, signs it with
-/// the provided private key, and calls the authentication endpoint.
-///
-/// # Arguments
-/// * `url` - The Aspens stack gRPC URL
-/// * `private_key` - The private key (hex string, with or without 0x prefix)
-/// * `chain_id` - The chain ID for EIP-712 domain (optional, defaults to 1)
+/// Wraps `authenticate_with_wallet` for backward compatibility.
 pub async fn authenticate_with_signature(
     url: String,
     private_key: String,
     chain_id: Option<u64>,
 ) -> Result<AuthToken> {
-    let signer: PrivateKeySigner = private_key.parse()?;
-    let address = signer.address();
+    let wallet = Wallet::from_evm_hex(&private_key)?;
+    authenticate_with_wallet(url, &wallet, chain_id).await
+}
+
+/// Authenticate with a curve-agnostic wallet to obtain a JWT token.
+///
+/// - **EVM (Secp256k1)**: signs an EIP-712 typed data digest (existing behavior).
+/// - **Solana (Ed25519)**: signs the canonical message bytes
+///   `address||timestamp||nonce` with raw Ed25519. The arborter auth service
+///   must accept Ed25519 signatures for Solana wallets.
+///
+/// # Arguments
+/// * `url` - The Aspens stack gRPC URL
+/// * `wallet` - The wallet to authenticate with
+/// * `chain_id` - The chain ID for EIP-712 domain (EVM only, defaults to 1)
+pub async fn authenticate_with_wallet(
+    url: String,
+    wallet: &Wallet,
+    chain_id: Option<u64>,
+) -> Result<AuthToken> {
+    let address_str = wallet.address();
 
     // Generate timestamp and nonce
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let nonce = generate_nonce();
 
-    // Create and sign the EIP-712 message
-    let signature = sign_auth_message(&signer, address, timestamp, &nonce, chain_id).await?;
+    let signature = match wallet.curve() {
+        CurveType::Secp256k1 => {
+            // EIP-712 path
+            let evm_signer = wallet
+                .as_evm()
+                .ok_or_else(|| eyre!("expected EVM wallet"))?;
+            let address: Address = address_str.parse()?;
+            sign_auth_message(evm_signer, address, timestamp, &nonce, chain_id).await?
+        }
+        CurveType::Ed25519 => {
+            // Solana path: sign canonical message bytes
+            let mut msg = Vec::new();
+            msg.extend_from_slice(address_str.as_bytes());
+            msg.extend_from_slice(&timestamp.to_be_bytes());
+            msg.extend_from_slice(nonce.as_bytes());
+            let sig_bytes = wallet.sign_message(&msg).await?;
+            format!("0x{}", hex::encode(sig_bytes))
+        }
+    };
 
     // Connect to gRPC service
     let channel = create_channel(&url).await?;
 
     let mut client = AuthServiceClient::new(channel);
 
-    // Send address in checksummed format for consistent display
     let request = tonic::Request::new(AuthRequest {
-        address: address.to_checksum(None),
+        address: address_str,
         timestamp,
         nonce,
         signature,
