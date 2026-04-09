@@ -20,6 +20,13 @@ alloy-chains = "0.2.30"
 alloy-contract = "1.8.3"
 alloy-sol-types = { version = "1.5.7", features = ["json"] }
 
+# Solana
+solana-sdk = "2.1"
+solana-client = "2.1"
+solana-program = "2.1"
+bs58 = "0.5"
+ed25519-dalek = "2"
+
 # gRPC & Protobuf
 tonic = { version = "0.14.5", default-features = false, features = ["codegen", "transport", "tls-native-roots", "tls-ring"] }
 tonic-reflection = "0.14.5"

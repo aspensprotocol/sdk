@@ -1,8 +1,10 @@
+pub mod chain_client;
 pub mod client;
 pub mod commands;
 pub mod executor;
 pub mod grpc;
 pub mod health;
+pub mod wallet;
 
 pub mod attestation {
     pub mod v1 {
@@ -21,8 +23,10 @@ pub mod proto {
 }
 
 // Re-export commonly used types
+pub use chain_client::ChainClient;
 pub use client::{AspensClient, AspensClientBuilder, JwtToken};
 pub use executor::{AsyncExecutor, BlockingExecutor, DirectExecutor};
+pub use wallet::{load_admin_wallet, load_trader_wallet, CurveType, Wallet};
 
 // Re-export admin types when admin feature is enabled
 #[cfg(feature = "admin")]
