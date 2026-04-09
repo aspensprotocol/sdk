@@ -1217,30 +1217,23 @@ async fn run() -> Result<()> {
                 })
                 .map(|s| s.address());
 
-            println!(
-                "═══════════════════════════════════════════════════════════════════════════"
-            );
-            println!(
-                "                            ADMIN BALANCES"
-            );
-            println!(
-                "═══════════════════════════════════════════════════════════════════════════"
-            );
+            println!("═══════════════════════════════════════════════════════════════════════════");
+            println!("                            ADMIN BALANCES");
+            println!("═══════════════════════════════════════════════════════════════════════════");
             println!();
 
             for chain in &configuration.chains {
-                let signer_key = signer_response
-                    .chain_keys
-                    .get(&chain.network);
-                let signer_addr: Option<Address> = signer_key
-                    .and_then(|k| k.public_key.parse().ok());
+                let signer_key = signer_response.chain_keys.get(&chain.network);
+                let signer_addr: Option<Address> =
+                    signer_key.and_then(|k| k.public_key.parse().ok());
 
-                let contract_addr: Option<Address> = chain
-                    .trade_contract
-                    .as_ref()
-                    .and_then(|tc| {
-                        if tc.address.is_empty() { None } else { tc.address.parse().ok() }
-                    });
+                let contract_addr: Option<Address> = chain.trade_contract.as_ref().and_then(|tc| {
+                    if tc.address.is_empty() {
+                        None
+                    } else {
+                        tc.address.parse().ok()
+                    }
+                });
 
                 let mut table = Table::new();
                 table.load_preset(UTF8_BORDERS_ONLY);
@@ -1248,7 +1241,12 @@ async fn run() -> Result<()> {
                     "Address",
                     "Role",
                     "Gas",
-                    &chain.tokens.keys().cloned().collect::<Vec<_>>().join("  |  "),
+                    &chain
+                        .tokens
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("  |  "),
                 ]);
 
                 // Build header with individual token columns
