@@ -13,7 +13,8 @@ alloy-contract.workspace = true
 alloy-sol-types.workspace = true
 solana-sdk.workspace = true
 solana-client.workspace = true
-solana-program.workspace = true
+# Pin transitive solana-keypair to avoid the buggy 3.1.1+ releases
+solana-keypair.workspace = true
 bs58.workspace = true
 ed25519-dalek.workspace = true
 eyre.workspace = true
