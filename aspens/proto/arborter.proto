@@ -71,10 +71,16 @@ message GaslessAuthorization {
   // Raw signature bytes — see chain-specific format above.
   bytes user_signature = 1;
   // Absolute deadline the arborter must land the tx before.
+  // Solana: slot number. EVM: fillDeadline (unix seconds).
   uint64 deadline = 2;
   // On-chain order id (32-byte hex, 0x-prefixed) that the user's
   // signature binds to — matches the on-chain Order PDA / EVM intent id.
   string order_id = 3;
+  // Permit2 / EIP-712 nonce stamped on the user-signed EVM order.
+  // Ignored by Solana (the Order PDA init serves as the nonce).
+  uint64 nonce = 4;
+  // EVM openDeadline (unix seconds). Ignored by Solana.
+  uint64 open_deadline = 5;
 }
 
 message Order {
