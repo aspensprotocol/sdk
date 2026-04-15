@@ -58,6 +58,32 @@ pub struct SendOrderRequest {
     /// Valid EIP-712 signature hash of this order
     #[prost(bytes = "vec", tag = "2")]
     pub signature_hash: ::prost::alloc::vec::Vec<u8>,
+    /// Optional gasless authorization: if present, the arborter will drive
+    /// the on-chain `lock_for_order` via the chain's gasless path
+    /// (Solana: MidribOpenFor with Ed25519 precompile; EVM: MidribV2.openFor
+    /// with Permit2 — EVM not yet wired). If absent, the arborter falls back
+    /// to the legacy lock_for_order path (EVM: arborter-signed Permit2).
+    #[prost(message, optional, tag = "3")]
+    pub gasless: ::core::option::Option<GaslessAuthorization>,
+}
+/// User-produced authorization bundle for a gasless on-chain open. The
+/// signature semantics + deadline units are chain-specific and match the
+/// `chain_traits::market::GaslessLockParams` fields:
+///
+/// * Solana: 64-byte Ed25519 signature; deadline is a slot number.
+/// * EVM:    65-byte ECDSA signature; deadline is a unix timestamp.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GaslessAuthorization {
+    /// Raw signature bytes — see chain-specific format above.
+    #[prost(bytes = "vec", tag = "1")]
+    pub user_signature: ::prost::alloc::vec::Vec<u8>,
+    /// Absolute deadline the arborter must land the tx before.
+    #[prost(uint64, tag = "2")]
+    pub deadline: u64,
+    /// On-chain order id (32-byte hex, 0x-prefixed) that the user's
+    /// signature binds to — matches the on-chain Order PDA / EVM intent id.
+    #[prost(string, tag = "3")]
+    pub order_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Order {
