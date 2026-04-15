@@ -118,6 +118,95 @@ fn solana_gasless_lock_signing_message_snapshot() {
     );
 }
 
+// -- Arborter-fixture mirrors --------------------------------------------
+//
+// These tests use the **exact** inputs arborter's own program/integration
+// tests use, so a byte-for-byte mismatch here signals divergence between
+// SDK and arborter directly. The SDK's other snapshot tests catch
+// internal drift; these catch cross-repo drift.
+
+#[test]
+fn solana_message_matches_arborter_fixture() {
+    // Mirrors arborter/chains/solana/programs/midrib/src/instructions.rs ::
+    // `gasless_signing_message_layout_is_stable` — any change to borsh
+    // layout on either side breaks one of these assertions.
+    use aspens::solana::{gasless_lock_signing_message, OpenOrderArgs};
+    use solana_sdk::pubkey::Pubkey;
+
+    let instance = Pubkey::new_from_array([1u8; 32]);
+    let user = Pubkey::new_from_array([2u8; 32]);
+    let mint = Pubkey::new_from_array([3u8; 32]);
+    let order = OpenOrderArgs {
+        order_id: [4u8; 32],
+        origin_chain_id: 501,
+        destination_chain_id: 1,
+        input_token: mint,
+        input_amount: 1_000_000,
+        output_token: [5u8; 32],
+        output_amount: 1_000_000,
+    };
+    let msg = gasless_lock_signing_message(&instance, &user, 99, &order).unwrap();
+
+    assert_eq!(msg.len(), 200, "layout diverged from arborter");
+    // Positional cross-checks match the arborter-side assertions exactly.
+    assert_eq!(&msg[..32], instance.as_ref());
+    assert_eq!(&msg[32..64], user.as_ref());
+    assert_eq!(&msg[64..72], 99u64.to_le_bytes());
+    assert_eq!(&msg[72..104], &[4u8; 32]); // order.order_id
+}
+
+#[test]
+fn evm_hash_matches_arborter_fixture() {
+    // Mirrors arborter/app/chain-evm/src/market.rs ::
+    // `gasless_order_signature_round_trips` — same params + same
+    // arborter / origin_settler / chain_id → same EIP-712 digest on
+    // both sides. arborter's round-trip test signs + recovers; we just
+    // pin the bytes, but identical inputs land on the same hash by
+    // construction of alloy's sol! + eip712_domain!.
+    use alloy_primitives::{address, Address};
+
+    let arborter: Address = address!("1111111111111111111111111111111111111111");
+    let origin_settler: Address = address!("2222222222222222222222222222222222222222");
+    let token = address!("3333333333333333333333333333333333333333");
+    let dest_token = address!("4444444444444444444444444444444444444444");
+    let depositor = address!("5555555555555555555555555555555555555555");
+    let origin_chain_id: u64 = 13337;
+
+    let depositor_s = depositor.to_string();
+    let token_s = token.to_string();
+    let dest_token_s = dest_token.to_string();
+    let sig_placeholder = vec![0u8; 65];
+
+    let params = GaslessLockParams {
+        depositor_address: &depositor_s,
+        token_contract: &token_s,
+        token_contract_destination_chain: &dest_token_s,
+        destination_chain_id: "1",
+        amount_in: 1_000_000,
+        amount_out: 1_000_000,
+        order_id: "",
+        deadline: 2_000_000_000,
+        open_deadline: 1_999_000_000,
+        nonce: 42,
+        user_signature: &sig_placeholder,
+    };
+
+    let digest =
+        aspens::evm::gasless_lock_signing_hash(&params, arborter, origin_settler, origin_chain_id)
+            .unwrap();
+
+    // arborter-side reference: same build_gasless_cross_chain_order
+    // inputs + same eip712_domain! → same bytes. Fixed expected hash
+    // below; regenerate via the arborter round-trip test if the
+    // underlying sol! struct layout ever changes.
+    let expected_hex = "959bb32ae0a4690b5cfcc13110bddce3ba5f1bc29301168221493ea40ab884fe";
+    assert_eq!(
+        hex::encode(digest),
+        expected_hex,
+        "EIP-712 digest diverged from arborter fixture"
+    );
+}
+
 // -- chain-agnostic order id ---------------------------------------------
 
 #[test]
