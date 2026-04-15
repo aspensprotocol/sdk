@@ -78,12 +78,20 @@ pub struct GaslessAuthorization {
     #[prost(bytes = "vec", tag = "1")]
     pub user_signature: ::prost::alloc::vec::Vec<u8>,
     /// Absolute deadline the arborter must land the tx before.
+    /// Solana: slot number. EVM: fillDeadline (unix seconds).
     #[prost(uint64, tag = "2")]
     pub deadline: u64,
     /// On-chain order id (32-byte hex, 0x-prefixed) that the user's
     /// signature binds to — matches the on-chain Order PDA / EVM intent id.
     #[prost(string, tag = "3")]
     pub order_id: ::prost::alloc::string::String,
+    /// Permit2 / EIP-712 nonce stamped on the user-signed EVM order.
+    /// Ignored by Solana (the Order PDA init serves as the nonce).
+    #[prost(uint64, tag = "4")]
+    pub nonce: u64,
+    /// EVM openDeadline (unix seconds). Ignored by Solana.
+    #[prost(uint64, tag = "5")]
+    pub open_deadline: u64,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Order {
