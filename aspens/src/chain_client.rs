@@ -4,11 +4,17 @@
 use alloy::primitives::{Address, Uint};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy_chains::NamedChain;
-use eyre::{eyre, Result};
-use solana_client::nonblocking::rpc_client::RpcClient as SolanaRpcClient;
-use solana_sdk::pubkey::Pubkey;
-use std::str::FromStr;
+use eyre::Result;
 use url::Url;
+
+#[cfg(feature = "solana")]
+use eyre::eyre;
+#[cfg(feature = "solana")]
+use solana_client::nonblocking::rpc_client::RpcClient as SolanaRpcClient;
+#[cfg(feature = "solana")]
+use solana_sdk::pubkey::Pubkey;
+#[cfg(feature = "solana")]
+use std::str::FromStr;
 
 use crate::commands::config::config_pb::{Chain, Token};
 
@@ -22,6 +28,7 @@ pub enum ChainClient {
     /// EVM provider (Alloy).
     Evm { rpc_url: String, chain_id: u32 },
     /// Solana RPC client.
+    #[cfg(feature = "solana")]
     Solana { client: SolanaRpcClient },
 }
 
@@ -30,18 +37,27 @@ impl ChainClient {
     ///
     /// Dispatches on `chain.architecture`:
     /// - `"EVM"` (or empty/anything else for backward compat) → Alloy provider
-    /// - `"Solana"` → Solana RPC client
+    /// - `"Solana"` → Solana RPC client (requires the `solana` feature)
     pub fn from_chain_config(chain: &Chain) -> Result<Self> {
         if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
-            Ok(ChainClient::Solana {
-                client: SolanaRpcClient::new(chain.rpc_url.clone()),
-            })
-        } else {
-            Ok(ChainClient::Evm {
-                rpc_url: chain.rpc_url.clone(),
-                chain_id: chain.chain_id,
-            })
+            #[cfg(feature = "solana")]
+            {
+                return Ok(ChainClient::Solana {
+                    client: SolanaRpcClient::new(chain.rpc_url.clone()),
+                });
+            }
+            #[cfg(not(feature = "solana"))]
+            {
+                return Err(eyre::eyre!(
+                    "chain '{}' is Solana but the `solana` feature is disabled",
+                    chain.network
+                ));
+            }
         }
+        Ok(ChainClient::Evm {
+            rpc_url: chain.rpc_url.clone(),
+            chain_id: chain.chain_id,
+        })
     }
 
     /// Query the native gas balance for an address. Returns a `u128` in
@@ -53,9 +69,9 @@ impl ChainClient {
                 let provider = ProviderBuilder::new().connect_http(url);
                 let addr: Address = address.parse()?;
                 let balance: Uint<256, 4> = provider.get_balance(addr).await?;
-                // EVM balance fits in u128 for any reasonable amount; clamp on overflow.
                 Ok(balance.try_into().unwrap_or(u128::MAX))
             }
+            #[cfg(feature = "solana")]
             ChainClient::Solana { client } => {
                 let pubkey = Pubkey::from_str(address)
                     .map_err(|e| eyre!("invalid Solana address: {}", e))?;
@@ -86,21 +102,14 @@ impl ChainClient {
                 let result: Uint<256, 4> = contract.balanceOf(owner_addr).call().await?;
                 Ok(result.try_into().unwrap_or(u128::MAX))
             }
+            #[cfg(feature = "solana")]
             ChainClient::Solana { client } => {
-                // For Solana, the token mint address is in `token.address` (base58).
-                // The owner's token holding lives in their Associated Token Account (ATA),
-                // derived deterministically from (owner, mint).
-                //
-                // We compute the ATA inline to avoid pulling in the full
-                // spl-associated-token-account crate (which has dep conflicts).
                 let owner_pubkey = Pubkey::from_str(owner)
                     .map_err(|e| eyre!("invalid Solana owner address: {}", e))?;
                 let mint_pubkey = Pubkey::from_str(&token.address)
                     .map_err(|e| eyre!("invalid Solana mint address: {}", e))?;
                 let ata = derive_associated_token_account(&owner_pubkey, &mint_pubkey);
 
-                // Try to fetch the token account balance. If the account doesn't
-                // exist, the owner has zero of this token.
                 match client.get_token_account_balance(&ata).await {
                     Ok(b) => b
                         .amount
@@ -113,39 +122,24 @@ impl ChainClient {
     }
 }
 
-/// Derive the Solana Associated Token Account (ATA) address for
-/// `(owner, mint)`. This mirrors the SPL ATA program's PDA derivation:
+/// Derive the Solana Associated Token Account (ATA) address for `(owner, mint)`.
 ///
-/// ```text
-/// ATA = find_program_address(
-///     &[owner, TOKEN_PROGRAM_ID, mint],
-///     ASSOCIATED_TOKEN_PROGRAM_ID,
-/// )
-/// ```
+/// Re-exported from `crate::solana` for backward compatibility with callers
+/// that imported it from this module before the Solana code moved.
+#[cfg(feature = "solana")]
 pub fn derive_associated_token_account(owner: &Pubkey, mint: &Pubkey) -> Pubkey {
-    // Hardcoded program IDs from the SPL specification.
-    // SPL Token program: TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
-    // Associated Token program: ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL
-    let token_program_id = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
-    let associated_token_program_id =
-        Pubkey::from_str("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL").unwrap();
-
-    let seeds = &[owner.as_ref(), token_program_id.as_ref(), mint.as_ref()];
-    let (ata, _bump) = Pubkey::find_program_address(seeds, &associated_token_program_id);
-    ata
+    crate::solana::derive_associated_token_account(owner, mint)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "solana"))]
 mod tests {
     use super::*;
 
     #[test]
     fn ata_derivation_matches_known_pair() {
-        // Sanity: derivation should produce a deterministic, valid pubkey.
         let owner = Pubkey::from_str("11111111111111111111111111111112").unwrap();
         let mint = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
         let ata = derive_associated_token_account(&owner, &mint);
-        // Just verify it doesn't panic and returns a non-default pubkey.
         assert_ne!(ata, Pubkey::default());
     }
 }

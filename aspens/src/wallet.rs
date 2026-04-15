@@ -2,11 +2,13 @@
 //!
 //! Wraps EVM (secp256k1, via Alloy) and Solana (Ed25519, via solana-sdk)
 //! keys behind a single interface so call sites don't need to branch on
-//! curve type.
+//! curve type. Solana support is gated behind the `solana` feature.
 
 use alloy::primitives::B256;
 use alloy::signers::{local::PrivateKeySigner, Signer};
 use eyre::{eyre, Result};
+
+#[cfg(feature = "solana")]
 use solana_sdk::signature::{Keypair, Signer as SolanaSigner};
 
 /// Cryptographic curve used by a wallet.
@@ -14,13 +16,16 @@ use solana_sdk::signature::{Keypair, Signer as SolanaSigner};
 pub enum CurveType {
     /// secp256k1 ECDSA — EVM-compatible chains
     Secp256k1,
-    /// Ed25519 EdDSA — Solana-compatible chains
+    /// Ed25519 EdDSA — Solana-compatible chains. Constructing/using a wallet
+    /// of this curve requires the `solana` feature.
     Ed25519,
 }
 
-/// A wallet that can sign messages on either EVM or Solana chains.
+/// A wallet that can sign messages on EVM (always) or Solana (with `solana`
+/// feature) chains.
 pub enum Wallet {
     Evm(PrivateKeySigner),
+    #[cfg(feature = "solana")]
     Solana(Box<Keypair>),
 }
 
@@ -35,6 +40,7 @@ impl Wallet {
 
     /// Load a Solana wallet from a base58-encoded keypair string
     /// (the standard `solana-keygen` output format).
+    #[cfg(feature = "solana")]
     pub fn from_solana_base58(b58: &str) -> Result<Self> {
         let bytes = bs58::decode(b58.trim())
             .into_vec()
@@ -52,6 +58,7 @@ impl Wallet {
 
     /// Load a Solana wallet from a JSON byte array (alternate `solana-keygen` format,
     /// e.g. `[12,34,56,...]` — 64 bytes).
+    #[cfg(feature = "solana")]
     pub fn from_solana_json(json: &str) -> Result<Self> {
         let bytes: Vec<u8> =
             serde_json::from_str(json).map_err(|e| eyre!("invalid Solana keypair JSON: {}", e))?;
@@ -70,6 +77,7 @@ impl Wallet {
     pub fn curve(&self) -> CurveType {
         match self {
             Wallet::Evm(_) => CurveType::Secp256k1,
+            #[cfg(feature = "solana")]
             Wallet::Solana(_) => CurveType::Ed25519,
         }
     }
@@ -80,6 +88,7 @@ impl Wallet {
     pub fn address(&self) -> String {
         match self {
             Wallet::Evm(s) => s.address().to_checksum(None),
+            #[cfg(feature = "solana")]
             Wallet::Solana(kp) => kp.pubkey().to_string(),
         }
     }
@@ -93,6 +102,7 @@ impl Wallet {
                 let sig = s.sign_message(msg).await?;
                 Ok(sig.as_bytes().to_vec())
             }
+            #[cfg(feature = "solana")]
             Wallet::Solana(kp) => {
                 let sig = kp.sign_message(msg);
                 Ok(sig.as_ref().to_vec())
@@ -107,6 +117,7 @@ impl Wallet {
                 let sig = s.sign_hash(&digest).await?;
                 Ok(sig.as_bytes().to_vec())
             }
+            #[cfg(feature = "solana")]
             Wallet::Solana(_) => Err(eyre!(
                 "EIP-712 digest signing is not supported for Ed25519 wallets"
             )),
@@ -117,11 +128,13 @@ impl Wallet {
     pub fn as_evm(&self) -> Option<&PrivateKeySigner> {
         match self {
             Wallet::Evm(s) => Some(s),
+            #[cfg(feature = "solana")]
             Wallet::Solana(_) => None,
         }
     }
 
     /// Borrow as a Solana keypair, if this is a Solana wallet.
+    #[cfg(feature = "solana")]
     pub fn as_solana(&self) -> Option<&Keypair> {
         match self {
             Wallet::Evm(_) => None,
@@ -133,7 +146,8 @@ impl Wallet {
 /// Load a trader wallet from environment variables based on the requested curve.
 ///
 /// - `Secp256k1`: reads `TRADER_PRIVKEY` (hex)
-/// - `Ed25519`: reads `TRADER_PRIVKEY_SOLANA` (base58 keypair)
+/// - `Ed25519`: reads `TRADER_PRIVKEY_SOLANA` (base58 keypair) — requires the
+///   `solana` feature
 pub fn load_trader_wallet(curve: CurveType) -> Result<Wallet> {
     match curve {
         CurveType::Secp256k1 => {
@@ -142,10 +156,18 @@ pub fn load_trader_wallet(curve: CurveType) -> Result<Wallet> {
             Wallet::from_evm_hex(&key)
         }
         CurveType::Ed25519 => {
-            let key = std::env::var("TRADER_PRIVKEY_SOLANA")
-                .map_err(|_| eyre!("TRADER_PRIVKEY_SOLANA not set in environment"))?;
-            // Try base58 first, fall back to JSON byte array
-            Wallet::from_solana_base58(&key).or_else(|_| Wallet::from_solana_json(&key))
+            #[cfg(feature = "solana")]
+            {
+                let key = std::env::var("TRADER_PRIVKEY_SOLANA")
+                    .map_err(|_| eyre!("TRADER_PRIVKEY_SOLANA not set in environment"))?;
+                Wallet::from_solana_base58(&key).or_else(|_| Wallet::from_solana_json(&key))
+            }
+            #[cfg(not(feature = "solana"))]
+            {
+                Err(eyre!(
+                    "Ed25519/Solana wallets require the `solana` feature to be enabled"
+                ))
+            }
         }
     }
 }
@@ -153,7 +175,8 @@ pub fn load_trader_wallet(curve: CurveType) -> Result<Wallet> {
 /// Load an admin wallet from environment variables based on the requested curve.
 ///
 /// - `Secp256k1`: reads `ADMIN_PRIVKEY` (hex)
-/// - `Ed25519`: reads `ADMIN_PRIVKEY_SOLANA` (base58 keypair)
+/// - `Ed25519`: reads `ADMIN_PRIVKEY_SOLANA` (base58 keypair) — requires the
+///   `solana` feature
 pub fn load_admin_wallet(curve: CurveType) -> Result<Wallet> {
     match curve {
         CurveType::Secp256k1 => {
@@ -162,9 +185,18 @@ pub fn load_admin_wallet(curve: CurveType) -> Result<Wallet> {
             Wallet::from_evm_hex(&key)
         }
         CurveType::Ed25519 => {
-            let key = std::env::var("ADMIN_PRIVKEY_SOLANA")
-                .map_err(|_| eyre!("ADMIN_PRIVKEY_SOLANA not set in environment"))?;
-            Wallet::from_solana_base58(&key).or_else(|_| Wallet::from_solana_json(&key))
+            #[cfg(feature = "solana")]
+            {
+                let key = std::env::var("ADMIN_PRIVKEY_SOLANA")
+                    .map_err(|_| eyre!("ADMIN_PRIVKEY_SOLANA not set in environment"))?;
+                Wallet::from_solana_base58(&key).or_else(|_| Wallet::from_solana_json(&key))
+            }
+            #[cfg(not(feature = "solana"))]
+            {
+                Err(eyre!(
+                    "Ed25519/Solana wallets require the `solana` feature to be enabled"
+                ))
+            }
         }
     }
 }
@@ -176,6 +208,7 @@ mod tests {
     // Anvil test key #0
     const TEST_EVM_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
+    #[cfg(feature = "solana")]
     fn fresh_solana_keypair_b58() -> String {
         let kp = Keypair::new();
         bs58::encode(kp.to_bytes()).into_string()
@@ -190,12 +223,12 @@ mod tests {
         assert_eq!(w.curve(), CurveType::Secp256k1);
     }
 
+    #[cfg(feature = "solana")]
     #[test]
     fn solana_wallet_address_is_base58() {
         let b58 = fresh_solana_keypair_b58();
         let w = Wallet::from_solana_base58(&b58).unwrap();
         let addr = w.address();
-        // Solana addresses are base58, 32-44 chars, no '0' 'O' 'I' 'l'
         assert!(!addr.is_empty());
         assert!(!addr.starts_with("0x"));
         assert!(addr.len() >= 32 && addr.len() <= 44);
@@ -213,6 +246,7 @@ mod tests {
         assert_eq!(sig.len(), 65, "EVM signature should be 65 bytes");
     }
 
+    #[cfg(feature = "solana")]
     #[tokio::test]
     async fn solana_sign_message_is_64_bytes() {
         let w = Wallet::from_solana_base58(&fresh_solana_keypair_b58()).unwrap();
@@ -220,6 +254,7 @@ mod tests {
         assert_eq!(sig.len(), 64, "Ed25519 signature should be 64 bytes");
     }
 
+    #[cfg(feature = "solana")]
     #[tokio::test]
     async fn solana_eip712_returns_error() {
         let w = Wallet::from_solana_base58(&fresh_solana_keypair_b58()).unwrap();
@@ -227,6 +262,7 @@ mod tests {
         assert!(w.sign_eip712_digest(digest).await.is_err());
     }
 
+    #[cfg(feature = "solana")]
     #[test]
     fn solana_wallet_rejects_short_key() {
         let short = bs58::encode(vec![0u8; 32]).into_string();
@@ -236,5 +272,11 @@ mod tests {
     #[test]
     fn evm_wallet_rejects_invalid_hex() {
         assert!(Wallet::from_evm_hex("not-hex").is_err());
+    }
+
+    #[cfg(not(feature = "solana"))]
+    #[test]
+    fn ed25519_load_errors_without_feature() {
+        assert!(load_trader_wallet(CurveType::Ed25519).is_err());
     }
 }

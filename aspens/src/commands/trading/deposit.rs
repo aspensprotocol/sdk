@@ -50,14 +50,15 @@ pub async fn call_deposit_from_config_with_wallet(
         .architecture
         .eq_ignore_ascii_case(ARCH_SOLANA)
     {
-        return solana_deposit_scaffold(chain_for_arch, &token_symbol, amount, wallet);
+        return solana_deposit(chain_for_arch, &token_symbol, amount, wallet).await;
     }
 
     // EVM path requires an EVM wallet
     if wallet.curve() != CurveType::Secp256k1 {
         return Err(eyre::eyre!(
-            "EVM chain '{}' requires a secp256k1 wallet, got Ed25519",
-            network
+            "EVM chain '{}' requires a secp256k1 wallet, got {:?}",
+            network,
+            wallet.curve()
         ));
     }
     let signer = wallet
@@ -68,47 +69,65 @@ pub async fn call_deposit_from_config_with_wallet(
     call_deposit_from_config_evm(network, token_symbol, amount, signer, config).await
 }
 
-/// Solana deposit scaffold — structure is in place but instruction encoding
-/// is pending the on-chain trade program design.
-fn solana_deposit_scaffold(
+/// Solana deposit — builds and submits the user-signed Midrib `deposit`
+/// instruction. Requires the `solana` feature.
+#[cfg(feature = "solana")]
+async fn solana_deposit(
     chain: &crate::commands::config::config_pb::Chain,
     token_symbol: &str,
     amount: u64,
     wallet: &Wallet,
 ) -> Result<()> {
-    let program_id = chain
-        .trade_contract
-        .as_ref()
-        .and_then(|tc| tc.contract_id.clone())
-        .ok_or_else(|| {
-            eyre::eyre!(
-                "Solana chain '{}' has no trade_contract.contract_id (program ID) configured",
-                chain.network
-            )
-        })?;
-    let _token = chain.tokens.get(token_symbol).ok_or_else(|| {
+    use solana_sdk::pubkey::Pubkey;
+    use std::str::FromStr;
+
+    let token = chain.tokens.get(token_symbol).ok_or_else(|| {
         eyre::eyre!(
             "Token '{}' not found on Solana chain '{}'",
             token_symbol,
             chain.network
         )
     })?;
-    let _owner = wallet.address();
-    let _amount = amount;
-    let _program_id = program_id;
 
-    // TODO: Build and submit Solana deposit instruction once the on-chain
-    // trade program's instruction layout is finalized. Structure:
-    //   1. Resolve owner ATA for `_token.address` (SPL mint)
-    //   2. Build deposit instruction targeting `_program_id` with
-    //      accounts [owner, owner_ata, program_pda, mint, token_program, ...]
-    //      and data [discriminator, _amount as u64 LE]
-    //   3. Wrap in a Transaction, recent blockhash, sign with `wallet.as_solana()`
-    //   4. Submit via `ChainClient::Solana`
+    let keypair = wallet.as_solana().ok_or_else(|| {
+        eyre::eyre!(
+            "Solana chain '{}' requires an Ed25519 wallet (TRADER_PRIVKEY_SOLANA)",
+            chain.network
+        )
+    })?;
+
+    let (program_id, instance) = crate::solana::resolve_program_and_instance(chain)?;
+    let user = solana_sdk::signer::Signer::pubkey(keypair);
+    let mint = Pubkey::from_str(&token.address)
+        .map_err(|e| eyre::eyre!("invalid Solana mint '{}': {}", token.address, e))?;
+    let user_ata = crate::solana::derive_associated_token_account(&user, &mint);
+
+    tracing::info!(
+        "Solana deposit: {} {} on {} (program={}, instance={}, ata={})",
+        amount,
+        token_symbol,
+        chain.network,
+        program_id,
+        instance,
+        user_ata
+    );
+
+    let ix = crate::solana::deposit_ix(&program_id, &instance, &user, &mint, &user_ata, amount)?;
+    let sig = crate::solana::submit_user_signed(&chain.rpc_url, keypair, ix).await?;
+    tracing::info!("Solana deposit confirmed: {}", sig);
+    Ok(())
+}
+
+#[cfg(not(feature = "solana"))]
+async fn solana_deposit(
+    chain: &crate::commands::config::config_pb::Chain,
+    _token_symbol: &str,
+    _amount: u64,
+    _wallet: &Wallet,
+) -> Result<()> {
     Err(eyre::eyre!(
-        "Solana deposit is not yet implemented — the on-chain trade program \
-         instruction layout is pending. Configure trade_contract.contract_id \
-         in the chain config to point at the eventual program."
+        "chain '{}' is Solana but the `solana` feature is disabled",
+        chain.network
     ))
 }
 

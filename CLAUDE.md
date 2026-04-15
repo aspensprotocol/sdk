@@ -212,13 +212,19 @@ that dispatches between Alloy (EVM) and `solana-client` based on
 balance queries. SPL token balances use the Associated Token Account derived
 inline (see `derive_associated_token_account`).
 
-**Gap — Solana on-chain trade program**: The deposit and withdraw flows for
-Solana chains are scaffolded but return a clear "not yet implemented" error.
-The structure is in place — wallet → RPC client → transaction build → sign →
-submit — but the actual instruction encoding is gated on the on-chain trade
-program design. When that lands, fill in the `TODO` blocks in
-`solana_deposit_scaffold` / `solana_withdraw_scaffold` with the program's
-instruction layout.
+**Solana trade program (Midrib)**: deposit / withdraw / balance flows are
+implemented in `aspens/src/solana/mod.rs`, mirroring
+`arborter/app/chain-solana`. PDA seeds, account orderings, and Anchor
+discriminators (`sha256("global:<method>")[..8]`) must be kept in sync with
+the on-chain `midrib` program. Settlement (`fill`, `cancel`,
+`unlock_for_canceled`) is arborter-signed and lives in arborter, not the SDK.
+
+**Feature gating — `solana`**: Solana support (wallet variant, RPC client,
+program builders, deposit/withdraw/balance) is behind the `solana` Cargo
+feature on the `aspens` crate. It's part of `default`, so existing consumers
+are unaffected; EVM-only consumers can build with
+`--no-default-features --features trader,formatting` to skip
+solana-sdk / solana-client / bs58 / ed25519-dalek / borsh / sha2.
 
 ### Environment Configuration
 

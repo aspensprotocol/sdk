@@ -1,0 +1,322 @@
+//! Solana on-chain program (Midrib) client-side helpers.
+//!
+//! Mirrors `arborter/app/chain-solana` — keep PDA seeds, account orderings,
+//! and Anchor discriminators in sync with the on-chain `midrib` program.
+//! Anchor instruction data layout: `sha256("global:<method>")[..8] || borsh(args)`.
+
+use borsh::BorshSerialize;
+use eyre::{eyre, Result};
+use sha2::{Digest, Sha256};
+use solana_sdk::{
+    instruction::{AccountMeta, Instruction},
+    pubkey::Pubkey,
+    signature::Keypair,
+    signer::Signer,
+    transaction::Transaction,
+};
+use std::str::FromStr;
+
+use crate::commands::config::config_pb::Chain;
+
+/// System program ID — "11111111111111111111111111111111" (all-zero pubkey).
+pub const SYSTEM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0u8; 32]);
+/// SPL Token program ID — "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".
+pub const SPL_TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    0x06, 0xdd, 0xf6, 0xe1, 0xd7, 0x65, 0xa1, 0x93, 0xd9, 0xcb, 0xe1, 0x46, 0xce, 0xeb, 0x79, 0xac,
+    0x1c, 0xb4, 0x85, 0xed, 0x5f, 0x5b, 0x37, 0x91, 0x3a, 0x8c, 0xf5, 0x85, 0x7e, 0xff, 0x00, 0xa9,
+]);
+
+/// PDA seeds — must match the on-chain `midrib` program.
+pub mod seeds {
+    pub const FACTORY_SEED: &[u8] = b"factory";
+    pub const INSTANCE_SEED: &[u8] = b"instance";
+    pub const BALANCE_SEED: &[u8] = b"balance";
+    pub const ORDER_SEED: &[u8] = b"order";
+    pub const INSTANCE_VAULT_SEED: &[u8] = b"instance_vault";
+}
+
+fn sysvar_rent_id() -> Pubkey {
+    Pubkey::from_str("SysvarRent111111111111111111111111111111111").unwrap()
+}
+
+fn ata_program_id() -> Pubkey {
+    Pubkey::from_str("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL").unwrap()
+}
+
+/// Compute Anchor's 8-byte instruction discriminator for `<method>`.
+fn anchor_ix_discriminator(method: &str) -> [u8; 8] {
+    let mut h = Sha256::new();
+    h.update(format!("global:{method}").as_bytes());
+    let digest = h.finalize();
+    let mut out = [0u8; 8];
+    out.copy_from_slice(&digest[..8]);
+    out
+}
+
+fn encode_ix<A: BorshSerialize>(method: &str, args: &A) -> Result<Vec<u8>> {
+    let disc = anchor_ix_discriminator(method);
+    let body = borsh::to_vec(args).map_err(|e| eyre!("borsh encode {}: {}", method, e))?;
+    let mut data = Vec::with_capacity(8 + body.len());
+    data.extend_from_slice(&disc);
+    data.extend_from_slice(&body);
+    Ok(data)
+}
+
+/// Derive the user-balance PDA for `(instance, user, mint)`.
+pub fn derive_user_balance_pda(
+    instance: &Pubkey,
+    user: &Pubkey,
+    mint: &Pubkey,
+    program_id: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            seeds::BALANCE_SEED,
+            instance.as_ref(),
+            user.as_ref(),
+            mint.as_ref(),
+        ],
+        program_id,
+    )
+}
+
+/// Derive the per-(instance, mint) SPL vault PDA.
+pub fn derive_instance_vault(
+    instance: &Pubkey,
+    mint: &Pubkey,
+    program_id: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[seeds::INSTANCE_VAULT_SEED, instance.as_ref(), mint.as_ref()],
+        program_id,
+    )
+}
+
+/// Derive the vault authority PDA for an instance.
+pub fn derive_vault_authority(instance: &Pubkey, program_id: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[seeds::INSTANCE_VAULT_SEED, instance.as_ref()], program_id)
+}
+
+/// Derive the SPL Associated Token Account address for `(owner, mint)`.
+pub fn derive_associated_token_account(owner: &Pubkey, mint: &Pubkey) -> Pubkey {
+    let seeds = &[owner.as_ref(), SPL_TOKEN_PROGRAM_ID.as_ref(), mint.as_ref()];
+    let (ata, _bump) = Pubkey::find_program_address(seeds, &ata_program_id());
+    ata
+}
+
+#[derive(BorshSerialize)]
+struct AmountArgs {
+    amount: u64,
+}
+
+/// Build the `deposit` instruction. User-signed — the user's Ed25519 key must
+/// sign the resulting transaction. Initializes UserBalance / instance_vault
+/// PDAs on first call (init_if_needed on-chain).
+pub fn deposit_ix(
+    program_id: &Pubkey,
+    instance: &Pubkey,
+    user: &Pubkey,
+    mint: &Pubkey,
+    user_token_account: &Pubkey,
+    amount: u64,
+) -> Result<Instruction> {
+    let (user_balance, _) = derive_user_balance_pda(instance, user, mint, program_id);
+    let (instance_vault, _) = derive_instance_vault(instance, mint, program_id);
+    let (vault_authority, _) = derive_vault_authority(instance, program_id);
+    let data = encode_ix("deposit", &AmountArgs { amount })?;
+    Ok(Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(*instance, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(user_balance, false),
+            AccountMeta::new(*user_token_account, false),
+            AccountMeta::new(instance_vault, false),
+            AccountMeta::new_readonly(vault_authority, false),
+            AccountMeta::new(*user, true),
+            AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(sysvar_rent_id(), false),
+        ],
+        data,
+    })
+}
+
+/// Build the `withdraw` instruction. User-signed.
+pub fn withdraw_ix(
+    program_id: &Pubkey,
+    instance: &Pubkey,
+    user: &Pubkey,
+    mint: &Pubkey,
+    user_token_account: &Pubkey,
+    amount: u64,
+) -> Result<Instruction> {
+    let (user_balance, _) = derive_user_balance_pda(instance, user, mint, program_id);
+    let (instance_vault, _) = derive_instance_vault(instance, mint, program_id);
+    let (vault_authority, _) = derive_vault_authority(instance, program_id);
+    let data = encode_ix("withdraw", &AmountArgs { amount })?;
+    Ok(Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(*instance, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(user_balance, false),
+            AccountMeta::new(*user_token_account, false),
+            AccountMeta::new(instance_vault, false),
+            AccountMeta::new_readonly(vault_authority, false),
+            AccountMeta::new_readonly(*user, true),
+            AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+        ],
+        data,
+    })
+}
+
+/// Resolve `(program_id, instance)` from a chain config entry. Both must be
+/// configured for trade-program instructions to be built.
+pub fn resolve_program_and_instance(chain: &Chain) -> Result<(Pubkey, Pubkey)> {
+    // Program id is in `factory_address`; the existing scaffold also accepted
+    // `trade_contract.contract_id`, so fall back to it for compatibility.
+    let program_str = if !chain.factory_address.is_empty() {
+        chain.factory_address.clone()
+    } else {
+        chain
+            .trade_contract
+            .as_ref()
+            .and_then(|tc| tc.contract_id.clone())
+            .ok_or_else(|| {
+                eyre!(
+                    "Solana chain '{}' has no factory_address / trade_contract.contract_id (program id) configured",
+                    chain.network
+                )
+            })?
+    };
+    let program_id = Pubkey::from_str(&program_str)
+        .map_err(|e| eyre!("invalid Solana program id '{}': {}", program_str, e))?;
+
+    let instance_str = chain
+        .trade_contract
+        .as_ref()
+        .map(|tc| tc.address.clone())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            eyre!(
+                "Solana chain '{}' has no trade_contract.address (instance PDA) configured",
+                chain.network
+            )
+        })?;
+    let instance = Pubkey::from_str(&instance_str)
+        .map_err(|e| eyre!("invalid Solana instance address '{}': {}", instance_str, e))?;
+
+    Ok((program_id, instance))
+}
+
+/// Submit a single Midrib instruction signed by `user_keypair`. Fetches a
+/// recent blockhash, builds and signs the transaction, then awaits
+/// confirmation.
+pub async fn submit_user_signed(
+    rpc_url: &str,
+    user_keypair: &Keypair,
+    ix: Instruction,
+) -> Result<String> {
+    use solana_client::nonblocking::rpc_client::RpcClient;
+    let client = RpcClient::new(rpc_url.to_string());
+    let blockhash = client
+        .get_latest_blockhash()
+        .await
+        .map_err(|e| eyre!("get_latest_blockhash: {}", e))?;
+    let tx = Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&user_keypair.pubkey()),
+        &[user_keypair],
+        blockhash,
+    );
+    let sig = client
+        .send_and_confirm_transaction(&tx)
+        .await
+        .map_err(|e| eyre!("send_and_confirm_transaction: {}", e))?;
+    Ok(sig.to_string())
+}
+
+/// Fetch on-chain `(deposited, locked)` from the UserBalance PDA. Returns
+/// `(0, 0)` if the account does not exist (user has never deposited on this
+/// instance/mint).
+pub async fn fetch_user_balance(
+    rpc_url: &str,
+    instance: &Pubkey,
+    user: &Pubkey,
+    mint: &Pubkey,
+    program_id: &Pubkey,
+) -> Result<(u64, u64)> {
+    use solana_client::nonblocking::rpc_client::RpcClient;
+    let client = RpcClient::new(rpc_url.to_string());
+    let (pda, _) = derive_user_balance_pda(instance, user, mint, program_id);
+    match client.get_account(&pda).await {
+        Ok(acc) => {
+            // Layout (after 8-byte Anchor discriminator):
+            //   instance: Pubkey (32)
+            //   user:     Pubkey (32)
+            //   mint:     Pubkey (32)
+            //   deposited: u64 LE (8)  ← offset 8 + 32*3 = 104
+            //   locked:    u64 LE (8)  ← offset 112
+            //   bump:      u8 (1)
+            const DEPOSITED_OFFSET: usize = 8 + 32 + 32 + 32;
+            const LOCKED_OFFSET: usize = DEPOSITED_OFFSET + 8;
+            if acc.data.len() < LOCKED_OFFSET + 8 {
+                return Err(eyre!(
+                    "UserBalance account too small: {} bytes",
+                    acc.data.len()
+                ));
+            }
+            let deposited = u64::from_le_bytes(
+                acc.data[DEPOSITED_OFFSET..DEPOSITED_OFFSET + 8]
+                    .try_into()
+                    .unwrap(),
+            );
+            let locked = u64::from_le_bytes(
+                acc.data[LOCKED_OFFSET..LOCKED_OFFSET + 8]
+                    .try_into()
+                    .unwrap(),
+            );
+            Ok((deposited, locked))
+        }
+        // Account-not-found is normal for first-time users.
+        Err(_) => Ok((0, 0)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discriminator_is_deterministic() {
+        let a = anchor_ix_discriminator("deposit");
+        let b = anchor_ix_discriminator("deposit");
+        assert_eq!(a, b);
+        // sha256("global:deposit")[..8]
+        let mut h = Sha256::new();
+        h.update(b"global:deposit");
+        assert_eq!(&a[..], &h.finalize()[..8]);
+    }
+
+    #[test]
+    fn deposit_and_withdraw_have_signer_at_user_slot() {
+        let pid = Pubkey::new_from_array([1; 32]);
+        let inst = Pubkey::new_from_array([2; 32]);
+        let user = Pubkey::new_from_array([3; 32]);
+        let mint = Pubkey::new_from_array([4; 32]);
+        let ata = Pubkey::new_from_array([5; 32]);
+        let dep = deposit_ix(&pid, &inst, &user, &mint, &ata, 100).unwrap();
+        assert!(dep.accounts.iter().any(|a| a.is_signer && a.pubkey == user));
+        let wd = withdraw_ix(&pid, &inst, &user, &mint, &ata, 100).unwrap();
+        assert!(wd.accounts.iter().any(|a| a.is_signer && a.pubkey == user));
+    }
+
+    #[test]
+    fn spl_token_program_id_is_canonical() {
+        assert_eq!(
+            SPL_TOKEN_PROGRAM_ID.to_string(),
+            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        );
+    }
+}
