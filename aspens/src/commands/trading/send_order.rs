@@ -150,6 +150,7 @@ async fn call_send_order(
     let request = SendOrderRequest {
         order: Some(order_for_sending),
         signature_hash: signature_bytes[..64].to_vec(),
+        gasless: None,
     };
 
     // Create a tonic request
