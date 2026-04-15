@@ -54,6 +54,27 @@ message SendOrderRequest {
   Order order = 1;
   // Valid EIP-712 signature hash of this order
   bytes signature_hash = 2;
+  // Optional gasless authorization: if present, the arborter will drive
+  // the on-chain `lock_for_order` via the chain's gasless path
+  // (Solana: MidribOpenFor with Ed25519 precompile; EVM: MidribV2.openFor
+  // with Permit2 — EVM not yet wired). If absent, the arborter falls back
+  // to the legacy lock_for_order path (EVM: arborter-signed Permit2).
+  optional GaslessAuthorization gasless = 3;
+}
+
+// User-produced authorization bundle for a gasless on-chain open. The
+// signature semantics + deadline units are chain-specific and match the
+// `chain_traits::market::GaslessLockParams` fields:
+//   * Solana: 64-byte Ed25519 signature; deadline is a slot number.
+//   * EVM:    65-byte ECDSA signature; deadline is a unix timestamp.
+message GaslessAuthorization {
+  // Raw signature bytes — see chain-specific format above.
+  bytes user_signature = 1;
+  // Absolute deadline the arborter must land the tx before.
+  uint64 deadline = 2;
+  // On-chain order id (32-byte hex, 0x-prefixed) that the user's
+  // signature binds to — matches the on-chain Order PDA / EVM intent id.
+  string order_id = 3;
 }
 
 message Order {
