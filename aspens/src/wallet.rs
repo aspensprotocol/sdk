@@ -4,8 +4,9 @@
 //! keys behind a single interface so call sites don't need to branch on
 //! curve type. Solana support is gated behind the `solana` feature.
 
-use alloy::primitives::B256;
-use alloy::signers::{local::PrivateKeySigner, Signer};
+use alloy_primitives::B256;
+use alloy_signer::Signer;
+use alloy_signer_local::PrivateKeySigner;
 use eyre::{eyre, Result};
 
 #[cfg(feature = "solana")]

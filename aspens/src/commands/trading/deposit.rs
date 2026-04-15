@@ -96,7 +96,7 @@ async fn solana_deposit(
         )
     })?;
 
-    let (program_id, instance) = crate::solana::resolve_program_and_instance(chain)?;
+    let (program_id, instance) = crate::solana::client::resolve_program_and_instance(chain)?;
     let user = solana_sdk::signer::Signer::pubkey(keypair);
     let mint = Pubkey::from_str(&token.address)
         .map_err(|e| eyre::eyre!("invalid Solana mint '{}': {}", token.address, e))?;
@@ -113,7 +113,7 @@ async fn solana_deposit(
     );
 
     let ix = crate::solana::deposit_ix(&program_id, &instance, &user, &mint, &user_ata, amount)?;
-    let sig = crate::solana::submit_user_signed(&chain.rpc_url, keypair, ix).await?;
+    let sig = crate::solana::client::submit_user_signed(&chain.rpc_url, keypair, ix).await?;
     tracing::info!("Solana deposit confirmed: {}", sig);
     Ok(())
 }

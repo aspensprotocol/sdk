@@ -16,6 +16,12 @@ repository = "https://github.com/aspensprotocol/sdk"
 [workspace.dependencies]
 # Blockchain & Ethereum
 alloy = { version = "1.8.3", default-features = false, features = ["contract", "network", "providers", "reqwest", "reqwest-rustls-tls", "rpc-types", "signer-local", "signers", "sol-types"] }
+# Direct sub-crate deps for lean signing builds (no provider / transport /
+# rpc-client machinery). The `alloy` umbrella stays behind the `client`
+# feature for call sites that need RPC.
+alloy-primitives = "1.5.7"
+alloy-signer = "1.8.3"
+alloy-signer-local = "1.8.3"
 alloy-chains = "0.2.30"
 alloy-contract = "1.8.3"
 alloy-sol-types = { version = "1.5.7", features = ["json"] }

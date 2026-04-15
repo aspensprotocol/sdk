@@ -1084,6 +1084,9 @@ dependencies = [
  "alloy",
  "alloy-chains",
  "alloy-contract",
+ "alloy-primitives",
+ "alloy-signer",
+ "alloy-signer-local",
  "alloy-sol-types",
  "borsh",
  "bs58",
@@ -1109,7 +1112,6 @@ dependencies = [
  "tonic-prost-build",
  "tonic-reflection",
  "tracing",
- "tracing-subscriber",
  "url",
 ]
 
