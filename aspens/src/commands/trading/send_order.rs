@@ -119,6 +119,7 @@ async fn call_send_order(
     base_account_address: String,
     quote_account_address: String,
     wallet: &Wallet,
+    gasless: Option<arborter_pb::GaslessAuthorization>,
 ) -> Result<SendOrderResponse> {
     // Create a channel to connect to the gRPC server (with TLS support for HTTPS)
     let channel = create_channel(&url).await?;
@@ -150,7 +151,7 @@ async fn call_send_order(
     let request = SendOrderRequest {
         order: Some(order_for_sending),
         signature_hash: signature_bytes[..64].to_vec(),
-        gasless: None,
+        gasless,
     };
 
     // Create a tonic request
@@ -407,6 +408,19 @@ pub async fn send_order_with_wallet(
         account_address
     );
 
+    // Build the gasless authorization for the SendOrderRequest. Arborter's
+    // legacy `lock_for_order` path is deprecated on both chains, so every
+    // order now carries a user-signed `GaslessAuthorization`.
+    let gasless = super::gasless::build_gasless_authorization(
+        &config,
+        market,
+        side,
+        wallet,
+        &quantity_raw,
+        price_raw.as_deref(),
+    )
+    .await?;
+
     // Send using the resolved market_id from config
     let resolved_market_id = market.market_id.clone();
     let result = call_send_order(
@@ -418,6 +432,7 @@ pub async fn send_order_with_wallet(
         account_address.clone(),
         account_address.clone(),
         wallet,
+        Some(gasless),
     )
     .await;
 
