@@ -303,7 +303,7 @@ async fn solana_user_balance(
     use solana_sdk::pubkey::Pubkey;
     use std::str::FromStr;
 
-    let (program_id, instance) = match crate::solana::resolve_program_and_instance(chain) {
+    let (program_id, instance) = match crate::solana::client::resolve_program_and_instance(chain) {
         Ok(v) => v,
         Err(_) => return ("not deployed".to_string(), "not deployed".to_string()),
     };
@@ -315,8 +315,14 @@ async fn solana_user_balance(
         Ok(p) => p,
         Err(_) => return ("bad mint".to_string(), "bad mint".to_string()),
     };
-    match crate::solana::fetch_user_balance(&chain.rpc_url, &instance, &user, &mint, &program_id)
-        .await
+    match crate::solana::client::fetch_user_balance(
+        &chain.rpc_url,
+        &instance,
+        &user,
+        &mint,
+        &program_id,
+    )
+    .await
     {
         Ok((deposited, locked)) => {
             let available = deposited.saturating_sub(locked);

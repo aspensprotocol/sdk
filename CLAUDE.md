@@ -219,12 +219,24 @@ discriminators (`sha256("global:<method>")[..8]`) must be kept in sync with
 the on-chain `midrib` program. Settlement (`fill`, `cancel`,
 `unlock_for_canceled`) is arborter-signed and lives in arborter, not the SDK.
 
-**Feature gating — `solana`**: Solana support (wallet variant, RPC client,
-program builders, deposit/withdraw/balance) is behind the `solana` Cargo
-feature on the `aspens` crate. It's part of `default`, so existing consumers
-are unaffected; EVM-only consumers can build with
-`--no-default-features --features trader,formatting` to skip
-solana-sdk / solana-client / bs58 / ed25519-dalek / borsh.
+**Feature gating**: The `aspens` crate has three orthogonal feature groups,
+all default-on:
+
+- **`evm`** — stateless EVM signing helpers (`aspens::evm`, `aspens::orders`).
+- **`solana`** — stateless Solana signing helpers (`aspens::solana`) — PDA
+  derivations, instruction builders, borsh payload encoder, Ed25519
+  precompile ix. Pulls `solana-sdk`, `bs58`, `ed25519-dalek`, `borsh`.
+- **`client`** — full gRPC + RPC runtime: `AspensClient`, commands,
+  `chain_client`, executor, auth, RPC submission. Pulls `tonic`, `prost`,
+  `tokio`, `solana-client`, `alloy-chains`, `alloy-contract`, etc.
+  The `aspens::solana::client` submodule (RPC tx submission,
+  UserBalance PDA fetch) is gated on `client` + `solana`.
+
+A browser / embedded / lean-signing consumer that only needs to build and
+sign orders can use `--no-default-features --features evm,solana` and skip
+**all** of tonic / prost / tokio / solana-client / gRPC codegen. The
+binaries (`aspens-cli` / `aspens-repl` / `aspens-admin`) inherit default
+features, so their usage is unchanged.
 
 ### Client-side order helpers
 

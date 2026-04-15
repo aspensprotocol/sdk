@@ -32,10 +32,14 @@ use crate::orders::GaslessLockParams;
 // JSON artifacts and the MidribDataTypes.sol file are copied into
 // `aspens/artifacts/` so these macros can resolve them at compile time.
 
+// Note: no `#[sol(rpc)]` — the stateless signing module only needs struct
+// types, and `rpc` would pull in `alloy-contract` (an RPC/provider
+// dep). The commands/trading module has its own `#[sol(rpc)]` invocations
+// behind the `client` feature for actual on-chain calls.
+
 sol!(
     #[derive(Debug)]
     #[allow(missing_docs)]
-    #[sol(rpc)]
     MidribV2,
     "artifacts/MidribV2.json"
 );
@@ -43,13 +47,12 @@ sol!(
 sol!(
     #[derive(Debug)]
     #[allow(missing_docs)]
-    #[sol(rpc)]
     IAllowanceTransfer,
     "artifacts/IAllowanceTransfer.json"
 );
 
 sol!(
-    #[sol(abi, rpc)]
+    #[sol(abi)]
     "artifacts/MidribDataTypes.sol"
 );
 

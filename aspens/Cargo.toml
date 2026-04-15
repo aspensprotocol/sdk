@@ -6,61 +6,89 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# Workspace dependencies
+# --- Always-on: needed by the stateless signing helpers and the core
+# Wallet abstraction, regardless of whether a consumer wants the full
+# gRPC/RPC client.
 alloy.workspace = true
-alloy-chains.workspace = true
-alloy-contract.workspace = true
 alloy-sol-types.workspace = true
+eyre.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+# sha2 is used unconditionally by the chain-agnostic `orders` module
+# (derive_order_id is the single reference hash for both EVM and Solana).
+sha2 = { workspace = true }
+
+# --- Chain signing helpers (stateless): pulled in only when the matching
+# chain feature is enabled.
 solana-sdk = { workspace = true, optional = true }
-solana-client = { workspace = true, optional = true }
-# Pin transitive solana-keypair to avoid the buggy 3.1.1+ releases
+# Pin transitive solana-keypair to avoid the buggy 3.1.1+ releases.
 solana-keypair = { workspace = true, optional = true }
 bs58 = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
-# sha2 is used unconditionally by the chain-agnostic `orders` module
-# (derive_order_id is the single reference hash for both EVM and Solana).
-sha2 = { workspace = true }
-eyre.workspace = true
-hex.workspace = true
-prost.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-tokio.workspace = true
-tokio-stream.workspace = true
-toml.workspace = true
-tonic.workspace = true
-tonic-reflection.workspace = true
-tonic-prost.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-url.workspace = true
-futures.workspace = true
 
-# Optional: formatting support
+# --- Client runtime: gRPC (tonic/prost), RPC submission, async runtime,
+# URL/TOML parsing, EVM provider machinery. Pulled in only when the
+# `client` feature is enabled.
+alloy-chains = { workspace = true, optional = true }
+alloy-contract = { workspace = true, optional = true }
+solana-client = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tonic-reflection = { workspace = true, optional = true }
+tonic-prost = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tokio-stream = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+
+# Optional: formatting support (only meaningful alongside `client`).
 comfy-table = { workspace = true, optional = true }
 
 [features]
-default = ["trader", "formatting", "evm", "solana"]
+default = ["trader", "formatting", "client", "evm", "solana"]
+
+# Legacy markers — kept for compatibility with existing callers; neither
+# gates deps today.
 trader = []
 admin = []
-formatting = ["comfy-table"]
-# Optional: enable Solana wallet + chain support. Pulls in solana-sdk,
-# solana-client, ed25519-dalek, bs58, borsh, sha2. EVM-only consumers can
-# disable the default and skip these deps.
+formatting = ["dep:comfy-table"]
+
+# EVM signing helpers: sol! bindings for MidribV2, IAllowanceTransfer,
+# MidribDataTypes; EIP-712 hasher; EIP-191 envelope signer. Stateless.
+evm = []
+
+# Solana signing helpers: PDA derivations, instruction builders, borsh
+# payload encoder, Ed25519 precompile ix. Stateless. Pull the RPC client
+# (`solana::client` submodule) with `client` + `solana`.
 solana = [
     "dep:solana-sdk",
-    "dep:solana-client",
     "dep:solana-keypair",
     "dep:bs58",
     "dep:ed25519-dalek",
     "dep:borsh",
 ]
-# Optional: enable the `aspens::evm` client-helpers module (sol! bindings,
-# EIP-712 order hasher, signature envelope). The existing EVM trading flow
-# (balance / deposit / withdraw / auth) is always compiled; this feature
-# just gates the NEW client-side helpers module.
-evm = []
+
+# Full client runtime: AspensClient, gRPC commands, RPC submission, tokio.
+# Required for talking to the Aspens stack or submitting transactions.
+# aspens-cli / aspens-repl / aspens-admin all need this.
+client = [
+    "dep:alloy-chains",
+    "dep:alloy-contract",
+    "dep:tonic",
+    "dep:tonic-reflection",
+    "dep:tonic-prost",
+    "dep:prost",
+    "dep:tokio",
+    "dep:tokio-stream",
+    "dep:futures",
+    "dep:toml",
+    "dep:url",
+    "dep:solana-client",
+]
 
 [build-dependencies]
 tonic-build.workspace = true
@@ -68,3 +96,6 @@ tonic-prost-build.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Unconditional dev-dep so async unit tests (e.g. sign_message) run under
+# every feature config, including lean-signing builds.
+tokio = { workspace = true, features = ["macros", "rt"] }
