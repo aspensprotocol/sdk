@@ -69,6 +69,20 @@ fmt-check:
 # In preparation for CI passing for a Pull Request, run lint, fmt-check, and test
 prep-for-pr: lint fmt-check test
 
+# Run the live SDK↔arborter gasless-order round-trip test.
+# Requires: running arborter at $ASPENS_MARKET_STACK_URL, admin-configured
+# chains + markets, deployed Midrib program / MidribV2 per chain,
+# mock-signer running, and the trader wallet already having deposited
+# balance on the origin chain. See aspens/tests/send_order_live.rs header.
+#
+# Env driving the call:
+#   SDK_LIVE_TEST_MARKET_ID   — required, shorthand or full market id
+#   SDK_LIVE_TEST_SIDE        — BID|ASK (default ASK)
+#   SDK_LIVE_TEST_QUANTITY    — default "0.001"
+#   SDK_LIVE_TEST_PRICE       — omit for market order
+test-live-send-order:
+    cargo test -p aspens --test send_order_live --all-features -- --ignored --nocapture
+
 # Run AMMIT tests with specific environment
 test-anvil:
     ./scripts/ammit.sh anvil
