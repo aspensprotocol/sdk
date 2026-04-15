@@ -19,7 +19,7 @@
 //! let envelope_sig = sign_send_order_envelope(&wallet, &encoded_order).await?;
 //! ```
 
-use alloy::primitives::{keccak256, Address, Bytes, FixedBytes, Uint, B256, U160, U256};
+use alloy_primitives::{keccak256, Address, Bytes, FixedBytes, Uint, B256, U160, U256};
 use alloy_sol_types::{eip712_domain, sol, SolStruct, SolValue};
 use eyre::Result;
 use std::str::FromStr;

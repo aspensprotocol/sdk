@@ -9,8 +9,13 @@ repository.workspace = true
 # --- Always-on: needed by the stateless signing helpers and the core
 # Wallet abstraction, regardless of whether a consumer wants the full
 # gRPC/RPC client.
-alloy.workspace = true
+alloy-primitives.workspace = true
+alloy-signer.workspace = true
+alloy-signer-local.workspace = true
 alloy-sol-types.workspace = true
+# The alloy umbrella (providers, RPC, contract) is only needed by the
+# client runtime. Moved behind the `client` feature.
+alloy = { workspace = true, optional = true }
 eyre.workspace = true
 hex.workspace = true
 serde.workspace = true
@@ -76,6 +81,7 @@ solana = [
 # Required for talking to the Aspens stack or submitting transactions.
 # aspens-cli / aspens-repl / aspens-admin all need this.
 client = [
+    "dep:alloy",
     "dep:alloy-chains",
     "dep:alloy-contract",
     "dep:tonic",

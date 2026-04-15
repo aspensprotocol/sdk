@@ -29,7 +29,7 @@ fn evm_eip712_constants_are_pinned() {
 
 #[test]
 fn evm_gasless_lock_signing_hash_snapshot() {
-    use alloy::primitives::Address;
+    use alloy_primitives::Address;
 
     // Deterministic input — addresses are all-zero-but-one so the snapshot
     // is readable when it fails.
