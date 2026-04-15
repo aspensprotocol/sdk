@@ -141,7 +141,7 @@ async fn send_order_roundtrip_against_live_stack() -> Result<()> {
         .map(|t| t.hash_type.as_str())
         .collect();
     assert!(
-        tx_hashes.iter().any(|h| *h == "send_order_tx"),
+        tx_hashes.contains(&"send_order_tx"),
         "expected a send_order_tx in response.transaction_hashes, got: {tx_hashes:?}"
     );
     // Order must either have landed in the book OR matched (producing trades).
