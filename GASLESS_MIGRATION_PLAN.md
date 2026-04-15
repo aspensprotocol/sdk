@@ -190,15 +190,21 @@ One subtle risk to flag:
 
 ## Rollout order
 
-1. **Stateless helper** — add `build_gasless_authorization` (pure data
-   + signing). Unit tests.
-2. **Wire into `call_send_order`** — attach to proto.
-3. **Parity test refresh** — catch any drift pre-flight.
-4. **Integration test** — run SDK client against a live arborter +
-   anvil + solana-test-validator stack (same prereqs as
-   `test-cross-chain-integration` in arborter).
-5. **Remove the legacy-ready comment + `gasless: None` fallback once
-   (1)–(4) are green**.
+1. ✅ **Stateless helper** — `build_gasless_authorization`, merged via PR #58.
+2. ✅ **Wire into `call_send_order`** — attaches `GaslessAuthorization`
+   to every `SendOrderRequest`; PR #59.
+3. ✅ **Parity test refresh** — arborter-fixture cross-check tests added
+   (`solana_message_matches_arborter_fixture`,
+   `evm_hash_matches_arborter_fixture`); PR #60.
+4. ✅ **Live integration test** — `aspens/tests/send_order_live.rs` +
+   `just test-live-send-order` recipe. `#[ignore]`d; driven off env
+   vars documented in the test header. External prerequisites match
+   arborter's `test-cross-chain-integration` recipe.
+5. **Legacy-ready comment + `gasless: None` fallback deletion** — the
+   `call_send_order` signature still accepts `Option<GaslessAuthorization>`
+   for flexibility; every caller passes `Some(..)`. Can be tightened to
+   `T` once the integration test has been exercised against a live stack
+   in CI / infra.
 
 ## Out of scope
 
