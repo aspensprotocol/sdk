@@ -75,7 +75,7 @@ Add to your `Cargo.toml`:
 aspens = { path = "../aspens" }
 ```
 
-Use in your code:
+Full client (gRPC + trading commands + RPC submission):
 ```rust
 use aspens::{AspensClient, DirectExecutor};
 
@@ -89,6 +89,39 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 ```
+
+Stateless signing only (no gRPC, no tokio, no RPC client — e.g. browser
+via `wasm-bindgen`, edge workers, or a service that submits orders over
+its own transport):
+```toml
+[dependencies]
+aspens = { path = "../aspens", default-features = false, features = ["evm", "solana"] }
+```
+```rust
+use aspens::orders::{derive_order_id, GaslessLockParams};
+use aspens::evm::gasless_lock_signing_hash;
+use aspens::solana::{gasless_lock_signing_message, OpenOrderArgs};
+
+// Build the canonical order id from a few intent fields:
+let order_id = derive_order_id(
+    &user_pubkey_bytes, nonce, origin_chain, dest_chain,
+    &input_token_bytes, &output_token_bytes, amount_in, amount_out,
+);
+
+// EVM: produce the EIP-712 digest a wallet must sign for a gasless lock.
+let digest = gasless_lock_signing_hash(&params, arborter, settler, chain_id)?;
+
+// Solana: produce the borsh payload for Ed25519 signing of a gasless open.
+let msg = gasless_lock_signing_message(&instance, &user, deadline, &order)?;
+```
+
+The pure modules:
+- **`aspens::orders`** — chain-agnostic `derive_order_id`, `GaslessLockParams`.
+- **`aspens::evm`** — sol! bindings for `MidribV2` / `IAllowanceTransfer` /
+  `MidribDataTypes`, EIP-712 domain consts, gasless-order builder and hasher,
+  EIP-191 envelope signer.
+- **`aspens::solana`** — PDA derivations, instruction builders, borsh payload
+  encoder, Ed25519 precompile ix, well-known program ids.
 
 ### 2. Interactive Mode (REPL)
 
@@ -126,6 +159,26 @@ cargo run --bin aspens-admin -- set-token --network base-sepolia --symbol USDC .
 cargo run --bin aspens-admin -- status
 ```
 
+## Cargo Feature Flags
+
+The `aspens` crate exposes three orthogonal feature groups, all
+default-on. Consumers can trim down to just what they need:
+
+| Feature | What it pulls in | When to keep / drop |
+|---------|------------------|---------------------|
+| `evm` | `aspens::evm` (sol! bindings, EIP-712 hasher, envelope signer) + `aspens::orders`. Tiny — `alloy-primitives`/`alloy-sol-types`/`alloy-signer-local`. | Keep if you build or sign EVM orders. |
+| `solana` | `aspens::solana` (PDA derivations, instruction builders, borsh payload encoder, Ed25519 precompile ix). Pulls `solana-sdk`, `borsh`, `bs58`, `ed25519-dalek`. | Keep if you build or sign Solana orders. |
+| `client` | Full runtime: `AspensClient`, trading commands, gRPC (`tonic`/`prost`), async runtime (`tokio`), RPC submission (`solana-client`, `alloy-contract`, `alloy-provider`). | Keep for the CLI/REPL/admin experience or anything that talks to the Aspens stack. Drop it for browser / embedded / offline-signing. |
+
+Common configurations:
+- **Default** (everything): `aspens = { path = "..." }`
+- **Lean EVM signing**: `aspens = { path = "...", default-features = false, features = ["evm"] }`
+- **Lean Solana signing**: `aspens = { path = "...", default-features = false, features = ["solana"] }`
+- **Both chains, no client runtime**: `... features = ["evm", "solana"] }`
+
+The `aspens-cli`, `aspens-repl`, and `aspens-admin` binaries all depend
+on the default feature set.
+
 ## Just Commands
 
 ```bash
@@ -144,10 +197,17 @@ just clean                 # Clean build artifacts
 ### Core Library (`aspens/`)
 
 - **AspensClient** - Main client with builder pattern for configuration
-- **Trading operations** - Deposit, withdraw, buy, sell, balance queries
+- **Trading operations** - Deposit, withdraw, buy, sell, balance queries across EVM and Solana chains
+- **Curve-agnostic wallet** - `Wallet::Evm` (secp256k1) and `Wallet::Solana` (Ed25519) behind one signing interface
+- **Chain dispatch** - `ChainClient` routes RPC calls to Alloy (EVM) or `solana-client` based on chain architecture
 - **Executor pattern** - Async/sync execution strategies
 - **gRPC client** - Protocol buffer communication with an Aspens Market Stack
-- **Smart contract integration** - Alloy-based Ethereum interactions
+- **Client-side order helpers** (`aspens::orders` / `aspens::evm` / `aspens::solana`) — stateless
+  builders for the gRPC order payload: `derive_order_id`, EIP-712 gasless-lock hasher (EVM),
+  borsh `OpenForSignedPayload` encoder (Solana), PDA derivations, Ed25519 precompile ix.
+  Available without the `client` feature for browser / embedded callers.
+- **EVM integration** - Midrib V2 ABI bindings (shared JSON artifacts with arborter), Alloy signer, Permit2
+- **Solana integration** - Midrib Anchor program: Anchor discriminators, PDA seeds, SPL token flow
 
 ### CLI Binary (`aspens-cli/`)
 
