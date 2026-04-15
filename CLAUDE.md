@@ -224,7 +224,39 @@ program builders, deposit/withdraw/balance) is behind the `solana` Cargo
 feature on the `aspens` crate. It's part of `default`, so existing consumers
 are unaffected; EVM-only consumers can build with
 `--no-default-features --features trader,formatting` to skip
-solana-sdk / solana-client / bs58 / ed25519-dalek / borsh / sha2.
+solana-sdk / solana-client / bs58 / ed25519-dalek / borsh.
+
+### Client-side order helpers
+
+Producers of the gRPC order payload (UIs, CLIs, anyone who builds / signs /
+submits an order) should reach for these modules rather than reimplementing
+the hashing / signing recipes:
+
+- **`aspens::orders`** (always-on): `derive_order_id` — the single SHA-256
+  reference used by both EVM and Solana clients and the arborter. If this
+  derivation drifts, submitted orders silently fail id validation. Also
+  exposes `GaslessLockParams`, the shared input struct fed to the
+  chain-specific signing helpers.
+- **`aspens::evm`** (feature `evm`, default-on): `sol!` bindings for
+  `MidribV2` / `IAllowanceTransfer` / `MidribDataTypes` (shared artifacts
+  under `aspens/artifacts/`); `MIDRIB_EIP712_NAME` / `MIDRIB_EIP712_VERSION`;
+  `build_gasless_cross_chain_order`; `gasless_lock_signing_hash` (EIP-712
+  digest for the gasless lock); `envelope_signing_digest` /
+  `sign_send_order_envelope` (EIP-191 outer envelope over the encoded order,
+  the counterpart to arborter's `is_signature_valid`).
+- **`aspens::solana`** (feature `solana`, default-on): in addition to the
+  deposit/withdraw/balance flow, exposes `OpenOrderArgs` /
+  `OpenForSignedPayload` / `OpenForArgs`, `gasless_lock_signing_message`
+  (borsh payload the user's Ed25519 key must sign), `ed25519_verify_ix`,
+  the full PDA-derivation set (`factory`, `instance`, `user_balance`,
+  `order`, `instance_vault`, `vault_authority`, SPL ATA), and well-known
+  program-id helpers.
+
+These are ports of the single reference implementations in
+`arborter/app/chain-traits` / `arborter/app/chain-evm` /
+`arborter/app/chain-solana`. Any change to the hashing, domain, or borsh
+layouts on either side requires matching changes here (and in the parity
+snapshots — see `aspens/tests/client_parity.rs`).
 
 ### Environment Configuration
 
