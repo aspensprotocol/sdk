@@ -323,7 +323,10 @@ async fn solana_user_balance(
             (available.to_string(), locked.to_string())
         }
         Err(e) => {
-            warn!("Solana UserBalance fetch failed on {}: {}", chain.network, e);
+            warn!(
+                "Solana UserBalance fetch failed on {}: {}",
+                chain.network, e
+            );
             ("error".to_string(), "error".to_string())
         }
     }

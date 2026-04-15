@@ -94,10 +94,7 @@ pub fn derive_instance_vault(
 
 /// Derive the vault authority PDA for an instance.
 pub fn derive_vault_authority(instance: &Pubkey, program_id: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(
-        &[seeds::INSTANCE_VAULT_SEED, instance.as_ref()],
-        program_id,
-    )
+    Pubkey::find_program_address(&[seeds::INSTANCE_VAULT_SEED, instance.as_ref()], program_id)
 }
 
 /// Derive the SPL Associated Token Account address for `(owner, mint)`.
