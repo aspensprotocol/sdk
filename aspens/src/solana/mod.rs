@@ -35,12 +35,29 @@ pub mod seeds {
     pub const INSTANCE_VAULT_SEED: &[u8] = b"instance_vault";
 }
 
-fn sysvar_rent_id() -> Pubkey {
+/// Sysvar Rent — `"SysvarRent111111111111111111111111111111111"`.
+pub fn sysvar_rent_id() -> Pubkey {
     Pubkey::from_str("SysvarRent111111111111111111111111111111111").unwrap()
 }
 
-fn ata_program_id() -> Pubkey {
+/// Sysvar Instructions — `"Sysvar1nstructions1111111111111111111111111"`.
+/// Required as an account for any Midrib instruction that reads the
+/// transaction's instruction list (e.g. `openFor`, which verifies that an
+/// Ed25519Program instruction precedes it).
+pub fn sysvar_instructions_id() -> Pubkey {
+    Pubkey::from_str("Sysvar1nstructions1111111111111111111111111").unwrap()
+}
+
+/// SPL Associated Token Account program ID —
+/// `"ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"`.
+pub fn ata_program_id() -> Pubkey {
     Pubkey::from_str("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL").unwrap()
+}
+
+/// Ed25519 signature-verification precompile program id —
+/// `"Ed25519SigVerify111111111111111111111111111"`.
+pub fn ed25519_program_id() -> Pubkey {
+    Pubkey::from_str("Ed25519SigVerify111111111111111111111111111").unwrap()
 }
 
 /// Compute Anchor's 8-byte instruction discriminator for `<method>`.
@@ -60,6 +77,39 @@ fn encode_ix<A: BorshSerialize>(method: &str, args: &A) -> Result<Vec<u8>> {
     data.extend_from_slice(&disc);
     data.extend_from_slice(&body);
     Ok(data)
+}
+
+/// Derive the factory PDA — singleton per program.
+pub fn derive_factory_pda(program_id: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[seeds::FACTORY_SEED], program_id)
+}
+
+/// Derive the trading-instance PDA for `(factory, instance_id)`.
+pub fn derive_instance_pda(
+    factory: &Pubkey,
+    instance_id: u64,
+    program_id: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            seeds::INSTANCE_SEED,
+            factory.as_ref(),
+            &instance_id.to_le_bytes(),
+        ],
+        program_id,
+    )
+}
+
+/// Derive the `Order` PDA for `(instance, order_id)`.
+pub fn derive_order_pda(
+    instance: &Pubkey,
+    order_id: &[u8; 32],
+    program_id: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[seeds::ORDER_SEED, instance.as_ref(), order_id.as_ref()],
+        program_id,
+    )
 }
 
 /// Derive the user-balance PDA for `(instance, user, mint)`.
@@ -284,6 +334,101 @@ pub async fn fetch_user_balance(
     }
 }
 
+// -- Gasless `open` / `open_for` client helpers ---------------------------
+//
+// The `open_for` Midrib instruction is the Solana counterpart to EVM's
+// `lock_for_order_gasless`: the arborter pays the fee, but the user must
+// have signed the canonical `OpenForSignedPayload` bytes with their
+// Ed25519 key. The Ed25519SigVerify precompile then verifies the signature
+// on-chain before `open_for` accepts the instruction.
+
+/// Arguments to the Midrib `open` and `open_for` instructions — user-level
+/// order intent.
+#[derive(borsh::BorshSerialize, Clone, Debug)]
+pub struct OpenOrderArgs {
+    pub order_id: [u8; 32],
+    pub origin_chain_id: u64,
+    pub destination_chain_id: u64,
+    pub input_token: Pubkey,
+    pub input_amount: u64,
+    pub output_token: [u8; 32],
+    pub output_amount: u64,
+}
+
+/// The exact payload the user must sign for a gasless `open_for`. Structure
+/// must match the arborter verbatim — it re-serializes this and feeds it to
+/// `ed25519_verify_ix` alongside the user's signature.
+#[derive(borsh::BorshSerialize, Debug)]
+pub struct OpenForSignedPayload {
+    pub instance: Pubkey,
+    pub user: Pubkey,
+    pub deadline: u64,
+    pub order: OpenOrderArgs,
+}
+
+/// Arborter-facing `open_for` args: the signed payload fields plus the
+/// user's 64-byte Ed25519 signature.
+#[derive(borsh::BorshSerialize, Debug)]
+pub struct OpenForArgs {
+    pub order: OpenOrderArgs,
+    pub user: Pubkey,
+    pub deadline: u64,
+    pub signature: [u8; 64],
+}
+
+/// Produce the exact bytes a user's Ed25519 key must sign to authorize a
+/// gasless lock on Solana. The arborter will reconstruct the same payload
+/// and check the signature via the Ed25519SigVerify precompile.
+pub fn gasless_lock_signing_message(
+    instance: &Pubkey,
+    user: &Pubkey,
+    deadline: u64,
+    order: &OpenOrderArgs,
+) -> Result<Vec<u8>> {
+    let payload = OpenForSignedPayload {
+        instance: *instance,
+        user: *user,
+        deadline,
+        order: order.clone(),
+    };
+    borsh::to_vec(&payload).map_err(|e| eyre!("borsh encode OpenForSignedPayload: {}", e))
+}
+
+/// Build an Ed25519Program instruction that verifies `signature` was
+/// produced by `pubkey` over `message`. Data layout matches the Solana
+/// Ed25519SigVerify precompile's expectation: a 16-byte header followed by
+/// `signature(64) || pubkey(32) || message`.
+///
+/// Pair this with the paired Midrib `open_for` instruction in the same
+/// transaction — the program reads the sysvar instructions list and verifies
+/// the preceding Ed25519Program ix matches.
+pub fn ed25519_verify_ix(pubkey: &[u8; 32], signature: &[u8; 64], message: &[u8]) -> Instruction {
+    let signature_offset: u16 = 16;
+    let public_key_offset: u16 = 16 + 64;
+    let message_offset: u16 = 16 + 64 + 32;
+    let message_size: u16 = message.len() as u16;
+
+    let mut data = Vec::with_capacity(16 + 64 + 32 + message.len());
+    data.push(1); // num_signatures
+    data.push(0); // padding
+    data.extend_from_slice(&signature_offset.to_le_bytes());
+    data.extend_from_slice(&u16::MAX.to_le_bytes()); // signature_ix_index (same ix)
+    data.extend_from_slice(&public_key_offset.to_le_bytes());
+    data.extend_from_slice(&u16::MAX.to_le_bytes());
+    data.extend_from_slice(&message_offset.to_le_bytes());
+    data.extend_from_slice(&message_size.to_le_bytes());
+    data.extend_from_slice(&u16::MAX.to_le_bytes());
+    data.extend_from_slice(signature);
+    data.extend_from_slice(pubkey);
+    data.extend_from_slice(message);
+
+    Instruction {
+        program_id: ed25519_program_id(),
+        accounts: vec![],
+        data,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,5 +463,63 @@ mod tests {
             SPL_TOKEN_PROGRAM_ID.to_string(),
             "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         );
+    }
+
+    #[test]
+    fn well_known_program_ids_parse() {
+        // These are .unwrap()s in the helpers — pin them with an explicit
+        // test so a typo fails here rather than at first runtime use.
+        assert_eq!(
+            sysvar_instructions_id().to_string(),
+            "Sysvar1nstructions1111111111111111111111111"
+        );
+        assert_eq!(
+            ed25519_program_id().to_string(),
+            "Ed25519SigVerify111111111111111111111111111"
+        );
+        assert_eq!(
+            ata_program_id().to_string(),
+            "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        );
+    }
+
+    #[test]
+    fn gasless_lock_signing_message_is_deterministic() {
+        let instance = Pubkey::new_from_array([1; 32]);
+        let user = Pubkey::new_from_array([2; 32]);
+        let order = OpenOrderArgs {
+            order_id: [3; 32],
+            origin_chain_id: 501,
+            destination_chain_id: 8453,
+            input_token: Pubkey::new_from_array([4; 32]),
+            input_amount: 100,
+            output_token: [5; 32],
+            output_amount: 200,
+        };
+        let a = gasless_lock_signing_message(&instance, &user, 1_000, &order).unwrap();
+        let b = gasless_lock_signing_message(&instance, &user, 1_000, &order).unwrap();
+        assert_eq!(a, b);
+        // Borsh layout: 32+32+8 + (32+8+8+32+8+32+8) = 200 bytes
+        assert_eq!(a.len(), 32 + 32 + 8 + 32 + 8 + 8 + 32 + 8 + 32 + 8);
+    }
+
+    #[test]
+    fn ed25519_verify_ix_has_no_accounts_and_targets_precompile() {
+        let ix = ed25519_verify_ix(&[0; 32], &[0; 64], b"hi");
+        assert!(ix.accounts.is_empty());
+        assert_eq!(ix.program_id, ed25519_program_id());
+        // header(16) + sig(64) + pk(32) + message(2)
+        assert_eq!(ix.data.len(), 16 + 64 + 32 + 2);
+    }
+
+    #[test]
+    fn pdas_are_stable() {
+        let program_id = Pubkey::new_from_array([9; 32]);
+        let (factory_a, _) = derive_factory_pda(&program_id);
+        let (factory_b, _) = derive_factory_pda(&program_id);
+        assert_eq!(factory_a, factory_b);
+        let (inst, _) = derive_instance_pda(&factory_a, 1, &program_id);
+        let (order, _) = derive_order_pda(&inst, &[7; 32], &program_id);
+        assert_ne!(order, inst);
     }
 }

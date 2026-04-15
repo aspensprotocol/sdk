@@ -18,7 +18,9 @@ solana-keypair = { workspace = true, optional = true }
 bs58 = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
+# sha2 is used unconditionally by the chain-agnostic `orders` module
+# (derive_order_id is the single reference hash for both EVM and Solana).
+sha2 = { workspace = true }
 eyre.workspace = true
 hex.workspace = true
 prost.workspace = true
@@ -39,7 +41,7 @@ futures.workspace = true
 comfy-table = { workspace = true, optional = true }
 
 [features]
-default = ["trader", "formatting", "solana"]
+default = ["trader", "formatting", "evm", "solana"]
 trader = []
 admin = []
 formatting = ["comfy-table"]
@@ -53,8 +55,12 @@ solana = [
     "dep:bs58",
     "dep:ed25519-dalek",
     "dep:borsh",
-    "dep:sha2",
 ]
+# Optional: enable the `aspens::evm` client-helpers module (sol! bindings,
+# EIP-712 order hasher, signature envelope). The existing EVM trading flow
+# (balance / deposit / withdraw / auth) is always compiled; this feature
+# just gates the NEW client-side helpers module.
+evm = []
 
 [build-dependencies]
 tonic-build.workspace = true

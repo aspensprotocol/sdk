@@ -1,9 +1,12 @@
 pub mod chain_client;
 pub mod client;
 pub mod commands;
+#[cfg(feature = "evm")]
+pub mod evm;
 pub mod executor;
 pub mod grpc;
 pub mod health;
+pub mod orders;
 #[cfg(feature = "solana")]
 pub mod solana;
 pub mod wallet;
