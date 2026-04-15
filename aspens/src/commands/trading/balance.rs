@@ -292,8 +292,55 @@ fn display_all_token_balances(
 /// Query a token balance on a specific chain using a curve-aware client.
 ///
 /// Used by `balance_from_config_with_wallet`. For Solana chains, locked/deposited
-/// balances come from the trade program — currently returns "not deployed" until
-/// the on-chain Solana program is wired up.
+/// balances come from the trade program; for Solana it queries the on-chain
+/// `UserBalance` PDA via the Midrib program.
+#[cfg(feature = "solana")]
+async fn solana_user_balance(
+    chain: &Chain,
+    token: &crate::commands::config::config_pb::Token,
+    owner_address: &str,
+) -> (String, String) {
+    use solana_sdk::pubkey::Pubkey;
+    use std::str::FromStr;
+
+    let (program_id, instance) = match crate::solana::resolve_program_and_instance(chain) {
+        Ok(v) => v,
+        Err(_) => return ("not deployed".to_string(), "not deployed".to_string()),
+    };
+    let user = match Pubkey::from_str(owner_address) {
+        Ok(p) => p,
+        Err(_) => return ("bad address".to_string(), "bad address".to_string()),
+    };
+    let mint = match Pubkey::from_str(&token.address) {
+        Ok(p) => p,
+        Err(_) => return ("bad mint".to_string(), "bad mint".to_string()),
+    };
+    match crate::solana::fetch_user_balance(&chain.rpc_url, &instance, &user, &mint, &program_id)
+        .await
+    {
+        Ok((deposited, locked)) => {
+            let available = deposited.saturating_sub(locked);
+            (available.to_string(), locked.to_string())
+        }
+        Err(e) => {
+            warn!("Solana UserBalance fetch failed on {}: {}", chain.network, e);
+            ("error".to_string(), "error".to_string())
+        }
+    }
+}
+
+#[cfg(not(feature = "solana"))]
+async fn solana_user_balance(
+    _chain: &Chain,
+    _token: &crate::commands::config::config_pb::Token,
+    _owner_address: &str,
+) -> (String, String) {
+    (
+        "solana feature disabled".to_string(),
+        "solana feature disabled".to_string(),
+    )
+}
+
 async fn query_token_balance_via_client(
     chain: &Chain,
     token_symbol: &str,
@@ -340,7 +387,7 @@ async fn query_token_balance_via_client(
     // Solana side is not yet wired up; EVM uses MidribV2.
     let (available_balance, locked_balance) =
         if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
-            ("not deployed".to_string(), "not deployed".to_string())
+            solana_user_balance(chain, token, owner_address).await
         } else {
             let contract_address = chain
                 .trade_contract

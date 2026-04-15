@@ -4,6 +4,8 @@ pub mod commands;
 pub mod executor;
 pub mod grpc;
 pub mod health;
+#[cfg(feature = "solana")]
+pub mod solana;
 pub mod wallet;
 
 pub mod attestation {

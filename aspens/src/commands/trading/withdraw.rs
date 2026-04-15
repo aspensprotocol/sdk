@@ -49,13 +49,14 @@ pub async fn call_withdraw_from_config_with_wallet(
         .architecture
         .eq_ignore_ascii_case(ARCH_SOLANA)
     {
-        return solana_withdraw_scaffold(chain_for_arch, &token_symbol, amount, wallet);
+        return solana_withdraw(chain_for_arch, &token_symbol, amount, wallet).await;
     }
 
     if wallet.curve() != CurveType::Secp256k1 {
         return Err(eyre::eyre!(
-            "EVM chain '{}' requires a secp256k1 wallet, got Ed25519",
-            network
+            "EVM chain '{}' requires a secp256k1 wallet, got {:?}",
+            network,
+            wallet.curve()
         ));
     }
     let signer = wallet
@@ -66,41 +67,65 @@ pub async fn call_withdraw_from_config_with_wallet(
     call_withdraw_from_config_evm(network, token_symbol, amount, signer, config).await
 }
 
-/// Solana withdraw scaffold — pending the on-chain trade program design.
-fn solana_withdraw_scaffold(
+/// Solana withdraw — builds and submits the user-signed Midrib `withdraw`
+/// instruction. Requires the `solana` feature.
+#[cfg(feature = "solana")]
+async fn solana_withdraw(
     chain: &crate::commands::config::config_pb::Chain,
     token_symbol: &str,
     amount: u64,
     wallet: &Wallet,
 ) -> Result<()> {
-    let program_id = chain
-        .trade_contract
-        .as_ref()
-        .and_then(|tc| tc.contract_id.clone())
-        .ok_or_else(|| {
-            eyre::eyre!(
-                "Solana chain '{}' has no trade_contract.contract_id (program ID) configured",
-                chain.network
-            )
-        })?;
-    let _token = chain.tokens.get(token_symbol).ok_or_else(|| {
+    use solana_sdk::pubkey::Pubkey;
+    use std::str::FromStr;
+
+    let token = chain.tokens.get(token_symbol).ok_or_else(|| {
         eyre::eyre!(
             "Token '{}' not found on Solana chain '{}'",
             token_symbol,
             chain.network
         )
     })?;
-    let _owner = wallet.address();
-    let _amount = amount;
-    let _program_id = program_id;
 
-    // TODO: Build and submit Solana withdraw instruction once the on-chain
-    // trade program's instruction layout is finalized. Mirrors the deposit
-    // structure but with a "withdraw" discriminator.
+    let keypair = wallet.as_solana().ok_or_else(|| {
+        eyre::eyre!(
+            "Solana chain '{}' requires an Ed25519 wallet (TRADER_PRIVKEY_SOLANA)",
+            chain.network
+        )
+    })?;
+
+    let (program_id, instance) = crate::solana::resolve_program_and_instance(chain)?;
+    let user = solana_sdk::signer::Signer::pubkey(keypair);
+    let mint = Pubkey::from_str(&token.address)
+        .map_err(|e| eyre::eyre!("invalid Solana mint '{}': {}", token.address, e))?;
+    let user_ata = crate::solana::derive_associated_token_account(&user, &mint);
+
+    tracing::info!(
+        "Solana withdraw: {} {} from {} (program={}, instance={}, ata={})",
+        amount,
+        token_symbol,
+        chain.network,
+        program_id,
+        instance,
+        user_ata
+    );
+
+    let ix = crate::solana::withdraw_ix(&program_id, &instance, &user, &mint, &user_ata, amount)?;
+    let sig = crate::solana::submit_user_signed(&chain.rpc_url, keypair, ix).await?;
+    tracing::info!("Solana withdraw confirmed: {}", sig);
+    Ok(())
+}
+
+#[cfg(not(feature = "solana"))]
+async fn solana_withdraw(
+    chain: &crate::commands::config::config_pb::Chain,
+    _token_symbol: &str,
+    _amount: u64,
+    _wallet: &Wallet,
+) -> Result<()> {
     Err(eyre::eyre!(
-        "Solana withdraw is not yet implemented — the on-chain trade program \
-         instruction layout is pending. Configure trade_contract.contract_id \
-         in the chain config to point at the eventual program."
+        "chain '{}' is Solana but the `solana` feature is disabled",
+        chain.network
     ))
 }
 
