@@ -58,11 +58,13 @@ pub struct SendOrderRequest {
     /// Valid EIP-712 signature hash of this order
     #[prost(bytes = "vec", tag = "2")]
     pub signature_hash: ::prost::alloc::vec::Vec<u8>,
-    /// Optional gasless authorization: if present, the arborter will drive
-    /// the on-chain `lock_for_order` via the chain's gasless path
-    /// (Solana: MidribOpenFor with Ed25519 precompile; EVM: MidribV2.openFor
-    /// with Permit2 — EVM not yet wired). If absent, the arborter falls back
-    /// to the legacy lock_for_order path (EVM: arborter-signed Permit2).
+    /// Gasless authorization: the arborter drives the on-chain lock via the
+    /// chain's gasless path (Solana: MidribOpenFor with Ed25519 precompile;
+    /// EVM: MidribV2.openFor with Permit2). Required — the legacy
+    /// arborter-signed lock path has been removed. For message-typed
+    /// fields, proto3 tracks presence by default, so the generated Rust
+    /// API remains `Option<GaslessAuthorization>`; the arborter handler
+    /// enforces presence at the request boundary.
     #[prost(message, optional, tag = "3")]
     pub gasless: ::core::option::Option<GaslessAuthorization>,
 }
