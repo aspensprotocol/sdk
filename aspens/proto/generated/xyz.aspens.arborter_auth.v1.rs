@@ -2,7 +2,9 @@
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AuthRequest {
-    /// The Ethereum address requesting authentication
+    /// The admin address requesting authentication.
+    /// EVM addresses are 0x-prefixed hex (20 bytes); Solana addresses are
+    /// base58-encoded Ed25519 public keys (32 bytes).
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
     /// Unix timestamp when the message was created (in seconds)
@@ -11,7 +13,10 @@ pub struct AuthRequest {
     /// Random nonce to prevent replay attacks
     #[prost(string, tag = "3")]
     pub nonce: ::prost::alloc::string::String,
-    /// Hex-encoded EIP-712 signature (with or without 0x prefix)
+    /// Hex-encoded signature over the canonical auth message (with or
+    /// without 0x prefix). For EVM addresses this is a 65-byte EIP-712
+    /// signature; for Solana addresses this is a 64-byte raw Ed25519
+    /// signature.
     #[prost(string, tag = "4")]
     pub signature: ::prost::alloc::string::String,
 }
@@ -31,7 +36,8 @@ pub struct AuthResponse {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InitializeAdminRequest {
-    /// The Ethereum address to set as the initial admin
+    /// The address to set as the initial admin.
+    /// EVM addresses are 0x-prefixed hex; Solana addresses are base58.
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
 }
@@ -63,7 +69,16 @@ pub mod auth_service_client {
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
     /// The Authentication service definition
-    /// This service does NOT require JWT authentication (it's used to obtain JWT tokens)
+    /// This service does NOT require JWT authentication (it's used to obtain JWT tokens).
+    ///
+    /// Both EVM (secp256k1 / EIP-712) and Solana (Ed25519) admin identities
+    /// are supported. The server dispatches on address format:
+    ///
+    /// * 0x-prefixed hex  → EVM, signature verified as EIP-712
+    /// * base58           → Solana, signature verified as raw Ed25519
+    ///
+    /// Consumers should not need to know which curve was used — the same
+    /// JWT is minted either way and carries the address as an opaque string.
     #[derive(Debug, Clone)]
     pub struct AuthServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -144,8 +159,9 @@ pub mod auth_service_client {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
         }
-        /// Initialize the first admin (only works when no admin exists)
-        /// Returns a JWT token for the newly created admin
+        /// Initialize the first admin (only works when no admin exists).
+        /// Accepts either an EVM (0x...) or a Solana (base58) address.
+        /// Returns a JWT token for the newly created admin.
         pub async fn initialize_admin(
             &mut self,
             request: impl tonic::IntoRequest<super::InitializeAdminRequest>,
@@ -175,8 +191,9 @@ pub mod auth_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Authenticate with EIP-712 signature to obtain a JWT token
-        /// Only works if the address is already an admin
+        /// Authenticate with a signature to obtain a JWT token. The signature
+        /// scheme is chosen by the address format (see service docstring).
+        /// Only works if the address is already an admin.
         pub async fn authenticate_with_signature(
             &mut self,
             request: impl tonic::IntoRequest<super::AuthRequest>,
