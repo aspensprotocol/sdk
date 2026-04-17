@@ -1,6 +1,13 @@
 # Aspens SDK
 
+[![crates.io](https://img.shields.io/crates/v/aspens.svg)](https://crates.io/crates/aspens)
+[![docs.rs](https://docs.rs/aspens/badge.svg)](https://docs.rs/aspens)
+
 A comprehensive SDK and CLI tools for interacting with an [Aspens Markets Stack](https://docs.aspens.xyz).
+
+The core library is published on crates.io as [`aspens`](https://crates.io/crates/aspens).
+The `aspens-cli`, `aspens-repl`, and `aspens-admin` binaries live in this
+workspace and are built from source.
 
 ## Available Commands
 
@@ -69,10 +76,15 @@ just build-admin           # Build Admin CLI only
 
 ### 1. As a Rust Library
 
-Add to your `Cargo.toml`:
+Install from crates.io:
+```bash
+cargo add aspens
+```
+
+Or add it manually to your `Cargo.toml`:
 ```toml
 [dependencies]
-aspens = { path = "../aspens" }
+aspens = "0.4"
 ```
 
 Full client (gRPC + trading commands + RPC submission):
@@ -93,9 +105,12 @@ async fn main() -> eyre::Result<()> {
 Stateless signing only (no gRPC, no tokio, no RPC client — e.g. browser
 via `wasm-bindgen`, edge workers, or a service that submits orders over
 its own transport):
+```bash
+cargo add aspens --no-default-features --features evm,solana
+```
 ```toml
 [dependencies]
-aspens = { path = "../aspens", default-features = false, features = ["evm", "solana"] }
+aspens = { version = "0.4", default-features = false, features = ["evm", "solana"] }
 ```
 ```rust
 use aspens::orders::{derive_order_id, GaslessLockParams};
@@ -171,10 +186,10 @@ default-on. Consumers can trim down to just what they need:
 | `client` | Full runtime: `AspensClient`, trading commands, gRPC (`tonic`/`prost`), async runtime (`tokio`), RPC submission (`solana-client`, `alloy-contract`, `alloy-provider`). | Keep for the CLI/REPL/admin experience or anything that talks to the Aspens stack. Drop it for browser / embedded / offline-signing. |
 
 Common configurations:
-- **Default** (everything): `aspens = { path = "..." }`
-- **Lean EVM signing**: `aspens = { path = "...", default-features = false, features = ["evm"] }`
-- **Lean Solana signing**: `aspens = { path = "...", default-features = false, features = ["solana"] }`
-- **Both chains, no client runtime**: `... features = ["evm", "solana"] }`
+- **Default** (everything): `aspens = "0.4"`
+- **Lean EVM signing**: `aspens = { version = "0.4", default-features = false, features = ["evm"] }`
+- **Lean Solana signing**: `aspens = { version = "0.4", default-features = false, features = ["solana"] }`
+- **Both chains, no client runtime**: `aspens = { version = "0.4", default-features = false, features = ["evm", "solana"] }`
 
 The `aspens-cli`, `aspens-repl`, and `aspens-admin` binaries all depend
 on the default feature set.
