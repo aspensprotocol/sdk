@@ -11,23 +11,13 @@ use url::Url;
 use super::{MidribV2, IERC20};
 use crate::chain_client::{ChainClient, ARCH_SOLANA};
 use crate::commands::config::config_pb::{Chain, Configuration, GetConfigResponse};
-use crate::wallet::Wallet;
+use crate::wallet::{load_trader_wallet, CurveType, Wallet};
 
 /// Represents a unique token across all chains
 #[derive(Debug, Clone)]
 struct TokenInfo {
     symbol: String,
     decimals: u32,
-    /// Map of chain_id -> (chain_network, token_address, contract_address)
-    chain_locations: HashMap<u32, ChainLocation>,
-}
-
-#[derive(Debug, Clone)]
-struct ChainLocation {
-    network: String,
-    token_address: String,
-    contract_address: String,
-    rpc_url: String,
 }
 
 /// Balance information for a token on a specific chain
@@ -57,122 +47,16 @@ struct TokenBalance {
 fn extract_all_tokens_from_config(config: &Configuration) -> HashMap<String, TokenInfo> {
     let mut tokens: HashMap<String, TokenInfo> = HashMap::new();
 
-    // Iterate through all chains
     for chain in &config.chains {
-        let chain_id = chain.chain_id;
-        let chain_network = chain.network.clone();
-        let contract_address = chain
-            .trade_contract
-            .as_ref()
-            .map(|tc| tc.address.clone())
-            .unwrap_or_default();
-        let rpc_url = chain.rpc_url.clone();
-
-        // Iterate through all tokens on this chain
         for (symbol, token) in &chain.tokens {
-            tokens
-                .entry(symbol.clone())
-                .or_insert_with(|| TokenInfo {
-                    symbol: symbol.clone(),
-                    decimals: token.decimals,
-                    chain_locations: HashMap::new(),
-                })
-                .chain_locations
-                .insert(
-                    chain_id,
-                    ChainLocation {
-                        network: chain_network.clone(),
-                        token_address: token.address.clone(),
-                        contract_address: contract_address.clone(),
-                        rpc_url: rpc_url.clone(),
-                    },
-                );
+            tokens.entry(symbol.clone()).or_insert_with(|| TokenInfo {
+                symbol: symbol.clone(),
+                decimals: token.decimals,
+            });
         }
     }
 
     tokens
-}
-
-/// Query all balance types for a token on a specific chain
-async fn query_token_balance_on_chain(
-    chain_id: u32,
-    location: &ChainLocation,
-    privkey: &str,
-) -> ChainBalance {
-    let chain_network = location.network.clone();
-
-    // Try to parse chain as NamedChain, fallback to a default if it fails
-    let named_chain = NamedChain::try_from(chain_id as u64).unwrap_or(NamedChain::BaseSepolia);
-
-    // Query wallet balance
-    let wallet_balance = call_get_erc20_balance(
-        named_chain,
-        &location.rpc_url,
-        &location.token_address,
-        privkey,
-    )
-    .await
-    .map_or_else(
-        |e| {
-            warn!("Failed to get wallet balance on {}: {}", chain_network, e);
-            "error".to_string()
-        },
-        |v| v.to_string(),
-    );
-
-    // Check if trade contract is deployed before querying contract balances
-    let (available_balance, locked_balance) = if location.contract_address.is_empty() {
-        warn!(
-            "Trade contract not deployed on chain '{}'. Available and locked balances unavailable.",
-            chain_network
-        );
-        ("not deployed".to_string(), "not deployed".to_string())
-    } else {
-        // Query available balance
-        let available = call_get_balance(
-            named_chain,
-            &location.rpc_url,
-            &location.token_address,
-            &location.contract_address,
-            privkey,
-        )
-        .await
-        .map_or_else(
-            |e| {
-                warn!(
-                    "Failed to get available balance on {}: {}",
-                    chain_network, e
-                );
-                "error".to_string()
-            },
-            |v| v.to_string(),
-        );
-
-        // Query locked balance
-        let locked = call_get_locked_balance(
-            &location.rpc_url,
-            &location.token_address,
-            &location.contract_address,
-            privkey,
-        )
-        .await
-        .map_or_else(
-            |e| {
-                warn!("Failed to get locked balance on {}: {}", chain_network, e);
-                "error".to_string()
-            },
-            |v| v.to_string(),
-        );
-
-        (available, locked)
-    };
-
-    ChainBalance {
-        chain_network,
-        wallet_balance,
-        available_balance,
-        locked_balance,
-    }
 }
 
 /// Format balance with decimals for human-readable display
@@ -476,13 +360,40 @@ pub async fn balance_from_config_with_wallet(
     config: GetConfigResponse,
     wallet: &Wallet,
 ) -> Result<()> {
+    balance_from_config_with_wallets(config, &[wallet]).await
+}
+
+/// Which curve a chain expects for user-address strings.
+fn chain_curve(chain: &Chain) -> CurveType {
+    if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
+        CurveType::Ed25519
+    } else {
+        CurveType::Secp256k1
+    }
+}
+
+/// Pick the first wallet matching `chain`'s curve. Returns `None` when no
+/// caller-supplied wallet matches — the chain's rows are reported as
+/// "no wallet" rather than erroring out.
+fn select_wallet_for_chain<'a>(chain: &Chain, wallets: &'a [&'a Wallet]) -> Option<&'a Wallet> {
+    let wanted = chain_curve(chain);
+    wallets.iter().copied().find(|w| w.curve() == wanted)
+}
+
+/// Curve-aware, multi-wallet config-driven balance function.
+///
+/// Each chain in the config gets matched to a wallet with the same curve
+/// (EVM chains → `Wallet::Evm`, Solana chains → `Wallet::Solana`). A chain
+/// with no matching wallet is reported as "no wallet" rather than failing
+/// the whole call.
+pub async fn balance_from_config_with_wallets(
+    config: GetConfigResponse,
+    wallets: &[&Wallet],
+) -> Result<()> {
     let configuration = config
         .config
         .ok_or_else(|| eyre::eyre!("No configuration found in response"))?;
 
-    let owner_address = wallet.address();
-
-    // Extract all unique tokens from configuration
     let tokens = extract_all_tokens_from_config(&configuration);
 
     if tokens.is_empty() {
@@ -494,8 +405,6 @@ pub async fn balance_from_config_with_wallet(
 
     let mut all_token_balances: Vec<TokenBalance> = Vec::new();
 
-    // For each token, walk every chain it appears on and query the balance
-    // via the curve-aware client.
     for (symbol, token_info) in tokens {
         let mut chain_balances = Vec::new();
 
@@ -503,7 +412,15 @@ pub async fn balance_from_config_with_wallet(
             if !chain.tokens.contains_key(&symbol) {
                 continue;
             }
-            let cb = query_token_balance_via_client(chain, &symbol, &owner_address).await;
+            let cb = match select_wallet_for_chain(chain, wallets) {
+                Some(w) => query_token_balance_via_client(chain, &symbol, &w.address()).await,
+                None => ChainBalance {
+                    chain_network: chain.network.clone(),
+                    wallet_balance: "no wallet".to_string(),
+                    available_balance: "no wallet".to_string(),
+                    locked_balance: "no wallet".to_string(),
+                },
+            };
             chain_balances.push(cb);
         }
 
@@ -523,6 +440,18 @@ pub async fn balance_from_config_with_wallet(
             continue;
         }
         seen.insert(chain.network.clone(), ());
+
+        let owner_address = match select_wallet_for_chain(chain, wallets) {
+            Some(w) => w.address(),
+            None => {
+                native_balances.push(NativeBalance {
+                    chain_network: chain.network.clone(),
+                    balance: "no wallet".to_string(),
+                });
+                continue;
+            }
+        };
+
         let client = match ChainClient::from_chain_config(chain) {
             Ok(c) => c,
             Err(e) => {
@@ -554,70 +483,21 @@ pub async fn balance_from_config_with_wallet(
 }
 
 /// New config-driven balance function
+/// Legacy EVM-privkey entry point. Kept for existing CLI/REPL call sites.
+///
+/// Builds an EVM wallet from `privkey` and opportunistically also loads a
+/// Solana trader wallet from `TRADER_PRIVKEY_SOLANA` (when present and the
+/// `solana` feature is on), then delegates to
+/// [`balance_from_config_with_wallets`]. Chains whose architecture has no
+/// matching wallet are reported as "no wallet" in the table.
 pub async fn balance_from_config(config: GetConfigResponse, privkey: String) -> Result<()> {
-    let configuration = config
-        .config
-        .ok_or_else(|| eyre::eyre!("No configuration found in response"))?;
-
-    // Extract all unique tokens from configuration
-    let tokens = extract_all_tokens_from_config(&configuration);
-
-    if tokens.is_empty() {
-        info!("No tokens found in configuration");
-        return Ok(());
+    let evm = Wallet::from_evm_hex(&privkey)?;
+    let solana = load_trader_wallet(CurveType::Ed25519).ok();
+    let mut wallets: Vec<&Wallet> = vec![&evm];
+    if let Some(ref s) = solana {
+        wallets.push(s);
     }
-
-    info!("Found {} unique token(s) across all chains", tokens.len());
-
-    // Query balances for all tokens across all chains
-    let mut all_token_balances: Vec<TokenBalance> = Vec::new();
-
-    for (_symbol, token_info) in tokens {
-        let mut chain_balances = Vec::new();
-
-        // Query balance on each chain where this token exists
-        for (chain_id, location) in &token_info.chain_locations {
-            let chain_balance = query_token_balance_on_chain(*chain_id, location, &privkey).await;
-            chain_balances.push(chain_balance);
-        }
-
-        all_token_balances.push(TokenBalance {
-            token_info: token_info.clone(),
-            chain_balances,
-        });
-    }
-
-    // Sort tokens by symbol for consistent display
-    all_token_balances.sort_by(|a, b| a.token_info.symbol.cmp(&b.token_info.symbol));
-
-    // Query native gas balance for each chain
-    let mut native_balances: Vec<NativeBalance> = Vec::new();
-    let mut seen_rpcs: HashMap<String, String> = HashMap::new();
-    for chain in &configuration.chains {
-        if seen_rpcs.contains_key(&chain.rpc_url) {
-            continue;
-        }
-        seen_rpcs.insert(chain.rpc_url.clone(), chain.network.clone());
-        let balance = call_get_native_balance(&chain.rpc_url, &privkey)
-            .await
-            .map_or_else(
-                |e| {
-                    warn!("Failed to get native balance on {}: {}", chain.network, e);
-                    "error".to_string()
-                },
-                |v| v.to_string(),
-            );
-        native_balances.push(NativeBalance {
-            chain_network: chain.network.clone(),
-            balance,
-        });
-    }
-
-    // Display all token balances
-    let output = display_all_token_balances(&all_token_balances, &native_balances);
-    info!("{}", output);
-
-    Ok(())
+    balance_from_config_with_wallets(config, &wallets).await
 }
 
 pub async fn balance(
