@@ -221,7 +221,7 @@ async fn call_deposit_from_config_evm(
     // Perform the deposit
     let allowance_amount = U256::from(amount.saturating_add(1000));
     let deposit_amount = U160::from(amount);
-    let contract_addr: Address = Address::parse_checksummed(&contract_address, None)?;
+    let contract_addr: Address = contract_address.parse()?;
     let token_addr: Address = token.address.parse()?;
     let signer_address = signer.address();
     let wallet = EthereumWallet::new(signer);
