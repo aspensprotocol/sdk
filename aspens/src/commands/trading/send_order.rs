@@ -177,7 +177,7 @@ async fn query_deposited_balance(
     user_address: Address,
     chain_id: u32,
 ) -> Result<U256> {
-    let contract_addr: Address = Address::parse_checksummed(contract_address, None)?;
+    let contract_addr: Address = contract_address.parse()?;
     let token_addr: Address = token_address.parse()?;
     let rpc_url = Url::parse(rpc_url)?;
 

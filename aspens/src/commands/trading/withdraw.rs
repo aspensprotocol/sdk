@@ -218,7 +218,7 @@ async fn call_withdraw_from_config_evm(
 
     // Perform the withdrawal
     let withdrawal_amount = U160::from(amount);
-    let contract_addr: Address = Address::parse_checksummed(&contract_address, None)?;
+    let contract_addr: Address = contract_address.parse()?;
     let token_addr: Address = token.address.parse()?;
     let signer_address = signer.address();
     let wallet = EthereumWallet::new(signer);

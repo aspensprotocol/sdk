@@ -699,7 +699,7 @@ pub async fn call_get_balance(
     contract_address: &str,
     privkey: &str,
 ) -> Result<Uint<256, 4>> {
-    let contract_addr: Address = Address::parse_checksummed(contract_address, None)?;
+    let contract_addr: Address = contract_address.parse()?;
     let token_addr: Address = token_address.parse()?;
     let signer = privkey.parse::<PrivateKeySigner>()?;
     let depositer_address: Address = signer.address();
@@ -721,7 +721,7 @@ pub async fn call_get_locked_balance(
     contract_address: &str,
     privkey: &str,
 ) -> Result<Uint<256, 4>> {
-    let contract_addr: Address = Address::parse_checksummed(contract_address, None)?;
+    let contract_addr: Address = contract_address.parse()?;
     let token_addr: Address = token_address.parse()?;
     let signer = privkey.parse::<PrivateKeySigner>()?;
     let depositer_address: Address = signer.address();
@@ -744,7 +744,7 @@ pub async fn call_get_balance_for_address(
     contract_address: &str,
     depositer_address: Address,
 ) -> Result<Uint<256, 4>> {
-    let contract_addr: Address = Address::parse_checksummed(contract_address, None)?;
+    let contract_addr: Address = contract_address.parse()?;
     let token_addr: Address = token_address.parse()?;
     let rpc_url = Url::parse(rpc_url)?;
     let provider = ProviderBuilder::new()
@@ -765,7 +765,7 @@ pub async fn call_get_locked_balance_for_address(
     contract_address: &str,
     depositer_address: Address,
 ) -> Result<Uint<256, 4>> {
-    let contract_addr: Address = Address::parse_checksummed(contract_address, None)?;
+    let contract_addr: Address = contract_address.parse()?;
     let token_addr: Address = token_address.parse()?;
     let rpc_url = Url::parse(rpc_url)?;
     let provider = ProviderBuilder::new().connect_http(rpc_url);
