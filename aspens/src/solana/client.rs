@@ -96,36 +96,36 @@ pub async fn fetch_user_balance(
     use solana_client::nonblocking::rpc_client::RpcClient;
     let client = RpcClient::new(rpc_url.to_string());
     let (pda, _) = derive_user_balance_pda(instance, user, mint, program_id);
-    match client.get_account(&pda).await {
-        Ok(acc) => {
-            // Layout (after 8-byte Anchor discriminator):
-            //   instance: Pubkey (32)
-            //   user:     Pubkey (32)
-            //   mint:     Pubkey (32)
-            //   deposited: u64 LE (8)  ← offset 8 + 32*3 = 104
-            //   locked:    u64 LE (8)  ← offset 112
-            //   bump:      u8 (1)
-            const DEPOSITED_OFFSET: usize = 8 + 32 + 32 + 32;
-            const LOCKED_OFFSET: usize = DEPOSITED_OFFSET + 8;
-            if acc.data.len() < LOCKED_OFFSET + 8 {
-                return Err(eyre!(
-                    "UserBalance account too small: {} bytes",
-                    acc.data.len()
-                ));
-            }
-            let deposited = u64::from_le_bytes(
-                acc.data[DEPOSITED_OFFSET..DEPOSITED_OFFSET + 8]
-                    .try_into()
-                    .unwrap(),
-            );
-            let locked = u64::from_le_bytes(
-                acc.data[LOCKED_OFFSET..LOCKED_OFFSET + 8]
-                    .try_into()
-                    .unwrap(),
-            );
-            Ok((deposited, locked))
-        }
-        // Account-not-found is normal for first-time users.
-        Err(_) => Ok((0, 0)),
+    let response = client
+        .get_account_with_commitment(&pda, client.commitment())
+        .await
+        .map_err(|e| eyre!("get_account (UserBalance PDA): {}", e))?;
+
+    let Some(acc) = response.value else {
+        // Account missing is normal for first-time users; do not confuse with RPC failure.
+        return Ok((0, 0));
+    };
+
+    // Layout (after 8-byte Anchor discriminator):
+    //   instance: Pubkey (32)
+    //   user:     Pubkey (32)
+    //   mint:     Pubkey (32)
+    //   deposited: u64 LE (8)  ← offset 8 + 32*3 = 104
+    //   locked:    u64 LE (8)  ← offset 112
+    //   bump:      u8 (1)
+    const DEPOSITED_OFFSET: usize = 8 + 32 + 32 + 32;
+    const LOCKED_OFFSET: usize = DEPOSITED_OFFSET + 8;
+    if acc.data.len() < LOCKED_OFFSET + 8 {
+        return Err(eyre!(
+            "UserBalance account too small: {} bytes",
+            acc.data.len()
+        ));
     }
+    let deposited_bytes: [u8; 8] = acc.data[DEPOSITED_OFFSET..DEPOSITED_OFFSET + 8]
+        .try_into()
+        .map_err(|_| eyre!("UserBalance account data layout error (deposited)"))?;
+    let locked_bytes: [u8; 8] = acc.data[LOCKED_OFFSET..LOCKED_OFFSET + 8]
+        .try_into()
+        .map_err(|_| eyre!("UserBalance account data layout error (locked)"))?;
+    Ok((u64::from_le_bytes(deposited_bytes), u64::from_le_bytes(locked_bytes)))
 }

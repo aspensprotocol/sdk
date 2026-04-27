@@ -218,7 +218,13 @@ impl AspensClientBuilder {
                     .get("ASPENS_MARKET_STACK_URL")
                     .and_then(|u| Url::parse(u).ok())
             })
-            .unwrap_or_else(|| Url::parse("http://0.0.0.0:50051").unwrap());
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "aspens stack URL is not set: use AspensClient::builder().with_url(\"...\"), \
+                     or set ASPENS_MARKET_STACK_URL in {} (or in the process environment before build).",
+                    env_file
+                )
+            })?;
 
         Ok(AspensClient {
             stack_url,
@@ -284,6 +290,21 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(client.stack_url().as_str(), "http://example.com:8080/");
+    }
+
+    #[test]
+    fn test_builder_requires_stack_url() {
+        let file = NamedTempFile::new().unwrap();
+        let err = AspensClient::builder()
+            .with_env_file(file.path().to_str().unwrap())
+            .build()
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ASPENS_MARKET_STACK_URL") && msg.contains("stack URL"),
+            "unexpected error: {}",
+            msg
+        );
     }
 
     #[test]
