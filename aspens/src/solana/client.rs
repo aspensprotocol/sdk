@@ -127,5 +127,8 @@ pub async fn fetch_user_balance(
     let locked_bytes: [u8; 8] = acc.data[LOCKED_OFFSET..LOCKED_OFFSET + 8]
         .try_into()
         .map_err(|_| eyre!("UserBalance account data layout error (locked)"))?;
-    Ok((u64::from_le_bytes(deposited_bytes), u64::from_le_bytes(locked_bytes)))
+    Ok((
+        u64::from_le_bytes(deposited_bytes),
+        u64::from_le_bytes(locked_bytes),
+    ))
 }

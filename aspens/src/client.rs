@@ -298,7 +298,8 @@ mod tests {
         let err = AspensClient::builder()
             .with_env_file(file.path().to_str().unwrap())
             .build()
-            .unwrap_err();
+            .err()
+            .expect("builder should fail without ASPENS_MARKET_STACK_URL");
         let msg = err.to_string();
         assert!(
             msg.contains("ASPENS_MARKET_STACK_URL") && msg.contains("stack URL"),
