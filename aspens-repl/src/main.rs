@@ -483,12 +483,16 @@ fn main() {
         ..DefaultPrompt::default()
     };
 
+    let history_path = Arc::new(std::env::temp_dir().join("aspens-repl-history"));
     let rl = ClapEditor::<ReplCommand>::builder()
         .with_prompt(Box::new(prompt))
-        .with_editor_hook(|reed| {
-            reed.with_history(Box::new(
-                FileBackedHistory::with_file(10000, "/tmp/aspens-repl-history".into()).unwrap(),
-            ))
+        .with_editor_hook({
+            let history_path = history_path.clone();
+            move |reed| {
+                reed.with_history(Box::new(
+                    FileBackedHistory::with_file(10000, history_path.as_ref().clone()).unwrap(),
+                ))
+            }
         })
         .build();
 
