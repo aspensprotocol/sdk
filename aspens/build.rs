@@ -6,6 +6,14 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=proto/arborter_auth.proto");
     println!("cargo:rerun-if-changed=proto/arborter_config.proto");
     println!("cargo:rerun-if-changed=proto/attestation.proto");
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
+
+    // docs.rs mounts the source tree read-only; the generated files are
+    // already committed under proto/generated/ and ship with the crate, so
+    // skip codegen there.
+    if std::env::var_os("DOCS_RS").is_some() {
+        return Ok(());
+    }
 
     build_protos()?;
     Ok(())
