@@ -107,39 +107,38 @@ pub async fn build_gasless_authorization(
     );
     let order_id_hex = format!("0x{}", hex::encode(order_id_bytes));
 
-    match origin_chain.architecture.as_str() {
-        ARCH_EVM => {
-            build_evm(
-                origin_chain,
-                destination_chain,
-                wallet,
-                &input_token_address,
-                &output_token_address,
-                amount_in,
-                amount_out,
-                nonce,
-                order_id_hex,
-            )
-            .await
-        }
-        ARCH_SOLANA => {
-            build_solana(
-                origin_chain,
-                destination_chain,
-                wallet,
-                &input_token_address,
-                &output_token_address,
-                amount_in,
-                amount_out,
-                nonce,
-                order_id_bytes,
-                order_id_hex,
-            )
-            .await
-        }
-        other => Err(eyre!(
-            "gasless auth not implemented for chain architecture {other:?}"
-        )),
+    let arch = origin_chain.architecture.as_str();
+    if arch.eq_ignore_ascii_case(ARCH_EVM) {
+        build_evm(
+            origin_chain,
+            destination_chain,
+            wallet,
+            &input_token_address,
+            &output_token_address,
+            amount_in,
+            amount_out,
+            nonce,
+            order_id_hex,
+        )
+        .await
+    } else if arch.eq_ignore_ascii_case(ARCH_SOLANA) {
+        build_solana(
+            origin_chain,
+            destination_chain,
+            wallet,
+            &input_token_address,
+            &output_token_address,
+            amount_in,
+            amount_out,
+            nonce,
+            order_id_bytes,
+            order_id_hex,
+        )
+        .await
+    } else {
+        Err(eyre!(
+            "gasless auth not implemented for chain architecture {arch:?}"
+        ))
     }
 }
 
