@@ -1084,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "aspens"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -1122,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "aspens-admin"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "alloy",
  "aspens",
@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "aspens-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "aspens-repl"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "alloy",
  "alloy-chains",
