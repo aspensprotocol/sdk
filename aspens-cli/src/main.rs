@@ -443,20 +443,19 @@ async fn run() -> Result<()> {
     // Pick the right curve's wallet based on the chain's architecture.
     // Solana chains need an Ed25519 keypair from TRADER_PRIVKEY_SOLANA;
     // EVM chains need a secp256k1 hex key from TRADER_PRIVKEY.
-    let wallet_for_network =
-        |config: &aspens::commands::config::config_pb::GetConfigResponse,
-         network: &str|
-         -> Result<Wallet> {
-            let chain = config.get_chain(network).ok_or_else(|| {
-                eyre::eyre!("Chain '{}' not found in server configuration", network)
-            })?;
-            let curve = if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
-                CurveType::Ed25519
-            } else {
-                CurveType::Secp256k1
-            };
-            load_trader_wallet(curve)
+    let wallet_for_network = |config: &aspens::commands::config::config_pb::GetConfigResponse,
+                              network: &str|
+     -> Result<Wallet> {
+        let chain = config
+            .get_chain(network)
+            .ok_or_else(|| eyre::eyre!("Chain '{}' not found in server configuration", network))?;
+        let curve = if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
+            CurveType::Ed25519
+        } else {
+            CurveType::Secp256k1
         };
+        load_trader_wallet(curve)
+    };
 
     match cli.command {
         Commands::Deposit {
@@ -481,10 +480,8 @@ async fn run() -> Result<()> {
             let tok = token.clone();
             executor
                 .execute(async move {
-                    deposit::call_deposit_from_config_with_wallet(
-                        net, tok, amount, &wallet, config,
-                    )
-                    .await
+                    deposit::call_deposit_from_config_with_wallet(net, tok, amount, &wallet, config)
+                        .await
                 })
                 .map_err(|e| {
                     eyre::eyre!(format_error(
