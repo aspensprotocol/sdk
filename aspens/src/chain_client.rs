@@ -26,10 +26,18 @@ pub const ARCH_EVM: &str = "EVM";
 /// A curve-aware RPC client.
 pub enum ChainClient {
     /// EVM provider (Alloy).
-    Evm { rpc_url: String, chain_id: u32 },
+    Evm {
+        /// HTTP(S) JSON-RPC endpoint for the EVM chain.
+        rpc_url: String,
+        /// EIP-155 chain id used to construct the Alloy provider.
+        chain_id: u32,
+    },
     /// Solana RPC client.
     #[cfg(feature = "solana")]
-    Solana { client: SolanaRpcClient },
+    Solana {
+        /// Async Solana JSON-RPC client.
+        client: SolanaRpcClient,
+    },
 }
 
 impl ChainClient {

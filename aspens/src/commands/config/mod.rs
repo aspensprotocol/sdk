@@ -1,3 +1,12 @@
+//! Stack configuration commands.
+//!
+//! Wraps the `ConfigService` gRPC surface and adds convenience helpers
+//! for loading `GetConfigResponse` from files, looking up chains /
+//! tokens / markets, and fetching signer public keys + attestation
+//! reports.
+
+/// Generated protobuf bindings for the `arborter_config.v1` service.
+#[allow(missing_docs)]
 pub mod config_pb {
     include!("../../../proto/generated/xyz.aspens.arborter_config.v1.rs");
 }
@@ -41,6 +50,7 @@ pub async fn download_config(url: String, path: String) -> Result<()> {
 }
 
 impl GetConfigResponse {
+    /// Load a `GetConfigResponse` from a `.json` or `.toml` file on disk.
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         let contents = fs::read_to_string(path)?;
@@ -56,6 +66,7 @@ impl GetConfigResponse {
         Ok(config)
     }
 
+    /// Look up a chain by its `network` name (e.g. `"base-sepolia"`).
     pub fn get_chain(&self, network: &str) -> Option<&Chain> {
         self.config
             .as_ref()?
@@ -64,11 +75,13 @@ impl GetConfigResponse {
             .find(|chain| chain.network == network)
     }
 
+    /// Look up a token on `network` by its `symbol` (e.g. `"USDC"`).
     pub fn get_token(&self, network: &str, symbol: &str) -> Option<&Token> {
         self.get_chain(network)
             .and_then(|chain| chain.tokens.get(symbol))
     }
 
+    /// Look up a market by its display `name`.
     pub fn get_market(&self, name: &str) -> Option<&Market> {
         self.config
             .as_ref()?
@@ -77,6 +90,7 @@ impl GetConfigResponse {
             .find(|market| market.name == name)
     }
 
+    /// Look up a market by the `(network, symbol)` pair of its base and quote tokens.
     pub fn get_market_by_tokens(
         &self,
         base_network: &str,
@@ -92,6 +106,7 @@ impl GetConfigResponse {
         })
     }
 
+    /// Look up a chain by its EIP-155 / Solana cluster `chain_id`.
     pub fn get_chain_by_id(&self, chain_id: u32) -> Option<&Chain> {
         self.config
             .as_ref()?
@@ -100,6 +115,8 @@ impl GetConfigResponse {
             .find(|chain| chain.chain_id == chain_id)
     }
 
+    /// Look up a market by its canonical `market_id`
+    /// (`chain_id::token_address::chain_id::token_address`).
     pub fn get_market_by_id(&self, market_id: &str) -> Option<&Market> {
         self.config
             .as_ref()?
@@ -109,6 +126,11 @@ impl GetConfigResponse {
     }
 }
 
+/// Download the stack configuration from `url` and write it to `path` as JSON.
+///
+/// Creates parent directories if they do not exist. Unlike
+/// [`download_config`], this always serializes as JSON regardless of the
+/// file extension.
 pub async fn download_config_to_file<P: AsRef<Path>>(url: String, path: P) -> Result<()> {
     info!("Downloading configuration to {}", path.as_ref().display());
 

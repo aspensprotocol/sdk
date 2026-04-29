@@ -491,6 +491,12 @@ pub async fn balance_from_config(config: GetConfigResponse, privkey: String) -> 
     balance_from_config_with_wallets(config, &wallets).await
 }
 
+/// Legacy two-chain balance printer. Prints wallet, available, and locked
+/// USDC balances for `(base_chain, quote_chain)` to `info!`.
+///
+/// Prefer the config-driven [`balance_from_config`] /
+/// [`balance_from_config_with_wallet`] entry points; this function is kept
+/// for compatibility with older scripts that pass raw RPC URLs.
 pub async fn balance(
     base_chain_rpc_url: String,
     base_chain_usdc_token_address: String,
@@ -563,6 +569,8 @@ pub async fn balance(
     Ok(())
 }
 
+/// Read the trader's available trade balance from MidribV2's
+/// `tradeBalance(owner, token)` accessor.
 pub async fn call_get_balance(
     chain: NamedChain,
     rpc_url: &str,
@@ -586,6 +594,8 @@ pub async fn call_get_balance(
     Ok(result)
 }
 
+/// Read the trader's locked (in-flight) trade balance from MidribV2's
+/// `lockedTradeBalance(owner, token)` accessor.
 pub async fn call_get_locked_balance(
     rpc_url: &str,
     token_address: &str,
@@ -648,6 +658,7 @@ pub async fn call_get_locked_balance_for_address(
     Ok(result)
 }
 
+/// Read the ERC-20 wallet balance for the address derived from `privkey`.
 pub async fn call_get_erc20_balance(
     chain: NamedChain,
     rpc_url: &str,
@@ -666,12 +677,14 @@ pub async fn call_get_erc20_balance(
     Ok(result)
 }
 
+/// Read the native gas balance (wei) for the address derived from `privkey`.
 pub async fn call_get_native_balance(rpc_url: &str, privkey: &str) -> Result<Uint<256, 4>> {
     let signer = privkey.parse::<PrivateKeySigner>()?;
     let address = signer.address();
     call_get_native_balance_for_address(rpc_url, address).await
 }
 
+/// Read the native gas balance (wei) for an explicit `address`.
 pub async fn call_get_native_balance_for_address(
     rpc_url: &str,
     address: Address,
@@ -682,6 +695,7 @@ pub async fn call_get_native_balance_for_address(
     Ok(balance)
 }
 
+/// Read the ERC-20 balance held by `holder`, without any signer setup.
 pub async fn call_get_erc20_balance_for_address(
     rpc_url: &str,
     token_address: &str,
@@ -695,6 +709,8 @@ pub async fn call_get_erc20_balance_for_address(
     Ok(result)
 }
 
+/// Format a u256 raw balance as a decimal string with `decimals` digits
+/// after the point (e.g. `1500000` with `decimals = 6` → `"1.500000"`).
 pub fn format_balance(value: Uint<256, 4>, decimals: u32) -> String {
     let s = value.to_string();
     if decimals == 0 {
@@ -711,6 +727,8 @@ pub fn format_balance(value: Uint<256, 4>, decimals: u32) -> String {
     }
 }
 
+/// Build the legacy two-chain (base / quote) balance table used by the
+/// `balance` command's pretty printer.
 pub fn balance_table(
     header: Vec<&str>,
     base_wallet_bal: &str,
