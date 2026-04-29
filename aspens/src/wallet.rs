@@ -173,6 +173,46 @@ pub fn load_trader_wallet(curve: CurveType) -> Result<Wallet> {
     }
 }
 
+/// Map a chain's architecture to the curve its keys live on.
+///
+/// Solana chains use Ed25519; everything else (EVM today, others in the
+/// future) uses secp256k1. Mirrors the dispatch in
+/// [`crate::chain_client::ChainClient::for_chain`] and the privileged
+/// signing paths in `commands::trading`.
+pub fn chain_curve(chain: &crate::commands::config::config_pb::Chain) -> CurveType {
+    if chain
+        .architecture
+        .eq_ignore_ascii_case(crate::chain_client::ARCH_SOLANA)
+    {
+        CurveType::Ed25519
+    } else {
+        CurveType::Secp256k1
+    }
+}
+
+/// Load the trader wallet whose curve matches `chain`'s architecture.
+///
+/// Equivalent to `load_trader_wallet(chain_curve(chain))`. Provided as a
+/// helper so binaries don't have to inline the architecture→curve dispatch.
+pub fn load_trader_wallet_for_chain(
+    chain: &crate::commands::config::config_pb::Chain,
+) -> Result<Wallet> {
+    load_trader_wallet(chain_curve(chain))
+}
+
+/// Look up `network` in `config` and load the matching trader wallet for
+/// its architecture. Common shape for binaries that take a network as a
+/// CLI / REPL arg.
+pub fn load_trader_wallet_for_network(
+    config: &crate::commands::config::config_pb::GetConfigResponse,
+    network: &str,
+) -> Result<Wallet> {
+    let chain = config
+        .get_chain(network)
+        .ok_or_else(|| eyre!("Chain '{}' not found in server configuration", network))?;
+    load_trader_wallet_for_chain(chain)
+}
+
 /// Load an admin wallet from environment variables based on the requested curve.
 ///
 /// - `Secp256k1`: reads `ADMIN_PRIVKEY` (hex)
