@@ -105,7 +105,12 @@ pub fn build_gasless_cross_chain_order(
     };
 
     let order_data = MidribDataTypes::OrderData {
-        outputToken: params.token_contract_destination_chain.parse()?,
+        // The on-chain field is `bytes32`: it accepts both EVM addresses
+        // (left-padded to 32 bytes) and 32-byte non-EVM token ids
+        // (Solana mints, etc.) without losing information.
+        outputToken: FixedBytes::<32>::from(crate::orders::parse_destination_token_bytes32(
+            params.token_contract_destination_chain,
+        )?),
         outputAmount: amount_out,
         inputAmount: amount_in,
         recipient: params.depositor_address.parse()?,

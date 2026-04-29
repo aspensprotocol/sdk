@@ -69,6 +69,56 @@ fn evm_gasless_lock_signing_hash_snapshot() {
     );
 }
 
+#[test]
+fn evm_gasless_hash_with_solana_destination_token() {
+    // Pin the digest produced when the destination is a non-EVM chain whose
+    // token id is a 32-byte Solana mint. Before the OrderData.outputToken
+    // bytes32 widening, this combination errored at parse time
+    // ("invalid string length") because the SDK tried to coerce a base58
+    // mint into a 20-byte alloy `Address`. After the widening, the mint
+    // bytes flow into the bytes32 slot directly and produce a deterministic
+    // digest distinct from any digest reachable with an EVM address.
+    //
+    // If this snapshot breaks, regenerate from arborter's chain-evm
+    // anvil_harness.rs with the same inputs; do NOT blindly update.
+    use alloy_primitives::Address;
+
+    let arborter: Address = "0x0000000000000000000000000000000000000aA1"
+        .parse()
+        .unwrap();
+    let settler: Address = "0x0000000000000000000000000000000000000bB2"
+        .parse()
+        .unwrap();
+    let depositor = "0x0000000000000000000000000000000000000cC3";
+    let token_in = "0x0000000000000000000000000000000000000dD4";
+    // Base58 of 32 bytes of 0x44 — same byte pattern the Solana parity
+    // test uses for its `output_token_bytes`. Picked so the snapshot is
+    // visually correlatable with the cross-chain side.
+    let token_out_solana_mint = bs58::encode([0x44u8; 32]).into_string();
+
+    let params = GaslessLockParams {
+        depositor_address: depositor,
+        token_contract: token_in,
+        token_contract_destination_chain: &token_out_solana_mint,
+        destination_chain_id: "501",
+        amount_in: 1_000_000,
+        amount_out: 2_000_000,
+        order_id: "",
+        deadline: 1_700_000_100,
+        nonce: 42,
+        open_deadline: 1_700_000_000,
+        user_signature: &[],
+    };
+
+    let digest = aspens::evm::gasless_lock_signing_hash(&params, arborter, settler, 84532).unwrap();
+    let expected_hex = "dfc4ba49f31772c3f4df2a95e05200db863bffe680050fc582cae3d8a9fe5c05";
+    assert_eq!(
+        hex::encode(digest),
+        expected_hex,
+        "EIP-712 digest with Solana-mint destination drifted — regenerate from arborter"
+    );
+}
+
 // -- Solana parity --------------------------------------------------------
 
 #[test]
