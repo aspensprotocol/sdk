@@ -256,9 +256,11 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
 }
 
 /// Shared shape for buy-market / buy-limit / sell-market / sell-limit:
-/// fetch config → resolve origin chain → load matching wallet → submit
-/// the order via `send_order_with_wallet`. The four CLI arms only differ
-/// in the side and whether a price is supplied.
+/// fetch config → load wallets for both chains in the market → submit via
+/// `send_order_with_wallets`. Cross-chain markets that span EVM + Solana
+/// need *both* a Secp256k1 wallet (for the EVM leg's address) and an
+/// Ed25519 wallet (for the Solana leg). The CLI loads each opportunistically
+/// and the lib selects the right one per chain.
 fn dispatch_send_order(
     executor: &DirectExecutor,
     client: &AspensClient,
@@ -271,10 +273,16 @@ fn dispatch_send_order(
     let config = executor
         .execute(aspens::commands::config::get_config(stack_url.clone()))
         .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
-    let wallet = {
-        let origin = origin_network_for_side(&config, &market, side)?;
-        load_trader_wallet_for_network(&config, origin)?
-    };
+    // Load both wallets if available. The lib picks whichever one matches
+    // each chain's architecture (and errors if neither matches).
+    let evm = load_trader_wallet(CurveType::Secp256k1).ok();
+    let solana = load_trader_wallet(CurveType::Ed25519).ok();
+    if evm.is_none() && solana.is_none() {
+        return Err(eyre::eyre!(
+            "No trader wallet configured. Set TRADER_PRIVKEY (EVM) and/or \
+             TRADER_PRIVKEY_SOLANA (Solana) in your .env file."
+        ));
+    }
     let context = match (side, &price) {
         (Side::Bid, Some(p)) => {
             format!("send limit buy order for {} at {} on {}", amount, p, market)
@@ -291,13 +299,17 @@ fn dispatch_send_order(
     };
     executor
         .execute(async move {
-            send_order::send_order_with_wallet(
+            let wallets: Vec<&Wallet> = [evm.as_ref(), solana.as_ref()]
+                .into_iter()
+                .flatten()
+                .collect();
+            send_order::send_order_with_wallets(
                 stack_url,
                 market,
                 side as i32,
                 amount,
                 price,
-                &wallet,
+                &wallets,
                 config,
             )
             .await
