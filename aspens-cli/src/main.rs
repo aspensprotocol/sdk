@@ -269,7 +269,7 @@ fn dispatch_send_order(
 ) -> Result<SendOrderResponse> {
     let stack_url = client.stack_url().to_string();
     let config = executor
-        .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+        .execute(aspens::commands::config::get_config(stack_url.clone()))
         .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
     let wallet = {
         let origin = origin_network_for_side(&config, &market, side)?;
