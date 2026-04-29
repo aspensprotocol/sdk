@@ -1,7 +1,10 @@
 use aspens::commands::trading::{
     balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
 };
-use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
+use aspens::{
+    chain_client::ARCH_SOLANA, load_trader_wallet, AspensClient, AsyncExecutor, CurveType,
+    DirectExecutor, Wallet,
+};
 use clap::Parser;
 use eyre::Result;
 use std::process::ExitCode;
@@ -437,6 +440,24 @@ async fn run() -> Result<()> {
         })
     };
 
+    // Pick the right curve's wallet based on the chain's architecture.
+    // Solana chains need an Ed25519 keypair from TRADER_PRIVKEY_SOLANA;
+    // EVM chains need a secp256k1 hex key from TRADER_PRIVKEY.
+    let wallet_for_network =
+        |config: &aspens::commands::config::config_pb::GetConfigResponse,
+         network: &str|
+         -> Result<Wallet> {
+            let chain = config.get_chain(network).ok_or_else(|| {
+                eyre::eyre!("Chain '{}' not found in server configuration", network)
+            })?;
+            let curve = if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
+                CurveType::Ed25519
+            } else {
+                CurveType::Secp256k1
+            };
+            load_trader_wallet(curve)
+        };
+
     match cli.command {
         Commands::Deposit {
             network,
@@ -451,16 +472,20 @@ async fn run() -> Result<()> {
                 .execute(aspens::commands::config::call_get_config(stack_url))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
-            let privkey = get_trader_privkey()?;
-
+            // Dispatch wallet curve on chain architecture: Solana chains
+            // need TRADER_PRIVKEY_SOLANA, EVM chains need TRADER_PRIVKEY.
+            // The legacy `call_deposit_from_config(privkey: String)` always
+            // wraps the value as an EVM key, which fails on Solana.
+            let wallet = wallet_for_network(&config, &network)?;
+            let net = network.clone();
+            let tok = token.clone();
             executor
-                .execute(deposit::call_deposit_from_config(
-                    network.clone(),
-                    token.clone(),
-                    amount,
-                    privkey,
-                    config,
-                ))
+                .execute(async move {
+                    deposit::call_deposit_from_config_with_wallet(
+                        net, tok, amount, &wallet, config,
+                    )
+                    .await
+                })
                 .map_err(|e| {
                     eyre::eyre!(format_error(
                         &e,
