@@ -1,5 +1,6 @@
 use aspens::commands::trading::send_order::{
-    arborter_pb::Side, origin_network_for_side, parse_side,
+    arborter_pb::{SendOrderResponse, Side},
+    origin_network_for_side, parse_side,
 };
 use aspens::commands::trading::{
     balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
@@ -254,6 +255,68 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
     )
 }
 
+/// Shared shape for buy-market / buy-limit / sell-market / sell-limit:
+/// fetch config → resolve origin chain → load matching wallet → submit
+/// the order via `send_order_with_wallet`. The four CLI arms only differ
+/// in the side and whether a price is supplied.
+fn dispatch_send_order(
+    executor: &DirectExecutor,
+    client: &AspensClient,
+    market: String,
+    side: Side,
+    amount: String,
+    price: Option<String>,
+) -> Result<SendOrderResponse> {
+    let stack_url = client.stack_url().to_string();
+    let config = executor
+        .execute(aspens::commands::config::get_config(stack_url.clone()))
+        .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
+    let wallet = {
+        let origin = origin_network_for_side(&config, &market, side)?;
+        load_trader_wallet_for_network(&config, origin)?
+    };
+    let context = match (side, &price) {
+        (Side::Bid, Some(p)) => {
+            format!("send limit buy order for {} at {} on {}", amount, p, market)
+        }
+        (Side::Bid, None) => format!("send market buy order for {} on {}", amount, market),
+        (Side::Ask, Some(p)) => {
+            format!(
+                "send limit sell order for {} at {} on {}",
+                amount, p, market
+            )
+        }
+        (Side::Ask, None) => format!("send market sell order for {} on {}", amount, market),
+        (Side::Unspecified, _) => format!("send order on {}", market),
+    };
+    executor
+        .execute(async move {
+            send_order::send_order_with_wallet(
+                stack_url,
+                market,
+                side as i32,
+                amount,
+                price,
+                &wallet,
+                config,
+            )
+            .await
+        })
+        .map_err(|e| eyre::eyre!(format_error(&e, &context)))
+}
+
+/// Print the transaction-hash footer that all order/cancel commands share.
+fn log_tx_hashes(formatted: &[String]) {
+    if formatted.is_empty() {
+        return;
+    }
+    info!("Transaction hashes:");
+    for hash in formatted {
+        info!("  {}", hash);
+    }
+    info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "aspens-cli")]
 #[command(about = "Aspens CLI for trading operations")]
@@ -481,42 +544,12 @@ async fn run() -> Result<()> {
         }
         Commands::BuyMarket { market, amount } => {
             info!("Sending market BUY order for {amount} on market {market}");
-
-            let stack_url = client.stack_url().to_string();
-            let config = executor
-                .execute(aspens::commands::config::get_config(stack_url.clone()))
-                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
-            let origin = origin_network_for_side(&config, &market, Side::Bid)?;
-            let wallet = load_trader_wallet_for_network(&config, origin)?;
-            let context = format!("send market buy order for {} on {}", amount, market);
-            let result = executor
-                .execute(async move {
-                    send_order::send_order_with_wallet(
-                        stack_url,
-                        market,
-                        Side::Bid as i32,
-                        amount,
-                        None,
-                        &wallet,
-                        config,
-                    )
-                    .await
-                })
-                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
-
+            let result = dispatch_send_order(&executor, &client, market, Side::Bid, amount, None)?;
             info!(
                 "Market buy order sent successfully (order_id: {})",
                 result.order_id
             );
-
-            // Log transaction hashes if available
-            if !result.transaction_hashes.is_empty() {
-                info!("Transaction hashes:");
-                for formatted_hash in result.get_formatted_transaction_hashes() {
-                    info!("  {}", formatted_hash);
-                }
-                info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
-            }
+            log_tx_hashes(&result.get_formatted_transaction_hashes());
         }
         Commands::BuyLimit {
             market,
@@ -524,84 +557,22 @@ async fn run() -> Result<()> {
             price,
         } => {
             info!("Sending limit BUY order for {amount} at price {price} on market {market}");
-
-            let stack_url = client.stack_url().to_string();
-            let config = executor
-                .execute(aspens::commands::config::get_config(stack_url.clone()))
-                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
-            let origin = origin_network_for_side(&config, &market, Side::Bid)?;
-            let wallet = load_trader_wallet_for_network(&config, origin)?;
-            let context = format!(
-                "send limit buy order for {} at {} on {}",
-                amount, price, market
-            );
-            let result = executor
-                .execute(async move {
-                    send_order::send_order_with_wallet(
-                        stack_url,
-                        market,
-                        Side::Bid as i32,
-                        amount,
-                        Some(price),
-                        &wallet,
-                        config,
-                    )
-                    .await
-                })
-                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
-
+            let result =
+                dispatch_send_order(&executor, &client, market, Side::Bid, amount, Some(price))?;
             info!(
                 "Limit buy order sent successfully (order_id: {})",
                 result.order_id
             );
-
-            // Log transaction hashes if available
-            if !result.transaction_hashes.is_empty() {
-                info!("Transaction hashes:");
-                for formatted_hash in result.get_formatted_transaction_hashes() {
-                    info!("  {}", formatted_hash);
-                }
-                info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
-            }
+            log_tx_hashes(&result.get_formatted_transaction_hashes());
         }
         Commands::SellMarket { market, amount } => {
             info!("Sending market SELL order for {amount} on market {market}");
-
-            let stack_url = client.stack_url().to_string();
-            let config = executor
-                .execute(aspens::commands::config::get_config(stack_url.clone()))
-                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
-            let origin = origin_network_for_side(&config, &market, Side::Ask)?;
-            let wallet = load_trader_wallet_for_network(&config, origin)?;
-            let context = format!("send market sell order for {} on {}", amount, market);
-            let result = executor
-                .execute(async move {
-                    send_order::send_order_with_wallet(
-                        stack_url,
-                        market,
-                        Side::Ask as i32,
-                        amount,
-                        None,
-                        &wallet,
-                        config,
-                    )
-                    .await
-                })
-                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
-
+            let result = dispatch_send_order(&executor, &client, market, Side::Ask, amount, None)?;
             info!(
                 "Market sell order sent successfully (order_id: {})",
                 result.order_id
             );
-
-            // Log transaction hashes if available
-            if !result.transaction_hashes.is_empty() {
-                info!("Transaction hashes:");
-                for formatted_hash in result.get_formatted_transaction_hashes() {
-                    info!("  {}", formatted_hash);
-                }
-                info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
-            }
+            log_tx_hashes(&result.get_formatted_transaction_hashes());
         }
         Commands::SellLimit {
             market,
@@ -609,45 +580,13 @@ async fn run() -> Result<()> {
             price,
         } => {
             info!("Sending limit SELL order for {amount} at price {price} on market {market}");
-
-            let stack_url = client.stack_url().to_string();
-            let config = executor
-                .execute(aspens::commands::config::get_config(stack_url.clone()))
-                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
-            let origin = origin_network_for_side(&config, &market, Side::Ask)?;
-            let wallet = load_trader_wallet_for_network(&config, origin)?;
-            let context = format!(
-                "send limit sell order for {} at {} on {}",
-                amount, price, market
-            );
-            let result = executor
-                .execute(async move {
-                    send_order::send_order_with_wallet(
-                        stack_url,
-                        market,
-                        Side::Ask as i32,
-                        amount,
-                        Some(price),
-                        &wallet,
-                        config,
-                    )
-                    .await
-                })
-                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
-
+            let result =
+                dispatch_send_order(&executor, &client, market, Side::Ask, amount, Some(price))?;
             info!(
                 "Limit sell order sent successfully (order_id: {})",
                 result.order_id
             );
-
-            // Log transaction hashes if available
-            if !result.transaction_hashes.is_empty() {
-                info!("Transaction hashes:");
-                for formatted_hash in result.get_formatted_transaction_hashes() {
-                    info!("  {}", formatted_hash);
-                }
-                info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
-            }
+            log_tx_hashes(&result.get_formatted_transaction_hashes());
         }
         Commands::CancelOrder {
             market,
