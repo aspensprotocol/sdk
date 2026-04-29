@@ -41,15 +41,37 @@ pub struct DeployContractRequest {
     /// The name of the chain to deploy the instance on. e.g. base-sepolia
     #[prost(string, tag = "1")]
     pub chain_network: ::prost::alloc::string::String,
-    /// The signed transaction hash of the createInstance function call
+    /// The signed transaction hash of the createInstance function call.
+    /// Required for EVM (admin signs+broadcasts the tx locally, then asks
+    /// arborter to confirm + register the result). Empty / omitted for Solana,
+    /// where arborter signs and submits server-side using its own signer
+    /// (the only key that can satisfy the factory's `has_one = owner` check).
     #[prost(string, tag = "2")]
     pub tx_hash: ::prost::alloc::string::String,
+    /// Refuse the deploy if the chain already has a trade_contract
+    /// registered. Defaults to false (refuse). Set to true to overwrite the
+    /// existing registration — note that previously deposited balances live on
+    /// the *old* contract/instance and become orphaned.
+    #[prost(bool, tag = "3")]
+    pub force: bool,
+    /// Trading fee in basis points. Used by the Solana server-side path,
+    /// which constructs the create_instance ix here (so it needs the fee at
+    /// call time). Ignored by the EVM path — for EVM the fee was baked into
+    /// the calldata returned by GetDeployCalldata and signed by the admin.
+    #[prost(uint32, tag = "4")]
+    pub fee_bps: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeployContractResponse {
-    /// The address that the instance is deployed to on the specified chain
+    /// The address that the instance is deployed to on the specified chain.
+    /// Hex (0x-prefixed) for EVM, base58 for Solana.
     #[prost(string, tag = "1")]
     pub contract_address: ::prost::alloc::string::String,
+    /// Receipt for the on-chain operation. Populated for the Solana
+    /// server-side path (base58 signature). Empty for EVM, where the admin
+    /// already has the tx_hash they submitted.
+    #[prost(string, tag = "2")]
+    pub tx_signature: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SetChainRequest {

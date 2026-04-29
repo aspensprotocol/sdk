@@ -882,47 +882,11 @@ async fn run() -> Result<()> {
         Commands::DeployContract { network, fees } => {
             let jwt = get_jwt()?;
 
-            // Get the admin private key for signing the transaction
-            let privkey = client.get_env("ADMIN_PRIVKEY").ok_or_else(|| {
-                eyre::eyre!(
-                    "ADMIN_PRIVKEY not found\n\n\
-                     This command requires ADMIN_PRIVKEY to sign the deployment transaction.\n\n\
-                     Hints:\n\
-                     - Set ADMIN_PRIVKEY in your .env file\n\
-                     - The private key should be a 64-character hex string (without 0x prefix)\n\
-                     - This wallet will pay the gas fees for the deployment"
-                )
-            })?;
-
-            info!("Fetching deploy calldata from server for: {}", network);
-
-            // Step 1: Get deploy calldata from the server
-            let calldata_response = executor
-                .execute(admin::get_deploy_calldata(
-                    stack_url.clone(),
-                    jwt.clone(),
-                    network.clone(),
-                    fees as u32,
-                ))
-                .map_err(|e| {
-                    eyre::eyre!(format_error(
-                        &e,
-                        &format!("fetch deploy calldata for '{}'", network)
-                    ))
-                })?;
-
-            info!(
-                "Building createInstance transaction for factory: {}",
-                calldata_response.factory_address
-            );
-            info!(
-                "  Instance signer: {}",
-                calldata_response.instance_signer_address
-            );
-            info!("  Fees: {} bps", fees);
-            info!("  Chain ID: {}", calldata_response.chain_id);
-
-            // Step 2: Fetch the chain configuration to get the RPC URL
+            // Resolve chain architecture upfront: EVM admins sign+broadcast
+            // create_instance locally and then ask arborter to confirm; Solana
+            // admins authorize via JWT and arborter signs server-side, since
+            // only the arborter signer satisfies the factory's `has_one = owner`
+            // constraint. The two flows share nothing past this point.
             let config = executor
                 .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| {
@@ -931,7 +895,6 @@ async fn run() -> Result<()> {
                         &format!("fetch configuration for '{}'", network)
                     ))
                 })?;
-
             let chain = config.get_chain(&network).ok_or_else(|| {
                 let available_chains = config
                     .config
@@ -954,51 +917,97 @@ async fn run() -> Result<()> {
                 )
             })?;
 
-            // Step 3: Build and sign the createInstance transaction using server-provided calldata
-            let params = CreateInstanceParams {
-                factory_address: calldata_response.factory_address.clone(),
-                calldata: calldata_response.calldata.clone(),
-                rpc_url: chain.rpc_url.clone(),
-                chain_id: calldata_response.chain_id as u64,
-                privkey: privkey.clone(),
+            let is_solana = chain.architecture.eq_ignore_ascii_case("solana");
+
+            let tx_hash = if is_solana {
+                // Solana: server signs + submits, no admin private key needed.
+                String::new()
+            } else {
+                // EVM: admin must sign + broadcast createInstance locally first.
+                let privkey = client.get_env("ADMIN_PRIVKEY").ok_or_else(|| {
+                    eyre::eyre!(
+                        "ADMIN_PRIVKEY not found\n\n\
+                         This command requires ADMIN_PRIVKEY to sign the deployment transaction.\n\n\
+                         Hints:\n\
+                         - Set ADMIN_PRIVKEY in your .env file\n\
+                         - The private key should be a 64-character hex string (without 0x prefix)\n\
+                         - This wallet will pay the gas fees for the deployment"
+                    )
+                })?;
+
+                info!("Fetching deploy calldata from server for: {}", network);
+                let calldata_response = executor
+                    .execute(admin::get_deploy_calldata(
+                        stack_url.clone(),
+                        jwt.clone(),
+                        network.clone(),
+                        fees as u32,
+                    ))
+                    .map_err(|e| {
+                        eyre::eyre!(format_error(
+                            &e,
+                            &format!("fetch deploy calldata for '{}'", network)
+                        ))
+                    })?;
+
+                info!(
+                    "Building createInstance transaction for factory: {}",
+                    calldata_response.factory_address
+                );
+                info!(
+                    "  Instance signer: {}",
+                    calldata_response.instance_signer_address
+                );
+                info!("  Fees: {} bps", fees);
+                info!("  Chain ID: {}", calldata_response.chain_id);
+
+                let params = CreateInstanceParams {
+                    factory_address: calldata_response.factory_address.clone(),
+                    calldata: calldata_response.calldata.clone(),
+                    rpc_url: chain.rpc_url.clone(),
+                    chain_id: calldata_response.chain_id as u64,
+                    privkey: privkey.clone(),
+                };
+
+                let signed_tx = executor
+                    .execute(admin::build_create_instance_tx(params))
+                    .map_err(|e| {
+                        eyre::eyre!(format_error(
+                            &e,
+                            &format!("build createInstance transaction for '{}'", network)
+                        ))
+                    })?;
+
+                info!(
+                    "Transaction signed ({} bytes), broadcasting to chain...",
+                    signed_tx.len()
+                );
+                let tx_hash = executor
+                    .execute(admin::broadcast_transaction(
+                        chain.rpc_url.clone(),
+                        signed_tx,
+                    ))
+                    .map_err(|e| {
+                        eyre::eyre!(format_error(
+                            &e,
+                            &format!("broadcast transaction to '{}'", network)
+                        ))
+                    })?;
+
+                info!("Transaction broadcast with hash: {}", tx_hash);
+                tx_hash
             };
 
-            let signed_tx = executor
-                .execute(admin::build_create_instance_tx(params))
-                .map_err(|e| {
-                    eyre::eyre!(format_error(
-                        &e,
-                        &format!("build createInstance transaction for '{}'", network)
-                    ))
-                })?;
-
-            info!(
-                "Transaction signed ({} bytes), broadcasting to chain...",
-                signed_tx.len()
-            );
-
-            // Step 4: Broadcast the transaction to the chain
-            let tx_hash = executor
-                .execute(admin::broadcast_transaction(
-                    chain.rpc_url.clone(),
-                    signed_tx,
-                ))
-                .map_err(|e| {
-                    eyre::eyre!(format_error(
-                        &e,
-                        &format!("broadcast transaction to '{}'", network)
-                    ))
-                })?;
-
-            info!("Transaction broadcast with hash: {}", tx_hash);
-
-            // Step 5: Send the tx hash to the backend to wait for confirmation and extract contract address
+            // Server-side handler: EVM waits on tx_hash; Solana signs + submits
+            // and returns the new instance PDA + a signature receipt.
             let result = executor
                 .execute(admin::deploy_contract(
                     stack_url.clone(),
                     jwt,
                     network.clone(),
                     tx_hash,
+                    /* force */ false,
+                    /* fee_bps */ fees as u32,
                 ))
                 .map_err(|e| {
                     eyre::eyre!(format_error(
@@ -1007,6 +1016,9 @@ async fn run() -> Result<()> {
                     ))
                 })?;
             println!("Trade contract deployed at: {}", result.contract_address);
+            if !result.tx_signature.is_empty() {
+                println!("Transaction: {}", result.tx_signature);
+            }
         }
 
         Commands::SetTradeContract {

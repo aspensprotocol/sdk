@@ -72,13 +72,32 @@ message GetDeployCalldataResponse {
 message DeployContractRequest {
   // The name of the chain to deploy the instance on. e.g. base-sepolia
   string chain_network = 1;
-  // The signed transaction hash of the createInstance function call
+  // The signed transaction hash of the createInstance function call.
+  // Required for EVM (admin signs+broadcasts the tx locally, then asks
+  // arborter to confirm + register the result). Empty / omitted for Solana,
+  // where arborter signs and submits server-side using its own signer
+  // (the only key that can satisfy the factory's `has_one = owner` check).
   string tx_hash = 2;
+  // Refuse the deploy if the chain already has a trade_contract
+  // registered. Defaults to false (refuse). Set to true to overwrite the
+  // existing registration — note that previously deposited balances live on
+  // the *old* contract/instance and become orphaned.
+  bool force = 3;
+  // Trading fee in basis points. Used by the Solana server-side path,
+  // which constructs the create_instance ix here (so it needs the fee at
+  // call time). Ignored by the EVM path — for EVM the fee was baked into
+  // the calldata returned by GetDeployCalldata and signed by the admin.
+  uint32 fee_bps = 4;
 }
 
 message DeployContractResponse {
-  // The address that the instance is deployed to on the specified chain
+  // The address that the instance is deployed to on the specified chain.
+  // Hex (0x-prefixed) for EVM, base58 for Solana.
   string contract_address = 1;
+  // Receipt for the on-chain operation. Populated for the Solana
+  // server-side path (base58 signature). Empty for EVM, where the admin
+  // already has the tx_hash they submitted.
+  string tx_signature = 2;
 }
 
 message SetChainRequest {
