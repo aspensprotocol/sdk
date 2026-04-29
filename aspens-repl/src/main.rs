@@ -323,7 +323,7 @@ impl AppState {
 
         // Use tokio runtime to block on async operation
         tokio::runtime::Runtime::new()?
-            .block_on(async { aspens::commands::config::call_get_config(url).await })
+            .block_on(async { aspens::commands::config::get_config(url).await })
     }
 }
 

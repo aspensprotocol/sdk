@@ -27,7 +27,7 @@ fn main() -> Result<()> {
         .clone();
 
     // Fetch the server configuration (chains, tokens, markets).
-    let cfg = executor.execute(config::call_get_config(stack_url.clone()))?;
+    let cfg = executor.execute(config::get_config(stack_url.clone()))?;
     println!("Connected to {}", stack_url);
 
     // ── 2. Check balances ───────────────────────────────────────────────

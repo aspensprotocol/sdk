@@ -109,25 +109,10 @@ impl GetConfigResponse {
     }
 }
 
-pub async fn call_get_config(url: String) -> Result<GetConfigResponse> {
-    // Create a channel to connect to the gRPC server
-    let channel = create_channel(&url).await?;
-
-    // Instantiate the client
-    let mut client = config_pb::config_service_client::ConfigServiceClient::new(channel);
-
-    // Create a request object
-    let request = tonic::Request::new(GetConfigRequest {});
-
-    // Call the get_config endpoint
-    let response = client.get_config(request).await?;
-    Ok(response.into_inner())
-}
-
 pub async fn download_config_to_file<P: AsRef<Path>>(url: String, path: P) -> Result<()> {
     info!("Downloading configuration to {}", path.as_ref().display());
 
-    let config = call_get_config(url).await?;
+    let config = get_config(url).await?;
 
     // Create parent directories if they don't exist
     if let Some(parent) = path.as_ref().parent() {
