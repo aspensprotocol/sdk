@@ -44,7 +44,7 @@ impl AspensClient {
 
     /// Fetch configuration from the server and cache it
     pub async fn fetch_config(&self) -> Result<()> {
-        let config = crate::commands::config::call_get_config(self.stack_url.to_string()).await?;
+        let config = crate::commands::config::get_config(self.stack_url.to_string()).await?;
         let mut guard = self.config.write().unwrap();
         *guard = Some(config);
         Ok(())

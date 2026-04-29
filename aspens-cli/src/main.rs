@@ -484,7 +484,7 @@ async fn run() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             let config = executor
-                .execute(aspens::commands::config::call_get_config(stack_url))
+                .execute(aspens::commands::config::get_config(stack_url))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let wallet = wallet_for_network(&config, &network)?;
             let context = format!("deposit {} {} on {}", amount, token, network);
@@ -508,7 +508,7 @@ async fn run() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             let config = executor
-                .execute(aspens::commands::config::call_get_config(stack_url))
+                .execute(aspens::commands::config::get_config(stack_url))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let wallet = wallet_for_network(&config, &network)?;
             let context = format!("withdraw {} {} from {}", amount, token, network);
@@ -528,7 +528,7 @@ async fn run() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             let config = executor
-                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let origin = origin_network_for_side(&config, &market, Side::Bid)?;
             let wallet = wallet_for_network(&config, &origin)?;
@@ -571,7 +571,7 @@ async fn run() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             let config = executor
-                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let origin = origin_network_for_side(&config, &market, Side::Bid)?;
             let wallet = wallet_for_network(&config, &origin)?;
@@ -613,7 +613,7 @@ async fn run() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             let config = executor
-                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let origin = origin_network_for_side(&config, &market, Side::Ask)?;
             let wallet = wallet_for_network(&config, &origin)?;
@@ -656,7 +656,7 @@ async fn run() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             let config = executor
-                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let origin = origin_network_for_side(&config, &market, Side::Ask)?;
             let wallet = wallet_for_network(&config, &origin)?;
@@ -702,7 +702,7 @@ async fn run() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             let config = executor
-                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let origin = origin_network_for_side(&config, &market, parse_side(&side)?)?;
             let wallet = wallet_for_network(&config, &origin)?;
@@ -914,7 +914,7 @@ async fn run() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             let config = executor
-                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let resolved_market = send_order::lookup_market(&config, &market)
                 .map_err(|e| eyre::eyre!(format_error(&e, "look up market")))?;
@@ -961,7 +961,7 @@ async fn run() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             let config = executor
-                .execute(aspens::commands::config::call_get_config(stack_url.clone()))
+                .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let resolved_market = send_order::lookup_market(&config, &market)
                 .map_err(|e| eyre::eyre!(format_error(&e, "look up market")))?;
