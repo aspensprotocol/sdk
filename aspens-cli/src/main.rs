@@ -1,7 +1,7 @@
+use aspens::commands::trading::send_order::arborter_pb::Side;
 use aspens::commands::trading::{
     balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
 };
-use aspens::commands::trading::send_order::arborter_pb::Side;
 use aspens::{
     chain_client::ARCH_SOLANA, load_trader_wallet, AspensClient, AsyncExecutor, CurveType,
     DirectExecutor, Wallet,
@@ -752,8 +752,10 @@ async fn run() -> Result<()> {
             }
             executor
                 .execute(async move {
-                    let wallets: Vec<&Wallet> =
-                        [evm.as_ref(), solana.as_ref()].into_iter().flatten().collect();
+                    let wallets: Vec<&Wallet> = [evm.as_ref(), solana.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .collect();
                     balance::balance_from_config_with_wallets(config, &wallets).await
                 })
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch balances")))?;
