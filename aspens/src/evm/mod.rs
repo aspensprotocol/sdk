@@ -51,10 +51,14 @@ sol!(
     "artifacts/IAllowanceTransfer.json"
 );
 
-sol!(
-    #[sol(abi)]
-    "artifacts/MidribDataTypes.sol"
-);
+#[allow(missing_docs)]
+mod data_types {
+    alloy_sol_types::sol!(
+        #[sol(abi)]
+        "artifacts/MidribDataTypes.sol"
+    );
+}
+pub use data_types::*;
 
 // -- EIP-712 domain -------------------------------------------------------
 

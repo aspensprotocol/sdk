@@ -15,6 +15,7 @@ sol!(
     "artifacts/MidribFactory.json"
 );
 
+/// Re-export of the config service protobuf bindings for admin call sites.
 pub mod config_pb {
     pub use crate::commands::config::config_pb::*;
 }
@@ -420,14 +421,23 @@ pub async fn delete_token(
 /// Parameters for setting a market
 #[derive(Debug, Clone)]
 pub struct SetMarketParams {
+    /// Network name of the base-token chain (e.g. `"base-sepolia"`).
     pub base_chain_network: String,
+    /// Network name of the quote-token chain.
     pub quote_chain_network: String,
+    /// Symbol of the base token (e.g. `"WBTC"`).
     pub base_chain_token_symbol: String,
+    /// Symbol of the quote token (e.g. `"USDT"`).
     pub quote_chain_token_symbol: String,
+    /// On-chain contract / mint address of the base token.
     pub base_chain_token_address: String,
+    /// On-chain contract / mint address of the quote token.
     pub quote_chain_token_address: String,
+    /// Native decimals of the base token.
     pub base_chain_token_decimals: i32,
+    /// Native decimals of the quote token.
     pub quote_chain_token_decimals: i32,
+    /// Pair decimals used for order quantities and prices on this market.
     pub pair_decimals: i32,
 }
 

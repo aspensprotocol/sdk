@@ -25,7 +25,9 @@ pub enum CurveType {
 /// A wallet that can sign messages on EVM (always) or Solana (with `solana`
 /// feature) chains.
 pub enum Wallet {
+    /// EVM wallet backed by an Alloy `PrivateKeySigner` (secp256k1).
     Evm(PrivateKeySigner),
+    /// Solana wallet backed by a `solana-sdk` `Keypair` (Ed25519).
     #[cfg(feature = "solana")]
     Solana(Box<Keypair>),
 }

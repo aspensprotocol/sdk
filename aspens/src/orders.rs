@@ -52,11 +52,19 @@ pub fn derive_order_id(
 /// `aspens::solana::gasless_lock_signing_message`.
 #[derive(Debug, Clone)]
 pub struct GaslessLockParams<'a> {
+    /// User funding the lock — hex address on EVM, base58 pubkey on Solana.
     pub depositor_address: &'a str,
+    /// Address / mint of the token being deposited on the origin chain.
     pub token_contract: &'a str,
+    /// Address / mint of the token the user expects to receive on the
+    /// destination chain.
     pub token_contract_destination_chain: &'a str,
+    /// Chain id of the destination chain (decimal string).
     pub destination_chain_id: &'a str,
+    /// Amount of `token_contract` being deposited, in pair decimals.
     pub amount_in: u128,
+    /// Amount of `token_contract_destination_chain` the user expects out,
+    /// in pair decimals.
     pub amount_out: u128,
     /// Opaque order id — typically a 32-byte hex string. On Solana this
     /// is the key under which the `Order` PDA is `init`-ed; on EVM it's

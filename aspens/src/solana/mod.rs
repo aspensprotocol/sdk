@@ -26,10 +26,15 @@ pub const SPL_TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
 
 /// PDA seeds — must match the on-chain `midrib` program.
 pub mod seeds {
+    /// Seed for the singleton factory PDA.
     pub const FACTORY_SEED: &[u8] = b"factory";
+    /// Seed for per-market `instance` PDAs (one per trading pair).
     pub const INSTANCE_SEED: &[u8] = b"instance";
+    /// Seed for per-(instance, user) balance PDAs.
     pub const BALANCE_SEED: &[u8] = b"balance";
+    /// Seed for per-order PDAs (`init`-ed inside `open` / `open_for`).
     pub const ORDER_SEED: &[u8] = b"order";
+    /// Seed for the per-instance SPL token vault authority / account.
     pub const INSTANCE_VAULT_SEED: &[u8] = b"instance_vault";
 }
 
@@ -231,12 +236,20 @@ pub fn withdraw_ix(
 /// order intent.
 #[derive(borsh::BorshSerialize, Clone, Debug)]
 pub struct OpenOrderArgs {
+    /// 32-byte canonical order id (see [`crate::orders::derive_order_id`]).
     pub order_id: [u8; 32],
+    /// Chain id of the origin chain (where this order is being opened).
     pub origin_chain_id: u64,
+    /// Chain id of the destination chain.
     pub destination_chain_id: u64,
+    /// Mint of the token being deposited.
     pub input_token: Pubkey,
+    /// Amount of `input_token` deposited, in pair decimals.
     pub input_amount: u64,
+    /// Token address on the destination chain (32-byte big-endian for EVM,
+    /// raw pubkey bytes for Solana).
     pub output_token: [u8; 32],
+    /// Amount of `output_token` the user expects out, in pair decimals.
     pub output_amount: u64,
 }
 
@@ -245,9 +258,13 @@ pub struct OpenOrderArgs {
 /// `ed25519_verify_ix` alongside the user's signature.
 #[derive(borsh::BorshSerialize, Debug)]
 pub struct OpenForSignedPayload {
+    /// Market `instance` PDA this order belongs to.
     pub instance: Pubkey,
+    /// User pubkey funding the lock — the Ed25519 signer.
     pub user: Pubkey,
+    /// Absolute deadline (Solana slot) after which `open_for` must reject.
     pub deadline: u64,
+    /// User-level order intent.
     pub order: OpenOrderArgs,
 }
 
@@ -255,9 +272,13 @@ pub struct OpenForSignedPayload {
 /// user's 64-byte Ed25519 signature.
 #[derive(borsh::BorshSerialize, Debug)]
 pub struct OpenForArgs {
+    /// User-level order intent (must match the signed payload).
     pub order: OpenOrderArgs,
+    /// User pubkey funding the lock (must match the signed payload).
     pub user: Pubkey,
+    /// Absolute deadline (Solana slot) (must match the signed payload).
     pub deadline: u64,
+    /// User's 64-byte Ed25519 signature over [`OpenForSignedPayload`].
     pub signature: [u8; 64],
 }
 

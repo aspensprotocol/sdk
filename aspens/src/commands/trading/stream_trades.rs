@@ -1,3 +1,5 @@
+/// Generated protobuf bindings for the `arborter.v1` trading service.
+#[allow(missing_docs)]
 pub mod arborter_pb {
     include!("../../../proto/generated/xyz.aspens.arborter.v1.rs");
 }

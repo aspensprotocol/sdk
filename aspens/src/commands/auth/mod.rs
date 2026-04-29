@@ -3,6 +3,8 @@
 //! This module provides EIP-712 signature-based authentication to obtain
 //! JWT tokens for admin operations on the Aspens platform.
 
+/// Generated protobuf bindings for the `arborter_auth.v1` service.
+#[allow(missing_docs)]
 pub mod auth_pb {
     include!("../../../proto/generated/xyz.aspens.arborter_auth.v1.rs");
 }
