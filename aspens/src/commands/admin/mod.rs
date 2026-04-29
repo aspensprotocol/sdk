@@ -113,12 +113,21 @@ pub async fn get_deploy_calldata(
 /// * `url` - The Aspens stack gRPC URL
 /// * `jwt` - Valid JWT token
 /// * `chain_network` - Network name (e.g., "base-sepolia")
-/// * `tx_hash` - Transaction hash (0x-prefixed hex) of the already-broadcast createInstance call
+/// * `tx_hash` - Transaction hash (0x-prefixed hex) of the already-broadcast
+///   createInstance call. Required for EVM. Pass an empty string for Solana,
+///   where the server signs and submits create_instance itself.
+/// * `force` - If `true`, overwrite an existing trade_contract registration.
+///   Off by default; enabling it orphans any deposits on the previous instance.
+/// * `fee_bps` - Trading fee in basis points. Used by the Solana server-side
+///   path (which constructs the create_instance ix on the server). Ignored by
+///   EVM, where the fee was already encoded into the calldata the admin signed.
 pub async fn deploy_contract(
     url: String,
     jwt: String,
     chain_network: String,
     tx_hash: String,
+    force: bool,
+    fee_bps: u32,
 ) -> Result<DeployContractResponse> {
     let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
@@ -128,6 +137,8 @@ pub async fn deploy_contract(
         DeployContractRequest {
             chain_network,
             tx_hash,
+            force,
+            fee_bps,
         },
     );
     let response = client.deploy_contract(request).await?;
