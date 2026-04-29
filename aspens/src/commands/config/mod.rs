@@ -109,7 +109,6 @@ impl GetConfigResponse {
     }
 }
 
-
 pub async fn download_config_to_file<P: AsRef<Path>>(url: String, path: P) -> Result<()> {
     info!("Downloading configuration to {}", path.as_ref().display());
 
