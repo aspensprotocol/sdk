@@ -119,7 +119,7 @@ pub fn parse_destination_token_bytes32(token: &str) -> Result<[u8; 32]> {
         && hex_body.len() <= 64
         && hex_body.chars().all(|c| c.is_ascii_hexdigit())
     {
-        let normalized = if hex_body.len() % 2 == 0 {
+        let normalized = if hex_body.len().is_multiple_of(2) {
             hex_body.to_string()
         } else {
             format!("0{hex_body}")
@@ -153,7 +153,7 @@ pub fn parse_destination_token_bytes32(token: &str) -> Result<[u8; 32]> {
         }
         let mut out = [0u8; 32];
         out.copy_from_slice(&raw);
-        return Ok(out);
+        Ok(out)
     }
 
     #[cfg(not(feature = "solana"))]
