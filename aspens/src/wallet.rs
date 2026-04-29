@@ -177,7 +177,7 @@ pub fn load_trader_wallet(curve: CurveType) -> Result<Wallet> {
 ///
 /// Solana chains use Ed25519; everything else (EVM today, others in the
 /// future) uses secp256k1. Mirrors the dispatch in
-/// [`crate::chain_client::ChainClient::for_chain`] and the privileged
+/// [`crate::chain_client::ChainClient::from_chain_config`] and the privileged
 /// signing paths in `commands::trading`.
 pub fn chain_curve(chain: &crate::commands::config::config_pb::Chain) -> CurveType {
     if chain
