@@ -404,8 +404,11 @@ pub async fn send_order(
 
 /// Send an order using a curve-agnostic wallet.
 ///
-/// This is the recommended way to send orders. It supports both EVM (secp256k1)
-/// and Solana (Ed25519) wallets transparently.
+/// Thin wrapper over [`send_order_with_wallets`] for the common case where
+/// both legs of the market live on chains that share the same curve as the
+/// supplied wallet (e.g. EVM↔EVM with an EVM wallet). For cross-chain
+/// markets that span Secp256k1 + Ed25519 chains, callers must use
+/// `send_order_with_wallets` and supply both wallets.
 ///
 /// # Arguments
 /// * `url` - The Aspens Market Stack URL
@@ -424,6 +427,35 @@ pub async fn send_order_with_wallet(
     wallet: &Wallet,
     config: GetConfigResponse,
 ) -> Result<SendOrderResponse> {
+    send_order_with_wallets(url, market_id, side, quantity, price, &[wallet], config).await
+}
+
+/// Send an order with one or more wallets, picking the right curve per chain.
+///
+/// Cross-chain orders need separate user-addresses on the base and quote
+/// chains, which may use different curves (e.g. an EVM ↔ Solana market needs
+/// both an EVM hex address and a Solana base58 pubkey). Pass all available
+/// wallets in `wallets`; the function selects the matching curve for each
+/// leg of the market by reading chain architectures from `config`. The
+/// origin chain's wallet (the side that locks tokens for this order) is
+/// used to sign both the gasless lock and the outer envelope.
+///
+/// Errors if a wallet of the right curve is missing for either chain.
+pub async fn send_order_with_wallets(
+    url: String,
+    market_id: String,
+    side: i32,
+    quantity: String,
+    price: Option<String>,
+    wallets: &[&Wallet],
+    config: GetConfigResponse,
+) -> Result<SendOrderResponse> {
+    if wallets.is_empty() {
+        return Err(eyre::eyre!(
+            "send_order_with_wallets requires at least one wallet"
+        ));
+    }
+
     // Look up market
     let market = lookup_market(&config, &market_id)?;
     let pair_decimals = market.pair_decimals as u32;
@@ -437,17 +469,61 @@ pub async fn send_order_with_wallet(
         .transpose()
         .map_err(|e| eyre::eyre!("Invalid price: {}", e))?;
 
-    let account_address = wallet.address();
+    // Pick the wallet whose curve matches each chain's architecture. The
+    // SDK's `chain_curve` helper is the single source of truth for the
+    // arch→curve mapping; using it here keeps order routing aligned with
+    // deposit / balance / cancel flows.
+    let base_chain = config
+        .get_chain(&market.base_chain_network)
+        .ok_or_else(|| eyre::eyre!("base chain '{}' not in config", market.base_chain_network))?;
+    let quote_chain = config
+        .get_chain(&market.quote_chain_network)
+        .ok_or_else(|| eyre::eyre!("quote chain '{}' not in config", market.quote_chain_network))?;
+    let base_curve = crate::wallet::chain_curve(base_chain);
+    let quote_curve = crate::wallet::chain_curve(quote_chain);
+    let base_wallet = wallets
+        .iter()
+        .copied()
+        .find(|w| w.curve() == base_curve)
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "no wallet of curve {:?} available for base chain '{}'",
+                base_curve,
+                market.base_chain_network
+            )
+        })?;
+    let quote_wallet = wallets
+        .iter()
+        .copied()
+        .find(|w| w.curve() == quote_curve)
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "no wallet of curve {:?} available for quote chain '{}'",
+                quote_curve,
+                market.quote_chain_network
+            )
+        })?;
+
+    // The signing wallet is whichever side locks for this order:
+    //   Bid (BUY)  → origin = quote chain  → user locks quote
+    //   Ask (SELL) → origin = base  chain  → user locks base
+    let signing_wallet = if side == 1 { quote_wallet } else { base_wallet };
+
+    let base_account_address = base_wallet.address();
+    let quote_account_address = quote_wallet.address();
 
     tracing::info!(
-        "Sending order: market={}, side={}, quantity={} (raw: {}), price={:?} (raw: {:?}), account={}",
+        "Sending order: market={}, side={}, quantity={} (raw: {}), price={:?} (raw: {:?}), \
+         base_account={}, quote_account={}, signing_curve={:?}",
         market.name,
         if side == 1 { "BUY" } else { "SELL" },
         quantity,
         quantity_raw,
         price,
         price_raw,
-        account_address
+        base_account_address,
+        quote_account_address,
+        signing_wallet.curve()
     );
 
     // Build the gasless authorization for the SendOrderRequest. Arborter's
@@ -457,7 +533,7 @@ pub async fn send_order_with_wallet(
         &config,
         market,
         side,
-        wallet,
+        signing_wallet,
         &quantity_raw,
         price_raw.as_deref(),
     )
@@ -471,34 +547,39 @@ pub async fn send_order_with_wallet(
         quantity_raw.clone(),
         price_raw.clone(),
         resolved_market_id,
-        account_address.clone(),
-        account_address.clone(),
-        wallet,
+        base_account_address,
+        quote_account_address,
+        signing_wallet,
         Some(gasless),
     )
     .await;
 
     // Enhance balance errors with actual balance info (EVM only — Solana balance
-    // queries via Alloy don't apply).
+    // queries via Alloy don't apply). Use the EVM-side wallet's address since
+    // that's the one whose balance the helper actually queries on-chain.
     if let Err(ref e) = result {
         let err_str = e.to_string().to_lowercase();
-        if (err_str.contains("insufficient") || err_str.contains("balance"))
-            && wallet.curve() == crate::wallet::CurveType::Secp256k1
-        {
-            // Re-parse the EVM address for the balance enhancement helper.
-            if let Ok(user_address) = account_address.parse::<Address>() {
-                if let Some(enhanced) = enhance_balance_error(
-                    &config,
-                    market,
-                    side,
-                    &quantity_raw,
-                    price_raw.as_deref(),
-                    user_address,
-                    pair_decimals,
-                )
-                .await
-                {
-                    return Err(enhanced);
+        if err_str.contains("insufficient") || err_str.contains("balance") {
+            if let Some(evm_wallet) = wallets
+                .iter()
+                .copied()
+                .find(|w| w.curve() == crate::wallet::CurveType::Secp256k1)
+            {
+                // Re-parse the EVM address for the balance enhancement helper.
+                if let Ok(user_address) = evm_wallet.address().parse::<Address>() {
+                    if let Some(enhanced) = enhance_balance_error(
+                        &config,
+                        market,
+                        side,
+                        &quantity_raw,
+                        price_raw.as_deref(),
+                        user_address,
+                        pair_decimals,
+                    )
+                    .await
+                    {
+                        return Err(enhanced);
+                    }
                 }
             }
         }
