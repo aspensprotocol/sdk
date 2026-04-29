@@ -1,9 +1,11 @@
-use aspens::commands::trading::send_order::arborter_pb::Side;
+use aspens::commands::trading::send_order::{
+    arborter_pb::Side, origin_network_for_side, parse_side,
+};
 use aspens::commands::trading::{
     balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
 };
 use aspens::{
-    chain_client::ARCH_SOLANA, load_trader_wallet, AspensClient, AsyncExecutor, CurveType,
+    load_trader_wallet, load_trader_wallet_for_network, AspensClient, AsyncExecutor, CurveType,
     DirectExecutor, Wallet,
 };
 use clap::Parser;
@@ -428,52 +430,6 @@ async fn run() -> Result<()> {
     let client = builder.build()?;
     let executor = DirectExecutor;
 
-    // Pick the right curve's wallet based on the chain's architecture.
-    // Solana chains need an Ed25519 keypair from TRADER_PRIVKEY_SOLANA;
-    // EVM chains need a secp256k1 hex key from TRADER_PRIVKEY.
-    let wallet_for_network = |config: &aspens::commands::config::config_pb::GetConfigResponse,
-                              network: &str|
-     -> Result<Wallet> {
-        let chain = config
-            .get_chain(network)
-            .ok_or_else(|| eyre::eyre!("Chain '{}' not found in server configuration", network))?;
-        let curve = if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
-            CurveType::Ed25519
-        } else {
-            CurveType::Secp256k1
-        };
-        load_trader_wallet(curve)
-    };
-
-    // For send_order / cancel_order: the user signs the lock on the origin
-    // chain. Bid locks the quote token; Ask locks the base. Mirrors
-    // `gasless::resolve_order` and the per-side branches in
-    // `cancel_order::call_cancel_order_with_wallet`.
-    let origin_network_for_side =
-        |config: &aspens::commands::config::config_pb::GetConfigResponse,
-         market_id: &str,
-         side: Side|
-         -> Result<String> {
-            let market = aspens::commands::trading::send_order::lookup_market(config, market_id)?;
-            Ok(match side {
-                Side::Bid => market.quote_chain_network.clone(),
-                Side::Ask => market.base_chain_network.clone(),
-                Side::Unspecified => {
-                    return Err(eyre::eyre!("Side::Unspecified has no origin chain"))
-                }
-            })
-        };
-    let parse_side = |s: &str| -> Result<Side> {
-        match s.to_lowercase().as_str() {
-            "buy" | "bid" => Ok(Side::Bid),
-            "sell" | "ask" => Ok(Side::Ask),
-            other => Err(eyre::eyre!(
-                "invalid side '{}' (expected 'buy'/'bid' or 'sell'/'ask')",
-                other
-            )),
-        }
-    };
-
     match cli.command {
         Commands::Deposit {
             network,
@@ -486,7 +442,7 @@ async fn run() -> Result<()> {
             let config = executor
                 .execute(aspens::commands::config::get_config(stack_url))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
-            let wallet = wallet_for_network(&config, &network)?;
+            let wallet = load_trader_wallet_for_network(&config, &network)?;
             let context = format!("deposit {} {} on {}", amount, token, network);
             executor
                 .execute(async move {
@@ -510,7 +466,7 @@ async fn run() -> Result<()> {
             let config = executor
                 .execute(aspens::commands::config::get_config(stack_url))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
-            let wallet = wallet_for_network(&config, &network)?;
+            let wallet = load_trader_wallet_for_network(&config, &network)?;
             let context = format!("withdraw {} {} from {}", amount, token, network);
             executor
                 .execute(async move {
@@ -531,7 +487,7 @@ async fn run() -> Result<()> {
                 .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let origin = origin_network_for_side(&config, &market, Side::Bid)?;
-            let wallet = wallet_for_network(&config, &origin)?;
+            let wallet = load_trader_wallet_for_network(&config, origin)?;
             let context = format!("send market buy order for {} on {}", amount, market);
             let result = executor
                 .execute(async move {
@@ -574,7 +530,7 @@ async fn run() -> Result<()> {
                 .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let origin = origin_network_for_side(&config, &market, Side::Bid)?;
-            let wallet = wallet_for_network(&config, &origin)?;
+            let wallet = load_trader_wallet_for_network(&config, origin)?;
             let context = format!(
                 "send limit buy order for {} at {} on {}",
                 amount, price, market
@@ -616,7 +572,7 @@ async fn run() -> Result<()> {
                 .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let origin = origin_network_for_side(&config, &market, Side::Ask)?;
-            let wallet = wallet_for_network(&config, &origin)?;
+            let wallet = load_trader_wallet_for_network(&config, origin)?;
             let context = format!("send market sell order for {} on {}", amount, market);
             let result = executor
                 .execute(async move {
@@ -659,7 +615,7 @@ async fn run() -> Result<()> {
                 .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let origin = origin_network_for_side(&config, &market, Side::Ask)?;
-            let wallet = wallet_for_network(&config, &origin)?;
+            let wallet = load_trader_wallet_for_network(&config, origin)?;
             let context = format!(
                 "send limit sell order for {} at {} on {}",
                 amount, price, market
@@ -705,7 +661,7 @@ async fn run() -> Result<()> {
                 .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let origin = origin_network_for_side(&config, &market, parse_side(&side)?)?;
-            let wallet = wallet_for_network(&config, &origin)?;
+            let wallet = load_trader_wallet_for_network(&config, origin)?;
             let context = format!("cancel order {} on {}", order_id, market);
             let result = executor
                 .execute(async move {

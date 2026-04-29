@@ -42,7 +42,10 @@ pub use chain_client::ChainClient;
 pub use client::{AspensClient, AspensClientBuilder, JwtToken};
 #[cfg(feature = "client")]
 pub use executor::{AsyncExecutor, BlockingExecutor, DirectExecutor};
-pub use wallet::{load_admin_wallet, load_trader_wallet, CurveType, Wallet};
+pub use wallet::{
+    chain_curve, load_admin_wallet, load_trader_wallet, load_trader_wallet_for_chain,
+    load_trader_wallet_for_network, CurveType, Wallet,
+};
 
 // Re-export admin types when admin feature is enabled
 #[cfg(all(feature = "admin", feature = "client"))]

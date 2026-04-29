@@ -363,20 +363,11 @@ pub async fn balance_from_config_with_wallet(
     balance_from_config_with_wallets(config, &[wallet]).await
 }
 
-/// Which curve a chain expects for user-address strings.
-fn chain_curve(chain: &Chain) -> CurveType {
-    if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
-        CurveType::Ed25519
-    } else {
-        CurveType::Secp256k1
-    }
-}
-
 /// Pick the first wallet matching `chain`'s curve. Returns `None` when no
 /// caller-supplied wallet matches — the chain's rows are reported as
 /// "no wallet" rather than erroring out.
 fn select_wallet_for_chain<'a>(chain: &Chain, wallets: &'a [&'a Wallet]) -> Option<&'a Wallet> {
-    let wanted = chain_curve(chain);
+    let wanted = crate::wallet::chain_curve(chain);
     wallets.iter().copied().find(|w| w.curve() == wanted)
 }
 

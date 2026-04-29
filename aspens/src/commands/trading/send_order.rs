@@ -335,6 +335,44 @@ pub fn lookup_market<'a>(
     ))
 }
 
+/// Resolve the origin chain network for a (market, side) pair — the chain
+/// where the user signs their lock instruction.
+///
+/// Mirrors `gasless::resolve_order` and the per-side branches in
+/// `cancel_order::call_cancel_order_with_wallet`:
+/// - `Side::Bid` (BUY) locks the quote token → origin = quote chain
+/// - `Side::Ask` (SELL) locks the base token → origin = base chain
+///
+/// Returns `Side::Unspecified` as an error since the origin is undefined.
+pub fn origin_network_for_side<'a>(
+    config: &'a GetConfigResponse,
+    market_id: &str,
+    side: arborter_pb::Side,
+) -> Result<&'a str> {
+    let market = lookup_market(config, market_id)?;
+    Ok(match side {
+        arborter_pb::Side::Bid => &market.quote_chain_network,
+        arborter_pb::Side::Ask => &market.base_chain_network,
+        arborter_pb::Side::Unspecified => {
+            return Err(eyre::eyre!("Side::Unspecified has no origin chain"))
+        }
+    })
+}
+
+/// Parse a string side ("buy"/"bid" or "sell"/"ask", case-insensitive) into
+/// the typed enum. Used by binaries that take side as a CLI / REPL arg;
+/// useful as a single source of truth for accepted aliases.
+pub fn parse_side(s: &str) -> Result<arborter_pb::Side> {
+    match s.to_lowercase().as_str() {
+        "buy" | "bid" => Ok(arborter_pb::Side::Bid),
+        "sell" | "ask" => Ok(arborter_pb::Side::Ask),
+        other => Err(eyre::eyre!(
+            "invalid side '{}' (expected 'buy'/'bid' or 'sell'/'ask')",
+            other
+        )),
+    }
+}
+
 /// Derive the account address from a private key
 pub fn derive_address(privkey: &str) -> Result<(Address, String)> {
     let signer = privkey.parse::<PrivateKeySigner>()?;
