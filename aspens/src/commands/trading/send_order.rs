@@ -559,27 +559,27 @@ pub async fn send_order_with_wallets(
     // that's the one whose balance the helper actually queries on-chain.
     if let Err(ref e) = result {
         let err_str = e.to_string().to_lowercase();
-        let evm_wallet = wallets
-            .iter()
-            .copied()
-            .find(|w| w.curve() == crate::wallet::CurveType::Secp256k1);
-        if (err_str.contains("insufficient") || err_str.contains("balance")) && evm_wallet.is_some()
-        {
-            let evm_address_str = evm_wallet.expect("checked above").address();
-            // Re-parse the EVM address for the balance enhancement helper.
-            if let Ok(user_address) = evm_address_str.parse::<Address>() {
-                if let Some(enhanced) = enhance_balance_error(
-                    &config,
-                    market,
-                    side,
-                    &quantity_raw,
-                    price_raw.as_deref(),
-                    user_address,
-                    pair_decimals,
-                )
-                .await
-                {
-                    return Err(enhanced);
+        if err_str.contains("insufficient") || err_str.contains("balance") {
+            if let Some(evm_wallet) = wallets
+                .iter()
+                .copied()
+                .find(|w| w.curve() == crate::wallet::CurveType::Secp256k1)
+            {
+                // Re-parse the EVM address for the balance enhancement helper.
+                if let Ok(user_address) = evm_wallet.address().parse::<Address>() {
+                    if let Some(enhanced) = enhance_balance_error(
+                        &config,
+                        market,
+                        side,
+                        &quantity_raw,
+                        price_raw.as_deref(),
+                        user_address,
+                        pair_decimals,
+                    )
+                    .await
+                    {
+                        return Err(enhanced);
+                    }
                 }
             }
         }
