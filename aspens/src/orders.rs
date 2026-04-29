@@ -5,6 +5,7 @@
 //! is the shared input struct fed to chain-specific signing helpers
 //! (`aspens::evm::gasless_lock_signing_hash`, `aspens::solana::gasless_lock_signing_message`).
 
+use eyre::{eyre, Result};
 use sha2::{Digest, Sha256};
 
 /// Derive the canonical 32-byte order id.
@@ -88,6 +89,80 @@ pub struct GaslessLockParams<'a> {
     pub user_signature: &'a [u8],
 }
 
+/// Decode a cross-chain destination token identifier into a 32-byte slot.
+///
+/// The EVM `OrderData.outputToken` field is `bytes32`, sized to fit any
+/// 32-byte-or-less token id natively. Inputs:
+/// - `0x`-prefixed hex (case-insensitive). Up to 32 bytes (64 hex chars);
+///   shorter inputs (e.g. a 20-byte EVM address) are LEFT-padded with
+///   zeros to match `bytes32(uint256(uint160(addr)))` casts on-chain.
+/// - bare hex (no `0x` prefix), same rules as above.
+/// - base58 32-byte pubkey (Solana mints, etc.); must decode to exactly
+///   32 bytes. Requires the `solana` feature.
+///
+/// Errors on inputs that decode to >32 bytes or are otherwise unparseable.
+///
+/// **Parity:** mirrors
+/// `arborter::chain_traits::market::parse_destination_token_bytes32` exactly.
+/// Any change here must be mirrored there. Pinned by snapshot tests in
+/// `tests/client_parity.rs`.
+pub fn parse_destination_token_bytes32(token: &str) -> Result<[u8; 32]> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("empty destination token"));
+    }
+
+    // Hex path (with or without 0x prefix). All-hex falls through here;
+    // anything else punts to base58.
+    let hex_body = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    if !hex_body.is_empty()
+        && hex_body.len() <= 64
+        && hex_body.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        let normalized = if hex_body.len() % 2 == 0 {
+            hex_body.to_string()
+        } else {
+            format!("0{hex_body}")
+        };
+        let raw = hex::decode(&normalized)
+            .map_err(|e| eyre!("invalid hex token '{}': {}", trimmed, e))?;
+        if raw.len() > 32 {
+            return Err(eyre!(
+                "hex token '{}' decodes to {} bytes; max 32",
+                trimmed,
+                raw.len()
+            ));
+        }
+        let mut out = [0u8; 32];
+        out[32 - raw.len()..].copy_from_slice(&raw);
+        return Ok(out);
+    }
+
+    // Base58 path — gated on `solana` since that's what brings `bs58` in.
+    #[cfg(feature = "solana")]
+    {
+        let raw = bs58::decode(trimmed)
+            .into_vec()
+            .map_err(|e| eyre!("invalid base58 token '{}': {}", trimmed, e))?;
+        if raw.len() != 32 {
+            return Err(eyre!(
+                "base58 token '{}' decodes to {} bytes; expected 32",
+                trimmed,
+                raw.len()
+            ));
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&raw);
+        return Ok(out);
+    }
+
+    #[cfg(not(feature = "solana"))]
+    Err(eyre!(
+        "non-hex destination token '{}' requires the `solana` feature",
+        trimmed
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +193,48 @@ mod tests {
         let mut want = [0u8; 32];
         want.copy_from_slice(&h.finalize());
         assert_eq!(id, want);
+    }
+
+    #[test]
+    fn parse_hex_20_byte_address_left_pads() {
+        let evm = "0x".to_string() + &"ab".repeat(20);
+        let bytes = parse_destination_token_bytes32(&evm).unwrap();
+        assert_eq!(&bytes[..12], &[0u8; 12]);
+        assert_eq!(&bytes[12..], &[0xabu8; 20]);
+    }
+
+    #[test]
+    fn parse_hex_32_byte_passes_through() {
+        let h = "0x".to_string() + &"cd".repeat(32);
+        let bytes = parse_destination_token_bytes32(&h).unwrap();
+        assert_eq!(bytes, [0xcdu8; 32]);
+    }
+
+    #[test]
+    fn parse_hex_without_0x_prefix_works() {
+        let h = "ab".repeat(20);
+        let bytes = parse_destination_token_bytes32(&h).unwrap();
+        assert_eq!(&bytes[12..], &[0xabu8; 20]);
+    }
+
+    #[cfg(feature = "solana")]
+    #[test]
+    fn parse_base58_solana_pubkey() {
+        let raw = [0x42u8; 32];
+        let b58 = bs58::encode(raw).into_string();
+        let bytes = parse_destination_token_bytes32(&b58).unwrap();
+        assert_eq!(bytes, raw);
+    }
+
+    #[test]
+    fn parse_rejects_too_long_hex() {
+        let h = "0x".to_string() + &"ab".repeat(33);
+        assert!(parse_destination_token_bytes32(&h).is_err());
+    }
+
+    #[test]
+    fn parse_rejects_empty() {
+        assert!(parse_destination_token_bytes32("").is_err());
+        assert!(parse_destination_token_bytes32("   ").is_err());
     }
 }

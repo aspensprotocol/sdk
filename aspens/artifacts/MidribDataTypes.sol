@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.31;
+pragma solidity 0.8.34;
 
 /**
  * @title Midrib DataTypes
@@ -19,8 +19,15 @@ library MidribDataTypes {
     //bytes32 crossChainId;
 
     /// @dev Datatype for keeping track of order data
+    /// @dev `outputToken` is `bytes32` (not `address`) so cross-chain orders to
+    ///      non-EVM destinations can carry a 32-byte token identifier (e.g. a
+    ///      Solana mint pubkey). EVM destinations encode the address
+    ///      left-padded to 32 bytes (`bytes32(uint256(uint160(addr)))`).
+    ///      Used as commitment data only — it's hashed into the EIP-712
+    ///      digest and emitted on-chain, but no token transfer logic
+    ///      consults it (the lock token comes from the Permit2 details).
     struct OrderData {
-        address outputToken;
+        bytes32 outputToken;
         uint160 outputAmount;
         uint160 inputAmount;
         address recipient;
