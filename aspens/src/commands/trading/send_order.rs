@@ -145,14 +145,16 @@ async fn call_send_order(
     let mut buffer = Vec::new();
     order_for_sending.encode(&mut buffer)?;
 
-    // Sign the order. EVM signatures are 65 bytes (r||s||v); Solana Ed25519 are 64 bytes.
-    // The wire format takes the first 64 bytes, which works for both.
+    // Sign the order. EVM signatures are 65 bytes (r||s||v); Solana Ed25519 are 64
+    // bytes. Send the full curve-native length — the arborter's curve-aware
+    // verifier (`onchain::verify::is_signature_valid_with_curve`) requires
+    // exactly 65 for Secp256k1 and 64 for Ed25519, with no length tolerance.
     let signature_bytes = wallet.sign_message(&buffer).await?;
 
     // Create the request with the original order and signature
     let request = SendOrderRequest {
         order: Some(order_for_sending),
-        signature_hash: signature_bytes[..64].to_vec(),
+        signature_hash: signature_bytes,
         gasless,
     };
 
