@@ -1,9 +1,7 @@
 //! Build the `GaslessAuthorization` proto payload for a `SendOrderRequest`.
 //!
-//! This is step 1 of the gasless send_order migration (see
-//! `../../GASLESS_MIGRATION_PLAN.md`). Stateless — no gRPC, no arborter
-//! round-trip. Pure data + one optional RPC (Solana: `getSlot`) to
-//! compute the chain-specific deadline.
+//! Stateless — no gRPC, no arborter round-trip. Pure data + one optional
+//! RPC (Solana: `getSlot`) to compute the chain-specific deadline.
 //!
 //! Cross-checked against arborter's `GaslessLockParams` /
 //! `GaslessAuthorization` — every field the arborter's
