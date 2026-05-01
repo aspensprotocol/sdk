@@ -1,9 +1,7 @@
 //! Live SDK ↔ arborter gasless-order round-trip.
 //!
-//! Step 4 of the gasless send_order migration (see
-//! `GASLESS_MIGRATION_PLAN.md` at repo root). Drives a real gRPC
-//! `SendOrderRequest` through `send_order_with_wallet` against a
-//! running arborter and verifies the arborter accepted the
+//! Drives a real gRPC `SendOrderRequest` through `send_order_with_wallet`
+//! against a running arborter and verifies the arborter accepted the
 //! `GaslessAuthorization` (both chain paths: EVM `lock_for_order_gasless`
 //! on-chain, Solana `open_for_ixs` on-chain).
 //!
