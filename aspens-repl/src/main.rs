@@ -1,6 +1,8 @@
+use aspens::commands::config::config_pb::GetConfigResponse;
 use aspens::commands::trading::{
     balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
 };
+use aspens::decimals::parse_decimal_amount_u64;
 use aspens::{AspensClient, AsyncExecutor, BlockingExecutor};
 use clap::Parser;
 use clap_repl::reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory};
@@ -249,6 +251,27 @@ fn print_error(message: &str) {
 }
 
 /// Print friendly status error with hints
+/// Convert a human-readable token amount (e.g. `"10.5"`) to base units
+/// using the token's `decimals` from the chain config. Centralised here
+/// so deposit and withdraw share identical parsing + lookup behaviour.
+fn resolve_token_amount(
+    config: &GetConfigResponse,
+    network: &str,
+    token_symbol: &str,
+    amount: &str,
+) -> eyre::Result<u64> {
+    let token = config.get_token(network, token_symbol).ok_or_else(|| {
+        eyre::eyre!(
+            "Token '{}' not found on chain '{}'. \
+             Run `config` to see available tokens.",
+            token_symbol,
+            network
+        )
+    })?;
+    parse_decimal_amount_u64(amount, token.decimals)
+        .map_err(|e| eyre::eyre!("Invalid amount '{}' for {}: {}", amount, token_symbol, e))
+}
+
 fn print_status_error(error_msg: &str) {
     println!("  Connection: FAILED");
     println!();
@@ -355,8 +378,9 @@ enum ReplCommand {
         network: String,
         /// Token symbol to deposit (e.g., USDC, WETH, WBTC)
         token: String,
-        /// Amount to deposit
-        amount: u64,
+        /// Amount in human-readable units (e.g., "10", "10.5"). Scaled
+        /// by the token's `decimals` from the chain config.
+        amount: String,
     },
     /// Withdraw tokens to a local wallet (requires network, token, amount)
     Withdraw {
@@ -364,8 +388,9 @@ enum ReplCommand {
         network: String,
         /// Token symbol to withdraw (e.g., USDC, WETH, WBTC)
         token: String,
-        /// Amount to withdraw
-        amount: u64,
+        /// Amount in human-readable units (e.g., "10", "10.5"). Scaled
+        /// by the token's `decimals` from the chain config.
+        amount: String,
     },
     /// Send a market BUY order (executes at best available price)
     BuyMarket {
@@ -542,6 +567,17 @@ fn main() {
                 }
             };
 
+            let amount_base = match resolve_token_amount(&config, &network, &token, &amount) {
+                Ok(v) => v,
+                Err(e) => {
+                    print_error(&format_error(
+                        &e,
+                        &format!("deposit {} {} on {}", amount, token, network),
+                    ));
+                    return;
+                }
+            };
+
             let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
@@ -553,7 +589,7 @@ fn main() {
             match executor.execute(deposit::call_deposit_from_config(
                 network.clone(),
                 token.clone(),
-                amount,
+                amount_base,
                 privkey,
                 config,
             )) {
@@ -580,6 +616,17 @@ fn main() {
                 }
             };
 
+            let amount_base = match resolve_token_amount(&config, &network, &token, &amount) {
+                Ok(v) => v,
+                Err(e) => {
+                    print_error(&format_error(
+                        &e,
+                        &format!("withdraw {} {} from {}", amount, token, network),
+                    ));
+                    return;
+                }
+            };
+
             let privkey = match app_state.get_env("TRADER_PRIVKEY") {
                 Some(key) => key,
                 None => {
@@ -591,7 +638,7 @@ fn main() {
             match executor.execute(withdraw::call_withdraw_from_config(
                 network.clone(),
                 token.clone(),
-                amount,
+                amount_base,
                 privkey,
                 config,
             )) {

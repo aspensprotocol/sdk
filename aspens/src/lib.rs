@@ -33,6 +33,9 @@ pub mod client;
 /// gRPC command implementations (config, trading, admin, auth).
 #[cfg(feature = "client")]
 pub mod commands;
+/// Decimal-string ↔ base-units conversion shared by all amount-parsing
+/// call sites (CLI, REPL, library).
+pub mod decimals;
 #[cfg(feature = "evm")]
 pub mod evm;
 /// Async/sync execution strategies used by binaries to drive the client.
