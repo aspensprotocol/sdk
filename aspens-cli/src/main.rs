@@ -1,3 +1,4 @@
+use aspens::commands::config::config_pb::GetConfigResponse;
 use aspens::commands::trading::send_order::{
     arborter_pb::{SendOrderResponse, Side},
     origin_network_for_side, parse_side,
@@ -5,6 +6,7 @@ use aspens::commands::trading::send_order::{
 use aspens::commands::trading::{
     balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
 };
+use aspens::decimals::parse_decimal_amount_u64;
 use aspens::{
     load_trader_wallet, load_trader_wallet_for_network, AspensClient, AsyncExecutor, CurveType,
     DirectExecutor, Wallet,
@@ -317,6 +319,27 @@ fn dispatch_send_order(
         .map_err(|e| eyre::eyre!(format_error(&e, &context)))
 }
 
+/// Convert a human-readable token amount (e.g. `"10.5"`) to base units
+/// using the token's `decimals` from the chain config. Centralised here
+/// so deposit and withdraw share identical parsing + lookup behaviour.
+fn resolve_token_amount(
+    config: &GetConfigResponse,
+    network: &str,
+    token_symbol: &str,
+    amount: &str,
+) -> Result<u64> {
+    let token = config.get_token(network, token_symbol).ok_or_else(|| {
+        eyre::eyre!(
+            "Token '{}' not found on chain '{}'. \
+             Run `aspens-cli config` to see available tokens.",
+            token_symbol,
+            network
+        )
+    })?;
+    parse_decimal_amount_u64(amount, token.decimals)
+        .map_err(|e| eyre::eyre!("Invalid amount '{}' for {}: {}", amount, token_symbol, e))
+}
+
 /// Print the transaction-hash footer that all order/cancel commands share.
 fn log_tx_hashes(formatted: &[String]) {
     if formatted.is_empty() {
@@ -362,8 +385,9 @@ enum Commands {
         network: String,
         /// Token symbol to deposit (e.g., USDC, WETH, WBTC)
         token: String,
-        /// Amount to deposit
-        amount: u64,
+        /// Amount in human-readable units (e.g., "10", "10.5"). Scaled
+        /// by the token's `decimals` from the chain config.
+        amount: String,
     },
     /// Withdraw tokens to a local wallet (requires NETWORK TOKEN AMOUNT)
     Withdraw {
@@ -371,8 +395,9 @@ enum Commands {
         network: String,
         /// Token symbol to withdraw (e.g., USDC, WETH, WBTC)
         token: String,
-        /// Amount to withdraw
-        amount: u64,
+        /// Amount in human-readable units (e.g., "10", "10.5"). Scaled
+        /// by the token's `decimals` from the chain config.
+        amount: String,
     },
     /// Send a market BUY order (executes at best available price)
     BuyMarket {
@@ -517,12 +542,17 @@ async fn run() -> Result<()> {
             let config = executor
                 .execute(aspens::commands::config::get_config(stack_url))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
+            let amount_base = resolve_token_amount(&config, &network, &token, &amount)?;
             let wallet = load_trader_wallet_for_network(&config, &network)?;
             let context = format!("deposit {} {} on {}", amount, token, network);
             executor
                 .execute(async move {
                     deposit::call_deposit_from_config_with_wallet(
-                        network, token, amount, &wallet, config,
+                        network,
+                        token,
+                        amount_base,
+                        &wallet,
+                        config,
                     )
                     .await
                 })
@@ -541,12 +571,17 @@ async fn run() -> Result<()> {
             let config = executor
                 .execute(aspens::commands::config::get_config(stack_url))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
+            let amount_base = resolve_token_amount(&config, &network, &token, &amount)?;
             let wallet = load_trader_wallet_for_network(&config, &network)?;
             let context = format!("withdraw {} {} from {}", amount, token, network);
             executor
                 .execute(async move {
                     withdraw::call_withdraw_from_config_with_wallet(
-                        network, token, amount, &wallet, config,
+                        network,
+                        token,
+                        amount_base,
+                        &wallet,
+                        config,
                     )
                     .await
                 })

@@ -213,65 +213,14 @@ fn format_balance_for_display(balance: U256, decimals: u32) -> String {
     )
 }
 
-/// Convert a human-readable amount (e.g., "1.001") to pair decimals format
+/// Convert a human-readable amount (e.g., `"1.001"`) to pair decimals format
+/// as a decimal string suitable for the gRPC payload.
 ///
-/// # Arguments
-/// * `amount` - Human-readable amount string (e.g., "1.001", "100", "0.5")
-/// * `decimals` - Number of decimal places for the pair
-///
-/// # Returns
-/// * The amount as an integer string in pair decimals format
+/// Thin wrapper over [`crate::decimals::parse_decimal_amount`]; kept as
+/// a private alias so the existing `String`-returning order-encoding path
+/// stays untouched.
 fn convert_to_pair_decimals(amount: &str, decimals: u32) -> Result<String> {
-    // Parse the amount as a decimal number
-    let amount = amount.trim();
-
-    // Split on decimal point
-    let parts: Vec<&str> = amount.split('.').collect();
-
-    let (integer_part, fractional_part) = match parts.len() {
-        1 => (parts[0], ""),
-        2 => (parts[0], parts[1]),
-        _ => return Err(eyre::eyre!("Invalid amount format: {}", amount)),
-    };
-
-    // Parse integer part
-    let integer: u128 = if integer_part.is_empty() {
-        0
-    } else {
-        integer_part
-            .parse()
-            .map_err(|_| eyre::eyre!("Invalid integer part: {}", integer_part))?
-    };
-
-    // Handle fractional part - pad or truncate to match decimals
-    let fractional_str = if fractional_part.len() >= decimals as usize {
-        // Truncate to decimals places
-        &fractional_part[..decimals as usize]
-    } else {
-        // Will need to pad with zeros
-        fractional_part
-    };
-
-    let fractional: u128 = if fractional_str.is_empty() {
-        0
-    } else {
-        fractional_str
-            .parse()
-            .map_err(|_| eyre::eyre!("Invalid fractional part: {}", fractional_str))?
-    };
-
-    // Calculate the multiplier for padding
-    let padding_zeros = decimals as usize - fractional_str.len().min(decimals as usize);
-    let fractional_padded = fractional * 10_u128.pow(padding_zeros as u32);
-
-    // Combine: integer * 10^decimals + fractional
-    let multiplier = 10_u128.pow(decimals);
-    let result = integer
-        .checked_mul(multiplier)
-        .and_then(|v| v.checked_add(fractional_padded))
-        .ok_or_else(|| eyre::eyre!("Amount overflow: {}", amount))?;
-
-    Ok(result.to_string())
+    Ok(crate::decimals::parse_decimal_amount(amount, decimals)?.to_string())
 }
 
 /// Look up a market from the configuration
