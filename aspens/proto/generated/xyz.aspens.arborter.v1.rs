@@ -94,6 +94,27 @@ pub struct GaslessAuthorization {
     /// EVM openDeadline (unix seconds). Ignored by Solana.
     #[prost(uint64, tag = "5")]
     pub open_deadline: u64,
+    /// Amounts the user actually signed in their EIP-712 / Ed25519 payload,
+    /// in the origin / destination token's native base units (NOT pair
+    /// decimals). Decimal-string encoding of `u128` (no `0x` prefix, no
+    /// thousands separators) so values up to 2^128-1 round-trip exactly
+    /// across the gRPC boundary — protobuf has no native 128-bit integer.
+    ///
+    /// `amount_in` is what the user locks on the origin chain (input token).
+    /// `amount_out` is what the user expects to receive on the destination
+    /// chain (output token).
+    ///
+    /// The arborter MUST use these values verbatim when constructing the
+    /// `GaslessLockParams` passed to `lock_for_order_gasless` — recomputing
+    /// amounts independently from quantity / price (the prior behaviour)
+    /// produces a different EIP-712 / Ed25519 digest from what the user
+    /// signed and triggers `INVALID_SIGNER` revert on-chain. This makes the
+    /// user-signed payload the single authoritative source of truth for
+    /// the lock leg, matching the gasless-intent design pattern.
+    #[prost(string, tag = "6")]
+    pub amount_in: ::prost::alloc::string::String,
+    #[prost(string, tag = "7")]
+    pub amount_out: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Order {
