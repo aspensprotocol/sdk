@@ -113,6 +113,122 @@ where
     Ok(())
 }
 
+/// Snapshot of the top-of-book at a point in time, as raw u128 prices
+/// in the market's pair_decimals scale (= the on-the-wire format the
+/// matching engine reports in `OrderbookEntry.price`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TopOfBook {
+    /// Highest bid price among Confirmed, non-zero-quantity orders.
+    pub best_bid: Option<u128>,
+    /// Lowest ask price among Confirmed, non-zero-quantity orders.
+    pub best_ask: Option<u128>,
+}
+
+/// Snapshot the top-of-book for `market_id` by listening on the
+/// orderbook stream for up to `collection_window`.
+///
+/// Filters to `OrderState::Confirmed` and non-zero `quantity` — only
+/// those orders match against a new aggressor (per
+/// `match_engine::order_book::process_order_list`). The matching
+/// engine streams **all historical open orders first** when
+/// `historical_open_orders` is set, so a short collection window is
+/// usually enough to capture the resting book; live updates that
+/// arrive after the deadline are ignored.
+///
+/// Designed for short interactive lookups (e.g. CLI `buy-marketable`
+/// / `sell-marketable` helpers that need a slippage-cap reference
+/// price). For long-running orderbook tracking, use the lower-level
+/// [`stream_orderbook`] / [`stream_orderbook_channel`] directly.
+pub async fn fetch_top_of_book(
+    url: String,
+    market_id: String,
+    collection_window: std::time::Duration,
+) -> Result<TopOfBook> {
+    let (mut rx, _handle) = stream_orderbook_channel(
+        url,
+        StreamOrderbookOptions {
+            market_id,
+            historical_open_orders: true,
+            filter_by_trader: None,
+        },
+    )
+    .await?;
+
+    let mut top = TopOfBook::default();
+    let deadline = tokio::time::sleep(collection_window);
+    tokio::pin!(deadline);
+
+    loop {
+        tokio::select! {
+            _ = &mut deadline => break,
+            maybe_entry = rx.recv() => {
+                let Some(entry) = maybe_entry else { break };
+                // Only Confirmed non-zero-qty orders match.
+                if entry.state != OrderState::Confirmed as i32 {
+                    continue;
+                }
+                let qty: u128 = match entry.quantity.parse() {
+                    Ok(q) if q > 0 => q,
+                    _ => continue,
+                };
+                let price: u128 = match entry.price.parse() {
+                    Ok(p) if p > 0 => p,
+                    _ => continue,
+                };
+                // qty filter only; price is what we track.
+                let _ = qty;
+                match Side::try_from(entry.side) {
+                    Ok(Side::Bid) if top.best_bid.is_none_or(|b| price > b) => {
+                        top.best_bid = Some(price);
+                    }
+                    Ok(Side::Ask) if top.best_ask.is_none_or(|a| price < a) => {
+                        top.best_ask = Some(price);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(top)
+}
+
+/// Apply a slippage cap to a raw pair-decimal price.
+///
+/// - `is_buy = true`: `reference * (10_000 + slippage_bps) / 10_000` — the
+///   maximum the user is willing to pay above best ask.
+/// - `is_buy = false`: `reference * (10_000 - slippage_bps) / 10_000` — the
+///   minimum the user is willing to accept below best bid.
+///
+/// Takes a plain `bool` rather than the proto `Side` enum so callers
+/// don't have to round-trip through a specific `arborter_pb::Side`
+/// variant (every consumer module includes its own copy of the
+/// generated proto types — see `pub mod arborter_pb` at the top of
+/// each `trading/` module — and those variants don't unify even though
+/// they share a wire format).
+///
+/// `slippage_bps` is clamped to `[0, 10_000]` so the sell-side
+/// arithmetic can't underflow and the buy-side cap can't grow
+/// unboundedly. A `0` slippage produces an order priced exactly at the
+/// reference; the order may still rest if a faster client crosses it
+/// first.
+pub fn apply_slippage(reference_price: u128, slippage_bps: u32, is_buy: bool) -> Result<u128> {
+    let bps = slippage_bps.min(10_000) as u128;
+    let scale = if is_buy {
+        10_000u128
+            .checked_add(bps)
+            .ok_or_else(|| eyre::eyre!("slippage scale overflow"))?
+    } else {
+        10_000u128
+            .checked_sub(bps)
+            .ok_or_else(|| eyre::eyre!("slippage scale underflow"))?
+    };
+    reference_price
+        .checked_mul(scale)
+        .ok_or_else(|| eyre::eyre!("slippage * price overflow"))
+        .map(|v| v / 10_000)
+}
+
 /// Stream orderbook entries to a channel.
 ///
 /// This is an alternative API that returns a receiver channel instead of using a callback.
@@ -227,5 +343,51 @@ mod tests {
         assert_eq!(options.market_id, "");
         assert!(!options.historical_open_orders);
         assert!(options.filter_by_trader.is_none());
+    }
+
+    #[test]
+    fn apply_slippage_buy_adds_premium() {
+        // 50 bps = 0.5%. 1_000_000 * 1.005 = 1_005_000.
+        assert_eq!(apply_slippage(1_000_000, 50, true).unwrap(), 1_005_000);
+    }
+
+    #[test]
+    fn apply_slippage_sell_subtracts_discount() {
+        // 50 bps = 0.5%. 1_000_000 * 0.995 = 995_000.
+        assert_eq!(apply_slippage(1_000_000, 50, false).unwrap(), 995_000);
+    }
+
+    #[test]
+    fn apply_slippage_zero_is_no_op() {
+        assert_eq!(apply_slippage(42_000, 0, true).unwrap(), 42_000);
+        assert_eq!(apply_slippage(42_000, 0, false).unwrap(), 42_000);
+    }
+
+    #[test]
+    fn apply_slippage_truncates_toward_zero() {
+        // 1_001 * 1.0001 = 1001.1001 -> truncated to 1001.
+        assert_eq!(apply_slippage(1_001, 1, true).unwrap(), 1_001);
+        // 1_001 * 0.9999 = 1000.8999 -> truncated to 1000.
+        assert_eq!(apply_slippage(1_001, 1, false).unwrap(), 1_000);
+    }
+
+    #[test]
+    fn apply_slippage_clamps_above_10000_bps() {
+        // 20_000 bps clamps to 10_000 bps (= 100%).
+        // Buy: 100 * 2.0 = 200. Sell: 100 * 0.0 = 0.
+        assert_eq!(apply_slippage(100, 20_000, true).unwrap(), 200);
+        assert_eq!(apply_slippage(100, 20_000, false).unwrap(), 0);
+    }
+
+    #[test]
+    fn apply_slippage_sell_at_10000_bps_is_zero() {
+        // 100% sell slippage means accept any price down to zero.
+        assert_eq!(apply_slippage(1_000_000, 10_000, false).unwrap(), 0);
+    }
+
+    #[test]
+    fn apply_slippage_buy_overflow_rejected() {
+        // u128::MAX * 1.0001 overflows the checked_mul step.
+        assert!(apply_slippage(u128::MAX, 1, true).is_err());
     }
 }
