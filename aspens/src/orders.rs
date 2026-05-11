@@ -62,10 +62,18 @@ pub struct GaslessLockParams<'a> {
     pub token_contract_destination_chain: &'a str,
     /// Chain id of the destination chain (decimal string).
     pub destination_chain_id: &'a str,
-    /// Amount of `token_contract` being deposited, in pair decimals.
+    /// Amount of `token_contract` being deposited, in that token's
+    /// native base units (NOT pair_decimals). The on-chain EIP-712 /
+    /// Ed25519 digest is computed over this exact integer; the
+    /// arborter and contract recompute identically only when they
+    /// receive the same value. Callers feeding values from the
+    /// matching engine's pair-decimal representation must normalise
+    /// first via `gasless::normalize` (private) or its public mirror
+    /// `chain_traits::convert_decimals::normalize_decimals` (arborter).
     pub amount_in: u128,
-    /// Amount of `token_contract_destination_chain` the user expects out,
-    /// in pair decimals.
+    /// Amount of `token_contract_destination_chain` the user expects
+    /// out, in that token's native base units. Same scale convention
+    /// as `amount_in` above.
     pub amount_out: u128,
     /// Opaque order id — typically a 32-byte hex string. On Solana this
     /// is the key under which the `Order` PDA is `init`-ed; on EVM it's
