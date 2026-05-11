@@ -344,6 +344,19 @@ enum Commands {
         /// Optional block explorer URL
         #[arg(long)]
         explorer_url: Option<String>,
+
+        /// Instance signer address (server-side address of the trade
+        /// contract's authorized signer; the SDK's gasless-lock EIP-712
+        /// digest uses this as `originSettler`'s arborter field).
+        /// Optional — the server has a code path that derives this from
+        /// the signer service on first chain registration, but on
+        /// subsequent set-chain calls (e.g. after a DB reset where the
+        /// signer's persisted keys survive) it's left empty and the
+        /// SDK fails with "invalid instance_signer_address". Supply it
+        /// explicitly to break that asymmetry; query via
+        /// `aspens-cli signer-public-key --chain-network <network>`.
+        #[arg(long)]
+        instance_signer_address: Option<String>,
     },
 
     /// Delete a chain from the configuration
@@ -651,6 +664,7 @@ async fn run() -> Result<()> {
             factory_address,
             permit2_address,
             explorer_url,
+            instance_signer_address,
         } => {
             let jwt = get_jwt()?;
             info!("Setting chain: {} ({})", canonical_name, network);
@@ -660,7 +674,7 @@ async fn run() -> Result<()> {
                 canonical_name,
                 network: network.clone(),
                 chain_id,
-                instance_signer_address: String::new(), // Derived server-side
+                instance_signer_address: instance_signer_address.unwrap_or_default(),
                 explorer_url,
                 rpc_url,
                 factory_address,
