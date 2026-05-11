@@ -106,6 +106,29 @@ pub fn parse_decimal_amount_u64(amount: &str, decimals: u32) -> Result<u64> {
     })
 }
 
+/// Inverse of [`parse_decimal_amount`]: format a raw `u128` integer in
+/// `decimals` scale as a human-readable decimal string suitable to feed
+/// back into the CLI's buy-limit / sell-limit (or any caller that
+/// expects a human-readable amount and then re-scales via
+/// `parse_decimal_amount`). Trailing zeros are preserved so the
+/// width-padded fractional part round-trips byte-for-byte through
+/// `parse_decimal_amount`. `decimals == 0` returns the integer
+/// stringified.
+pub fn format_decimal_amount(raw: u128, decimals: u32) -> String {
+    if decimals == 0 {
+        return raw.to_string();
+    }
+    let scale = 10u128.pow(decimals);
+    let int_part = raw / scale;
+    let frac_part = raw % scale;
+    format!(
+        "{}.{:0width$}",
+        int_part,
+        frac_part,
+        width = decimals as usize
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

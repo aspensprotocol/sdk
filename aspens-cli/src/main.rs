@@ -319,6 +319,93 @@ fn dispatch_send_order(
         .map_err(|e| eyre::eyre!(format_error(&e, &context)))
 }
 
+/// Resolve a slippage-capped limit price for the `buy-marketable` /
+/// `sell-marketable` CLI commands.
+///
+/// Snapshots the resting orderbook for `market` (short collection
+/// window — 1.5s is enough for the matching engine to flush its
+/// historical-open-orders burst), reads the top-of-book on the side
+/// the user will be taking from, applies a basis-points slippage cap,
+/// and returns the resulting limit price as a human-readable decimal
+/// string fed back into `dispatch_send_order` (which re-scales via
+/// the existing `convert_to_pair_decimals` path on the way to the
+/// gRPC `SendOrderRequest`).
+///
+/// Why this is a wrapper: the gasless cross-chain protocol rejects
+/// `buy-market` / `sell-market` at the SDK layer (see
+/// `gasless::resolve_order` — true market orders can't pre-commit a
+/// lock amount the contract will verify). Marketable-limit is the
+/// supported equivalent — it commits the user to an explicit price
+/// ceiling / floor that the contract can verify, and the slippage
+/// cap is how the user controls "how aggressively will I cross the
+/// spread".
+fn resolve_marketable_price(
+    executor: &DirectExecutor,
+    client: &AspensClient,
+    market_id: &str,
+    side: Side,
+    slippage_bps: u32,
+) -> Result<String> {
+    let stack_url = client.stack_url().to_string();
+
+    // Need the market's pair_decimals to format the raw pair-scale
+    // price back to a human-readable string. `dispatch_send_order`
+    // will re-scale via `convert_to_pair_decimals` on the way out;
+    // round-tripping through human-readable form keeps the API
+    // surface consistent with what users see from the buy-limit /
+    // sell-limit commands.
+    let config = executor
+        .execute(aspens::commands::config::get_config(stack_url.clone()))
+        .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
+    let market = send_order::lookup_market(&config, market_id)
+        .map_err(|e| eyre::eyre!("lookup market {market_id}: {e}"))?;
+    let pair_decimals = market.pair_decimals as u32;
+
+    let collection_window = std::time::Duration::from_millis(1_500);
+    let top = executor
+        .execute(stream_orderbook::fetch_top_of_book(
+            stack_url,
+            market.market_id.clone(),
+            collection_window,
+        ))
+        .map_err(|e| eyre::eyre!(format_error(&e, "fetch top-of-book")))?;
+
+    let (is_buy, reference, label) = match side {
+        Side::Bid => (
+            true,
+            top.best_ask.ok_or_else(|| {
+                eyre::eyre!(
+                    "no resting asks on {} — cannot compute a marketable buy price. \
+                         Place a limit buy at a price you're willing to pay.",
+                    market_id
+                )
+            })?,
+            "best ask",
+        ),
+        Side::Ask => (
+            false,
+            top.best_bid.ok_or_else(|| {
+                eyre::eyre!(
+                    "no resting bids on {} — cannot compute a marketable sell price. \
+                         Place a limit sell at a price you're willing to accept.",
+                    market_id
+                )
+            })?,
+            "best bid",
+        ),
+        Side::Unspecified => return Err(eyre::eyre!("side must be Bid or Ask")),
+    };
+
+    let raw_capped = stream_orderbook::apply_slippage(reference, slippage_bps, is_buy)
+        .map_err(|e| eyre::eyre!("apply slippage: {e}"))?;
+    let price = aspens::decimals::format_decimal_amount(raw_capped, pair_decimals);
+    info!(
+        "marketable price resolved: {} = {} (raw {}), slippage cap {} bps -> limit price {} (raw {})",
+        label, reference, reference, slippage_bps, price, raw_capped
+    );
+    Ok(price)
+}
+
 /// Convert a human-readable token amount (e.g. `"10.5"`) to base units
 /// using the token's `decimals` from the chain config. Centralised here
 /// so deposit and withdraw share identical parsing + lookup behaviour.
@@ -430,6 +517,34 @@ enum Commands {
         amount: String,
         /// Limit price for the order
         price: String,
+    },
+    /// Marketable BUY: snapshot the resting book, cap slippage off the
+    /// best ask, submit as a buy-limit. The gasless cross-chain
+    /// protocol rejects true market orders (no honest amount to sign at
+    /// price-unknown time) — this helper turns "take the top of book
+    /// with a 0.5% slippage cap" into the equivalent priced order.
+    BuyMarketable {
+        /// Market ID to trade on
+        market: String,
+        /// Amount to buy (human-readable)
+        amount: String,
+        /// Maximum slippage above best ask, in basis points
+        /// (10_000 = 100%). Default 50 = 0.5%.
+        #[arg(long, default_value_t = 50)]
+        slippage_bps: u32,
+    },
+    /// Marketable SELL: snapshot the resting book, cap slippage off
+    /// the best bid, submit as a sell-limit. See `buy-marketable` for
+    /// the rationale.
+    SellMarketable {
+        /// Market ID to trade on
+        market: String,
+        /// Amount to sell (human-readable)
+        amount: String,
+        /// Maximum slippage below best bid, in basis points
+        /// (10_000 = 100%). Default 50 = 0.5%.
+        #[arg(long, default_value_t = 50)]
+        slippage_bps: u32,
     },
     /// Cancel an existing order by its ID
     CancelOrder {
@@ -631,6 +746,44 @@ async fn run() -> Result<()> {
                 dispatch_send_order(&executor, &client, market, Side::Ask, amount, Some(price))?;
             info!(
                 "Limit sell order sent successfully (order_id: {})",
+                result.order_id
+            );
+            log_tx_hashes(&result.get_formatted_transaction_hashes());
+        }
+        Commands::BuyMarketable {
+            market,
+            amount,
+            slippage_bps,
+        } => {
+            let price =
+                resolve_marketable_price(&executor, &client, &market, Side::Bid, slippage_bps)?;
+            info!(
+                "Sending marketable BUY for {amount} on {market} (slippage cap {} bps -> price {})",
+                slippage_bps, price
+            );
+            let result =
+                dispatch_send_order(&executor, &client, market, Side::Bid, amount, Some(price))?;
+            info!(
+                "Marketable buy order sent successfully (order_id: {})",
+                result.order_id
+            );
+            log_tx_hashes(&result.get_formatted_transaction_hashes());
+        }
+        Commands::SellMarketable {
+            market,
+            amount,
+            slippage_bps,
+        } => {
+            let price =
+                resolve_marketable_price(&executor, &client, &market, Side::Ask, slippage_bps)?;
+            info!(
+                "Sending marketable SELL for {amount} on {market} (slippage cap {} bps -> price {})",
+                slippage_bps, price
+            );
+            let result =
+                dispatch_send_order(&executor, &client, market, Side::Ask, amount, Some(price))?;
+            info!(
+                "Marketable sell order sent successfully (order_id: {})",
                 result.order_id
             );
             log_tx_hashes(&result.get_formatted_transaction_hashes());
