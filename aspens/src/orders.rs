@@ -108,6 +108,22 @@ pub struct GaslessLockParams<'a> {
 /// - base58 32-byte pubkey (Solana mints, etc.); must decode to exactly
 ///   32 bytes. Requires the `solana` feature.
 ///
+/// ## Hex vs. base58 disambiguation
+///
+/// The base58 alphabet `[1-9A-HJ-NP-Za-km-z]` overlaps with hex at
+/// `[1-9a-fA-F]`. A string composed entirely of that intersection is
+/// syntactically valid as either — for example the Solana System Program
+/// pubkey `"11111111111111111111111111111111"` (32 chars of `'1'`) is
+/// both valid base58 (decoding to 32 zero bytes) and valid hex (decoding
+/// to 16 bytes of `0x11`).
+///
+/// To handle these without surprising Solana callers, an input *without*
+/// the `0x` prefix is tried as base58 first; we accept it only if base58
+/// decodes to **exactly 32 bytes**. Other base58 lengths (16-byte
+/// vanity addresses, short pubkeys, etc.) fall through to the hex path,
+/// which preserves backwards compatibility for bare-hex EVM addresses.
+/// A `0x` prefix forces the hex path unconditionally.
+///
 /// Errors on inputs that decode to >32 bytes or are otherwise unparseable.
 ///
 /// **Parity:** mirrors
@@ -120,48 +136,37 @@ pub fn parse_destination_token_bytes32(token: &str) -> Result<[u8; 32]> {
         return Err(eyre!("empty destination token"));
     }
 
-    // Hex path (with or without 0x prefix). All-hex falls through here;
-    // anything else punts to base58.
-    let hex_body = trimmed.strip_prefix("0x").unwrap_or(trimmed);
-    if !hex_body.is_empty()
-        && hex_body.len() <= 64
-        && hex_body.chars().all(|c| c.is_ascii_hexdigit())
-    {
-        let normalized = if hex_body.len().is_multiple_of(2) {
-            hex_body.to_string()
-        } else {
-            format!("0{hex_body}")
-        };
-        let raw = hex::decode(&normalized)
-            .map_err(|e| eyre!("invalid hex token '{}': {}", trimmed, e))?;
-        if raw.len() > 32 {
-            return Err(eyre!(
-                "hex token '{}' decodes to {} bytes; max 32",
-                trimmed,
-                raw.len()
-            ));
-        }
-        let mut out = [0u8; 32];
-        out[32 - raw.len()..].copy_from_slice(&raw);
-        return Ok(out);
+    // `0x` prefix forces hex — base58 can never start with `0x` anyway
+    // (`0` is not in the base58 alphabet).
+    if let Some(hex_body) = trimmed.strip_prefix("0x") {
+        return decode_hex_to_bytes32(hex_body, trimmed);
     }
 
-    // Base58 path — gated on `solana` since that's what brings `bs58` in.
+    // Unprefixed input: prefer a successful 32-byte base58 decode. This
+    // is the only way to disambiguate inputs that are valid as both
+    // (e.g. the 32-char all-`'1'` Solana System Program pubkey).
+    #[cfg(feature = "solana")]
+    if let Ok(raw) = bs58::decode(trimmed).into_vec() {
+        if raw.len() == 32 {
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&raw);
+            return Ok(out);
+        }
+    }
+
+    // Not a 32-byte base58 (or `solana` feature off). Fall back to hex.
+    if !trimmed.is_empty() && trimmed.len() <= 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return decode_hex_to_bytes32(trimmed, trimmed);
+    }
+
     #[cfg(feature = "solana")]
     {
-        let raw = bs58::decode(trimmed)
-            .into_vec()
-            .map_err(|e| eyre!("invalid base58 token '{}': {}", trimmed, e))?;
-        if raw.len() != 32 {
-            return Err(eyre!(
-                "base58 token '{}' decodes to {} bytes; expected 32",
-                trimmed,
-                raw.len()
-            ));
-        }
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&raw);
-        Ok(out)
+        Err(eyre!(
+            "destination token '{}' is neither a 32-byte base58 pubkey nor a valid \
+             hex string of ≤32 bytes",
+            trimmed
+        ))
     }
 
     #[cfg(not(feature = "solana"))]
@@ -169,6 +174,35 @@ pub fn parse_destination_token_bytes32(token: &str) -> Result<[u8; 32]> {
         "non-hex destination token '{}' requires the `solana` feature",
         trimmed
     ))
+}
+
+/// Hex → left-padded `[u8; 32]`. Shared between the `0x`-prefixed and
+/// bare-hex fallback paths. `display` is the original string used for
+/// error messages so the operator sees what they actually passed in.
+fn decode_hex_to_bytes32(hex_body: &str, display: &str) -> Result<[u8; 32]> {
+    if hex_body.is_empty() {
+        return Err(eyre!("empty hex body in '{}'", display));
+    }
+    if hex_body.len() > 64 {
+        return Err(eyre!(
+            "hex token '{}' has {} hex chars; max 64 (32 bytes)",
+            display,
+            hex_body.len()
+        ));
+    }
+    if !hex_body.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(eyre!("hex token '{}' contains non-hex characters", display));
+    }
+    let normalized = if hex_body.len().is_multiple_of(2) {
+        hex_body.to_string()
+    } else {
+        format!("0{hex_body}")
+    };
+    let raw =
+        hex::decode(&normalized).map_err(|e| eyre!("invalid hex token '{}': {}", display, e))?;
+    let mut out = [0u8; 32];
+    out[32 - raw.len()..].copy_from_slice(&raw);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -244,5 +278,27 @@ mod tests {
     fn parse_rejects_empty() {
         assert!(parse_destination_token_bytes32("").is_err());
         assert!(parse_destination_token_bytes32("   ").is_err());
+    }
+
+    /// Regression: Solana's System Program / null pubkey base58-encodes as
+    /// 32 `'1'` characters, which is *also* syntactically valid hex (16
+    /// bytes of `0x11`). Previously the hex path won and silently
+    /// truncated. The unprefixed input must decode as base58 → 32 zero
+    /// bytes; the `0x`-prefixed form must still go down the hex path.
+    /// Mirrors the same regression test in chain-traits.
+    #[cfg(feature = "solana")]
+    #[test]
+    fn parse_ambiguous_base58_zero_pubkey_decodes_as_base58() {
+        let zero_pubkey_base58 = bs58::encode([0u8; 32]).into_string();
+        assert_eq!(zero_pubkey_base58, "11111111111111111111111111111111");
+
+        let parsed = parse_destination_token_bytes32(&zero_pubkey_base58).unwrap();
+        assert_eq!(parsed, [0u8; 32], "unprefixed 32-byte base58 wins");
+
+        let with_prefix = format!("0x{}", zero_pubkey_base58);
+        let parsed = parse_destination_token_bytes32(&with_prefix).unwrap();
+        let mut expected = [0u8; 32];
+        expected[16..].copy_from_slice(&[0x11u8; 16]);
+        assert_eq!(parsed, expected, "0x prefix forces hex");
     }
 }
