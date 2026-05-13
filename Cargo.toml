@@ -17,15 +17,15 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Blockchain & Ethereum
-alloy = { version = "2.0.0", default-features = false, features = ["contract", "network", "providers", "reqwest", "reqwest-rustls-tls", "rpc-types", "signer-local", "signers", "sol-types"] }
+alloy = { version = "2.0.4", default-features = false, features = ["contract", "network", "providers", "reqwest", "reqwest-rustls-tls", "rpc-types", "signer-local", "signers", "sol-types"] }
 # Direct sub-crate deps for lean signing builds (no provider / transport /
 # rpc-client machinery). The `alloy` umbrella stays behind the `client`
 # feature for call sites that need RPC.
 alloy-primitives = "1.5.7"
-alloy-signer = "2.0.0"
-alloy-signer-local = "2.0.0"
-alloy-chains = "0.2.30"
-alloy-contract = "2.0.0"
+alloy-signer = "2.0.4"
+alloy-signer-local = "2.0.4"
+alloy-chains = "0.2.34"
+alloy-contract = "2.0.4"
 alloy-sol-types = { version = "1.5.7", features = ["json"] }
 
 # Solana
@@ -38,16 +38,16 @@ solana-keypair = "3.1"
 bs58 = "0.5"
 ed25519-dalek = "2"
 borsh = { version = "1.6.1", features = ["derive"] }
-sha2 = "0.10"
+sha2 = "0.11"
 
 # gRPC & Protobuf
-tonic = { version = "0.14.5", default-features = false, features = ["codegen", "transport", "tls-native-roots", "tls-ring"] }
-tonic-reflection = "0.14.5"
-tonic-prost = "0.14.5"
+tonic = { version = "0.14.6", default-features = false, features = ["codegen", "transport", "tls-native-roots", "tls-ring"] }
+tonic-reflection = "0.14.6"
+tonic-prost = "0.14.6"
 prost = "0.14.3"
 
 # Async runtime
-tokio = { version = "1.52.1", features = ["rt-multi-thread"] }
+tokio = { version = "1.52.3", features = ["rt-multi-thread"] }
 tokio-stream = "0.1"
 futures = "0.3"
 
@@ -57,7 +57,7 @@ serde_json = "1.0"
 toml = "1.1.2"
 
 # CLI (only for binaries)
-clap = { version = "4.6.0", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 clap-repl = "0.3.2"
 clap-verbosity = "2.1.0"
 
@@ -74,8 +74,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Build dependencies
-tonic-build = "0.14.5"
-tonic-prost-build = "0.14.5"
+tonic-build = "0.14.6"
+tonic-prost-build = "0.14.6"
 
 # Dev dependencies
 tempfile = "3.27.0"
