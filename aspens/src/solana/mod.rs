@@ -36,6 +36,13 @@ pub mod seeds {
     pub const ORDER_SEED: &[u8] = b"order";
     /// Seed for the per-instance SPL token vault authority / account.
     pub const INSTANCE_VAULT_SEED: &[u8] = b"instance_vault";
+    /// Seed for the permanent UsedNonce tombstone written by `open_for`.
+    /// Prevents replay of a gasless signature after the corresponding Order
+    /// PDA is closed by `unlock_for_canceled`.
+    pub const USED_NONCE_SEED: &[u8] = b"used_nonce";
+    /// Seed for the per-(instance, mint) FeeAccrual PDA — running total of
+    /// settle-time fees awaiting `sweep_fees`.
+    pub const FEE_ACCRUAL_SEED: &[u8] = b"fee_accrual";
 }
 
 /// Sysvar Rent — `"SysvarRent111111111111111111111111111111111"`.
@@ -129,6 +136,39 @@ pub fn derive_user_balance_pda(
             user.as_ref(),
             mint.as_ref(),
         ],
+        program_id,
+    )
+}
+
+/// Derive the permanent `UsedNonce` tombstone PDA written by `open_for`.
+/// Seeds: `[USED_NONCE_SEED, instance, user, order_id]`.
+pub fn derive_used_nonce_pda(
+    instance: &Pubkey,
+    user: &Pubkey,
+    order_id: &[u8; 32],
+    program_id: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            seeds::USED_NONCE_SEED,
+            instance.as_ref(),
+            user.as_ref(),
+            order_id.as_ref(),
+        ],
+        program_id,
+    )
+}
+
+/// Derive the per-(instance, mint) `FeeAccrual` PDA — the running total of
+/// settle-time protocol fees awaiting `sweep_fees`. Seeds:
+/// `[FEE_ACCRUAL_SEED, instance, mint]`.
+pub fn derive_fee_accrual_pda(
+    instance: &Pubkey,
+    mint: &Pubkey,
+    program_id: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[seeds::FEE_ACCRUAL_SEED, instance.as_ref(), mint.as_ref()],
         program_id,
     )
 }

@@ -260,6 +260,14 @@ Quick checklist before running `aspens-admin set-token`:
 
 If any of these checks fails, **do not add the token**. Common safe examples: USDC, USDT (on chains where USDT does not enable fee-on-transfer), WBTC, WETH, DAI, most stablecoins.
 
+### Solana-specific notes
+
+The on-chain `midrib` program uses the **legacy SPL Token program**, not Token-2022. Mints owned by the Token-2022 program (`TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`) will fail deserialization at every entry point — by design, since Token-2022's transfer-fee, interest-bearing, and confidential-transfer extensions would all break the program's `deposited += amount` accounting.
+
+For gasless `open_for` flows the user signs an `OpenForSignedPayload` with an `args.deadline` slot. Pick this tight — `current_slot + 600` (~4 minutes at 400ms slots) is a sensible default. The on-chain `UsedNonce` tombstone guarantees a signed payload is single-use regardless of deadline, but a tight deadline limits the window between user-signs and arborter-submits.
+
+
+
 ## Documentation
 
 - [Decimal Conversion Guide](decimals.md) - Understanding decimal handling
