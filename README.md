@@ -240,6 +240,26 @@ Administrative CLI for managing stack configuration with EIP-712 signature authe
 
 Aspens handles tokens with different decimal places across chains. The SDK works in "pair decimals" format internally. See `decimals.md` for detailed conversion examples.
 
+## Token Assumptions
+
+**Important:** Aspens only supports tokens with **standard ERC-20 / SPL semantics**. Adding a non-compliant token to a market — via `aspens-admin set-token` or the admin-console — will produce incorrect balances, fee leakage, or stuck funds. The contracts do **not** detect non-compliant tokens; gating happens here, in market configuration.
+
+A token is safe to add **only if all of the following hold**:
+
+- **Standard transfer semantics.** A `transfer(to, amount)` reduces the sender's balance by exactly `amount`. No transfer hooks that re-enter or opportunistically revert.
+- **No fee-on-transfer.** Tokens that charge a fee on transfer (reflection tokens, deflationary tokens) silently shift cost onto the user's existing `tradeBalance` during `_depositAndLock`, cause the Aspens vault to under-collect fees, and under-deliver `SETTLE_AND_WITHDRAW` payouts.
+- **No rebasing.** Tokens whose balances change between two reads of `balanceOf` (AMPL-style, aTokens in rebase mode) break the `balanceBefore`/`balanceAfter` reconciliation used throughout the contract. Use the wrapped, non-rebasing variant (e.g. wstETH, not stETH).
+- **No supply-pause that strands open orders.** Pausable tokens are tolerable as long as pauses are short-lived; pauses of a duration longer than the cancel-and-unlock window can strand `lockedTradeBalance` until the pause lifts.
+- **Blocklist tokens (USDC-style) are accepted with caveats.** Funds remain correctly accounted for, but a blocklisted address cannot withdraw or settle out until removed from the list.
+
+Quick checklist before running `aspens-admin set-token`:
+
+1. Read the token's `transfer` implementation — confirm `_balances[from] -= amount` is the only debit.
+2. Run a probe transfer (any amount) and check `balanceAfter == balanceBefore - amount` on both sides.
+3. Confirm `balanceOf` is a pure function of stored state, not a function of total supply.
+
+If any of these checks fails, **do not add the token**. Common safe examples: USDC, USDT (on chains where USDT does not enable fee-on-transfer), WBTC, WETH, DAI, most stablecoins.
+
 ## Documentation
 
 - [Decimal Conversion Guide](decimals.md) - Understanding decimal handling
