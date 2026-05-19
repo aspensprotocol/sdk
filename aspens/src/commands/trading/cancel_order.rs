@@ -82,14 +82,18 @@ pub async fn call_cancel_order_with_wallet(
     let mut buffer = Vec::new();
     order_to_cancel.encode(&mut buffer)?;
 
-    // Sign the cancel request. Wire format takes the first 64 signature bytes
-    // (Ed25519 is 64 bytes; secp256k1 r||s without v).
+    // Sign the cancel request. Send the full curve-native length — the
+    // arborter's curve-aware verifier requires exactly 64 bytes for
+    // Ed25519 and 65 for secp256k1 (r||s||v). Previously this code
+    // truncated to 64 unconditionally, which dropped the v byte for EVM
+    // signatures and would fail verification once the server starts
+    // enforcing it.
     let signature_bytes = wallet.sign_message(&buffer).await?;
 
     // Create the request
     let request = CancelOrderRequest {
         order: Some(order_to_cancel),
-        signature_hash: signature_bytes[..64].to_vec(),
+        signature_hash: signature_bytes,
     };
 
     // Create a tonic request
