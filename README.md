@@ -17,9 +17,9 @@ workspace and are built from source.
 | `deposit <network> <token> <amount>` | Deposit tokens to make them available for trading |
 | `withdraw <network> <token> <amount>` | Withdraw tokens to a local wallet |
 | `buy-market <market> <amount>` | Send a market BUY order (executes at best available price) |
-| `buy-limit <market> <amount> <price>` | Send a limit BUY order (executes at specified price or better) |
+| `buy-limit <market> <amount> <price> [--post-only]` | Send a limit BUY order (executes at specified price or better). With `--post-only`, the order is rejected if it would cross at submission — guarantees maker-side execution. |
 | `sell-market <market> <amount>` | Send a market SELL order (executes at best available price) |
-| `sell-limit <market> <amount> <price>` | Send a limit SELL order (executes at specified price or better) |
+| `sell-limit <market> <amount> <price> [--post-only]` | Send a limit SELL order (executes at specified price or better). See `--post-only` above. |
 | `cancel-order <market> <side> <order_id>` | Cancel an existing order by its ID |
 | `stream-orderbook <market> [--historical] [--trader <addr>]` | Stream orderbook entries in real-time |
 | `stream-trades <market> [--historical] [--trader <addr>]` | Stream executed trades in real-time |
@@ -158,6 +158,46 @@ cargo run --bin aspens-cli -- balance
 cargo run --bin aspens-cli -- deposit base-sepolia USDC 1000
 cargo run --bin aspens-cli -- buy-market USDC/USDT 100
 ```
+
+### Post-only orders
+
+Pass `--post-only` to `buy-limit` / `sell-limit` to guarantee your order
+adds liquidity rather than taking it. If the price would cross the
+opposing side of the book at submission, arborter returns
+`FAILED_PRECONDITION` and **does not** lock funds on-chain — no gas is
+spent and your gasless signature stays unused, so you can resubmit at a
+different price.
+
+```bash
+# Post a maker-only bid at 100. If the best ask is ≤ 100, the order
+# is rejected and you can retry at 99 (or below).
+aspens-cli buy-limit USDC/USDT 1.5 100 --post-only
+
+# Same on the sell side: rejected if there's a resting bid at ≥ 200.
+aspens-cli sell-limit USDC/USDT 1.5 200 --post-only
+```
+
+In Rust:
+
+```rust
+use aspens::commands::trading::send_order;
+
+let response = send_order::send_order_with_wallet(
+    stack_url,
+    market_id,
+    1,                     // 1 = BUY
+    "1.5".into(),          // quantity
+    Some("100".into()),    // limit price (required for post-only)
+    &wallet,
+    config,
+    true,                  // post_only
+).await?;
+```
+
+Post-only is incompatible with market orders (the SDK pre-rejects
+`post_only=true` with `price=None` before signing) and with the
+`buy-marketable` / `sell-marketable` CLI variants (which are designed
+to cross — the CLI hard-codes `post_only=false` for them).
 
 ### 4. Admin CLI
 

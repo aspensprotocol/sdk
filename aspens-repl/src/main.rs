@@ -407,6 +407,11 @@ enum ReplCommand {
         amount: String,
         /// Limit price for the order
         price: String,
+        /// Post-only: reject the order if it would cross at submission.
+        /// Use this to guarantee maker-side execution; arborter returns
+        /// FAILED_PRECONDITION (no on-chain lock) if it would cross.
+        #[arg(long)]
+        post_only: bool,
     },
     /// Send a market SELL order (executes at best available price)
     SellMarket {
@@ -423,6 +428,9 @@ enum ReplCommand {
         amount: String,
         /// Limit price for the order
         price: String,
+        /// Post-only: see `buy-limit --post-only`.
+        #[arg(long)]
+        post_only: bool,
     },
     /// Cancel an existing order by its ID
     CancelOrder {
@@ -677,6 +685,7 @@ fn main() {
                 None, // No limit price (market order)
                 privkey,
                 config,
+                false, // post_only meaningless for market orders
             )) {
                 Ok(result) => {
                     info!(
@@ -701,8 +710,12 @@ fn main() {
             market,
             amount,
             price,
+            post_only,
         } => {
-            info!("Sending limit BUY order for {amount} at price {price} on market {market}");
+            info!(
+                "Sending limit BUY order for {amount} at price {price} on market {market} \
+                 (post_only={post_only})"
+            );
 
             // Fetch configuration from server
             let config = match app_state.get_config_sync() {
@@ -729,6 +742,7 @@ fn main() {
                 Some(price.clone()),
                 privkey,
                 config,
+                post_only,
             )) {
                 Ok(result) => {
                     info!(
@@ -780,6 +794,7 @@ fn main() {
                 None, // No limit price (market order)
                 privkey,
                 config,
+                false, // post_only meaningless for market orders
             )) {
                 Ok(result) => {
                     info!(
@@ -804,8 +819,12 @@ fn main() {
             market,
             amount,
             price,
+            post_only,
         } => {
-            info!("Sending limit SELL order for {amount} at price {price} on market {market}");
+            info!(
+                "Sending limit SELL order for {amount} at price {price} on market {market} \
+                 (post_only={post_only})"
+            );
 
             // Fetch configuration from server
             let config = match app_state.get_config_sync() {
@@ -832,6 +851,7 @@ fn main() {
                 Some(price.clone()),
                 privkey,
                 config,
+                post_only,
             )) {
                 Ok(result) => {
                     info!(

@@ -17,8 +17,9 @@ aspens-cli balance
 aspens-cli deposit anvil-1 USDC 1000000
 
 # 4. Trade
-aspens-cli buy-limit <MARKET_ID> 1.5 100.50    # limit buy: quantity, price
-aspens-cli sell-market <MARKET_ID> 0.5          # market sell: quantity
+aspens-cli buy-limit <MARKET_ID> 1.5 100.50               # limit buy: quantity, price
+aspens-cli buy-limit <MARKET_ID> 1.5 100.50 --post-only   # maker-only: rejected if it would cross
+aspens-cli sell-market <MARKET_ID> 0.5                    # market sell: quantity
 
 # 5. Withdraw tokens back to your wallet
 aspens-cli withdraw anvil-1 USDC 500000
@@ -37,6 +38,7 @@ aspens> config
 aspens> balance
 aspens> deposit anvil-1 USDC 1000000
 aspens> buy-limit <MARKET_ID> 1.5 100.50
+aspens> buy-limit <MARKET_ID> 1.5 100.50 --post-only
 aspens> withdraw anvil-1 USDC 500000
 aspens> quit
 ```
@@ -65,4 +67,5 @@ aspens> quit
 - **Deposit/withdraw amounts** are in the token's smallest unit (e.g., `1000000` = 1 USDC with 6 decimals)
 - **Order quantities and prices** are human-readable strings (e.g., `"1.5"`, `"100.50"`) — the SDK converts to pair decimals automatically
 - **Market IDs** follow the format: `chain_network::token_address::chain_network::token_address`
+- **`--post-only`** on `buy-limit`/`sell-limit` rejects the order if it would cross at submission (no on-chain lock, no gas spent) — use it to guarantee maker-side execution
 - Run `aspens-cli config` to see available chains, tokens, and markets

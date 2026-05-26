@@ -125,6 +125,7 @@ async fn send_order_roundtrip_against_live_stack() -> Result<()> {
         price,
         &wallet,
         config,
+        false, // post_only — live happy-path test exercises the regular take-or-rest flow
     )
     .await?;
 
