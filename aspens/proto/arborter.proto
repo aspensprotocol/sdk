@@ -121,6 +121,13 @@ message Order {
   ExecutionType execution_type = 7;
   // When execution_type == 'discretionary', include order_ids to match with.
   repeated uint64 matching_order_ids = 8;
+  // Post-only: if true, the order MUST rest on the book. If it would
+  // cross any opposing confirmed order at submission time the request
+  // is rejected with FAILED_PRECONDITION and no on-chain lock is
+  // performed. Limit orders only — incompatible with market (no price)
+  // and with DISCRETIONARY execution_type. Defaults to false, which
+  // preserves legacy take-or-rest behavior.
+  bool post_only = 9;
 }
 
 enum Side {
@@ -240,4 +247,7 @@ message OrderbookEntry {
   string market_id = 8;
   // The actual state of the order (Pending, Confirmed, Matched, Canceled, Settled)
   OrderState state = 9;
+  // Mirrors Order.post_only for the resting order. Lets streaming
+  // clients distinguish post-only liquidity from regular limits.
+  bool post_only = 10;
 }
