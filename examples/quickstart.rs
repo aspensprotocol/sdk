@@ -48,6 +48,11 @@ fn main() -> Result<()> {
     // ── 4. Trade ────────────────────────────────────────────────────────
     // Place a limit BUY order: buy 1.5 at price 100.50 on the given market.
     // Amounts are human-readable strings; the SDK converts to pair decimals.
+    //
+    // The last arg, `post_only`, when true asks arborter to reject the
+    // order (with FAILED_PRECONDITION, no on-chain lock) if the price
+    // would cross at submission. Use it for guaranteed maker-side
+    // execution; leave it false for the normal take-or-rest behavior.
     let market_id = "your-market-id"; // replace with an actual market ID from `config`
     let result = executor.execute(send_order::send_order(
         stack_url.clone(),
@@ -57,6 +62,7 @@ fn main() -> Result<()> {
         Some("100.50".into()),   // limit price (None for market order)
         privkey.clone(),
         cfg.clone(),
+        false,                   // post_only
     ))?;
     println!("Order placed (order_id: {})", result.order_id);
 
