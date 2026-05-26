@@ -270,6 +270,7 @@ fn dispatch_send_order(
     side: Side,
     amount: String,
     price: Option<String>,
+    post_only: bool,
 ) -> Result<SendOrderResponse> {
     let stack_url = client.stack_url().to_string();
     let config = executor
@@ -313,6 +314,7 @@ fn dispatch_send_order(
                 price,
                 &wallets,
                 config,
+                post_only,
             )
             .await
         })
@@ -501,6 +503,12 @@ enum Commands {
         amount: String,
         /// Limit price for the order
         price: String,
+        /// Post-only: reject the order if it would cross at submission.
+        /// Guarantees you pay the maker side of the fee schedule and
+        /// never accidentally take. Arborter returns FAILED_PRECONDITION
+        /// (no on-chain lock, no gas spent) if the price would cross.
+        #[arg(long)]
+        post_only: bool,
     },
     /// Send a market SELL order (executes at best available price)
     SellMarket {
@@ -517,6 +525,9 @@ enum Commands {
         amount: String,
         /// Limit price for the order
         price: String,
+        /// Post-only: see `buy-limit --post-only`.
+        #[arg(long)]
+        post_only: bool,
     },
     /// Marketable BUY: snapshot the resting book, cap slippage off the
     /// best ask, submit as a buy-limit. The gasless cross-chain
@@ -706,7 +717,8 @@ async fn run() -> Result<()> {
         }
         Commands::BuyMarket { market, amount } => {
             info!("Sending market BUY order for {amount} on market {market}");
-            let result = dispatch_send_order(&executor, &client, market, Side::Bid, amount, None)?;
+            let result =
+                dispatch_send_order(&executor, &client, market, Side::Bid, amount, None, false)?;
             info!(
                 "Market buy order sent successfully (order_id: {})",
                 result.order_id
@@ -717,10 +729,21 @@ async fn run() -> Result<()> {
             market,
             amount,
             price,
+            post_only,
         } => {
-            info!("Sending limit BUY order for {amount} at price {price} on market {market}");
-            let result =
-                dispatch_send_order(&executor, &client, market, Side::Bid, amount, Some(price))?;
+            info!(
+                "Sending limit BUY order for {amount} at price {price} on market {market} \
+                 (post_only={post_only})"
+            );
+            let result = dispatch_send_order(
+                &executor,
+                &client,
+                market,
+                Side::Bid,
+                amount,
+                Some(price),
+                post_only,
+            )?;
             info!(
                 "Limit buy order sent successfully (order_id: {})",
                 result.order_id
@@ -729,7 +752,8 @@ async fn run() -> Result<()> {
         }
         Commands::SellMarket { market, amount } => {
             info!("Sending market SELL order for {amount} on market {market}");
-            let result = dispatch_send_order(&executor, &client, market, Side::Ask, amount, None)?;
+            let result =
+                dispatch_send_order(&executor, &client, market, Side::Ask, amount, None, false)?;
             info!(
                 "Market sell order sent successfully (order_id: {})",
                 result.order_id
@@ -740,10 +764,21 @@ async fn run() -> Result<()> {
             market,
             amount,
             price,
+            post_only,
         } => {
-            info!("Sending limit SELL order for {amount} at price {price} on market {market}");
-            let result =
-                dispatch_send_order(&executor, &client, market, Side::Ask, amount, Some(price))?;
+            info!(
+                "Sending limit SELL order for {amount} at price {price} on market {market} \
+                 (post_only={post_only})"
+            );
+            let result = dispatch_send_order(
+                &executor,
+                &client,
+                market,
+                Side::Ask,
+                amount,
+                Some(price),
+                post_only,
+            )?;
             info!(
                 "Limit sell order sent successfully (order_id: {})",
                 result.order_id
@@ -761,8 +796,17 @@ async fn run() -> Result<()> {
                 "Sending marketable BUY for {amount} on {market} (slippage cap {} bps -> price {})",
                 slippage_bps, price
             );
-            let result =
-                dispatch_send_order(&executor, &client, market, Side::Bid, amount, Some(price))?;
+            // Marketable orders are explicitly designed to cross — post-only
+            // would defeat the purpose, so we hard-code false.
+            let result = dispatch_send_order(
+                &executor,
+                &client,
+                market,
+                Side::Bid,
+                amount,
+                Some(price),
+                false,
+            )?;
             info!(
                 "Marketable buy order sent successfully (order_id: {})",
                 result.order_id
@@ -780,8 +824,15 @@ async fn run() -> Result<()> {
                 "Sending marketable SELL for {amount} on {market} (slippage cap {} bps -> price {})",
                 slippage_bps, price
             );
-            let result =
-                dispatch_send_order(&executor, &client, market, Side::Ask, amount, Some(price))?;
+            let result = dispatch_send_order(
+                &executor,
+                &client,
+                market,
+                Side::Ask,
+                amount,
+                Some(price),
+                false,
+            )?;
             info!(
                 "Marketable sell order sent successfully (order_id: {})",
                 result.order_id

@@ -142,6 +142,14 @@ pub struct Order {
     /// When execution_type == 'discretionary', include order_ids to match with.
     #[prost(uint64, repeated, tag = "8")]
     pub matching_order_ids: ::prost::alloc::vec::Vec<u64>,
+    /// Post-only: if true, the order MUST rest on the book. If it would
+    /// cross any opposing confirmed order at submission time the request
+    /// is rejected with FAILED_PRECONDITION and no on-chain lock is
+    /// performed. Limit orders only — incompatible with market (no price)
+    /// and with DISCRETIONARY execution_type. Defaults to false, which
+    /// preserves legacy take-or-rest behavior.
+    #[prost(bool, tag = "9")]
+    pub post_only: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Trade {
@@ -260,6 +268,10 @@ pub struct OrderbookEntry {
     /// The actual state of the order (Pending, Confirmed, Matched, Canceled, Settled)
     #[prost(enumeration = "OrderState", tag = "9")]
     pub state: i32,
+    /// Mirrors Order.post_only for the resting order. Lets streaming
+    /// clients distinguish post-only liquidity from regular limits.
+    #[prost(bool, tag = "10")]
+    pub post_only: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
