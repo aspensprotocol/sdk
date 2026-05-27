@@ -851,7 +851,7 @@ mod post_only_proto_tests {
         order_false.encode(&mut buf).unwrap();
 
         let decoded = Order::decode(&*buf).unwrap();
-        assert_eq!(decoded.post_only, false);
+        assert!(!decoded.post_only);
         assert_eq!(decoded, order_false);
     }
 
@@ -876,6 +876,6 @@ mod post_only_proto_tests {
 
         // And roundtripping post_only=true preserves the field.
         let decoded = Order::decode(&*buf_true).unwrap();
-        assert_eq!(decoded.post_only, true);
+        assert!(decoded.post_only);
     }
 }

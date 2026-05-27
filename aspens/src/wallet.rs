@@ -175,13 +175,13 @@ pub fn load_trader_wallet(curve: CurveType) -> Result<Wallet> {
     }
 }
 
-/// Map a chain's architecture to the curve its keys live on.
-///
-// Note: the three helpers below take generated proto types from
+// The three helpers below take generated proto types from
 // `crate::commands::config`, which only exists under the `client`
 // feature. They are gated accordingly so lean-signing consumers
 // (`--no-default-features --features evm,solana`) can still build.
 
+/// Map a chain's architecture to the curve its keys live on.
+///
 /// Solana chains use Ed25519; everything else (EVM today, others in the
 /// future) uses secp256k1. Mirrors the dispatch in
 /// [`crate::chain_client::ChainClient::from_chain_config`] and the privileged

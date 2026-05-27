@@ -3,8 +3,8 @@
 //! Prerequisites:
 //!   1. A running Aspens Market Stack (e.g. http://localhost:50051)
 //!   2. A `.env` file with at least:
-//!        ASPENS_MARKET_STACK_URL=http://localhost:50051
-//!        TRADER_PRIVKEY=<your-64-char-hex-private-key>
+//!      ASPENS_MARKET_STACK_URL=http://localhost:50051
+//!      TRADER_PRIVKEY=<your-64-char-hex-private-key>
 //!
 //! Run:
 //!   cargo run --example quickstart
