@@ -341,32 +341,6 @@ pub fn derive_address(privkey: &str) -> Result<(Address, String)> {
     Ok((address, checksum))
 }
 
-/// Send an order using configuration from the server (EVM private key, legacy API).
-///
-/// This wraps `send_order_with_wallet` for backward compatibility. New callers
-/// should use `send_order_with_wallet` to support both EVM and Solana wallets.
-///
-/// `post_only`: when true, the order MUST rest on the book; arborter
-/// rejects it with FAILED_PRECONDITION (no on-chain lock) if it would
-/// cross at submission. Limit orders only — set false for market orders.
-#[allow(clippy::too_many_arguments)]
-pub async fn send_order(
-    url: String,
-    market_id: String,
-    side: i32,
-    quantity: String,
-    price: Option<String>,
-    privkey: String,
-    config: GetConfigResponse,
-    post_only: bool,
-) -> Result<SendOrderResponse> {
-    let wallet = Wallet::from_evm_hex(&privkey)?;
-    send_order_with_wallet(
-        url, market_id, side, quantity, price, &wallet, config, post_only,
-    )
-    .await
-}
-
 /// Send an order using a curve-agnostic wallet.
 ///
 /// Thin wrapper over [`send_order_with_wallets`] for the common case where

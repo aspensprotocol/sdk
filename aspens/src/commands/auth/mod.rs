@@ -74,18 +74,6 @@ pub async fn initialize_admin(url: String, address: String) -> Result<AuthToken>
     Ok(response.into_inner().into())
 }
 
-/// Authenticate with EIP-712 signature to obtain a JWT token (legacy EVM API).
-///
-/// Wraps `authenticate_with_wallet` for backward compatibility.
-pub async fn authenticate_with_signature(
-    url: String,
-    private_key: String,
-    chain_id: Option<u64>,
-) -> Result<AuthToken> {
-    let wallet = Wallet::from_evm_hex(&private_key)?;
-    authenticate_with_wallet(url, &wallet, chain_id).await
-}
-
 /// Authenticate with a curve-agnostic wallet to obtain a JWT token.
 ///
 /// - **EVM (Secp256k1)**: signs an EIP-712 typed data digest (existing behavior).

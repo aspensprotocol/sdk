@@ -9,7 +9,39 @@ change before 1.0.
 
 ## [Unreleased]
 
+### Removed (breaking, pre-1.0)
+- Retired the legacy `privkey: String` wrappers around the
+  curve-agnostic trading API. The `_with_wallet` (and `_with_wallets`)
+  family is the only public shape now. Specifically deleted:
+  - `commands::trading::send_order::send_order`
+  - `commands::trading::cancel_order::call_cancel_order`
+  - `commands::trading::cancel_order::call_cancel_order_from_config`
+  - `commands::trading::deposit::call_deposit_from_config`
+  - `commands::trading::withdraw::call_withdraw_from_config`
+  - `commands::trading::balance::balance_from_config`
+  - `commands::auth::authenticate_with_signature`
+- Deleted the legacy two-chain pretty-printer
+  `commands::trading::balance::balance` plus its private-key-derived
+  helpers (`call_get_balance`, `call_get_locked_balance`,
+  `call_get_erc20_balance`, `call_get_native_balance`) and the
+  `balance_table` helper. The address-based variants
+  (`call_get_*_for_address`) and `format_balance` are kept — they're
+  used by `aspens-admin`.
+- Removed the `chain_client::derive_associated_token_account`
+  re-export. The function still lives at
+  `aspens::solana::derive_associated_token_account`.
+
 ### Changed
+- `aspens-repl` and the `quickstart` example now use the curve-aware
+  `_with_wallet` API directly. The REPL constructs an EVM `Wallet`
+  from `TRADER_PRIVKEY` via a new `load_trader_wallet_or_complain`
+  helper; the example re-builds a `Wallet` inside each `async move`
+  block since `Wallet` is intentionally not `Clone` (Solana keypairs).
+- Binaries (`aspens-cli`, `aspens-repl`, `aspens-admin`) now declare the
+  `aspens` library features they depend on explicitly
+  (`client`, `evm`, `solana`, `formatting`, plus `admin` for the admin
+  binary) and turn off default-feature inheritance. Changes to the
+  `aspens` crate's default features no longer silently affect binaries.
 - Binaries (`aspens-cli`, `aspens-repl`, `aspens-admin`) now declare the
   `aspens` library features they depend on explicitly
   (`client`, `evm`, `solana`, `formatting`, plus `admin` for the admin

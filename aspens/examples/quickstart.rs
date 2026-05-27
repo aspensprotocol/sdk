@@ -7,11 +7,11 @@
 //!      TRADER_PRIVKEY=<your-64-char-hex-private-key>
 //!
 //! Run:
-//!   cargo run --example quickstart
+//!   cargo run -p aspens --example quickstart
 
 use aspens::commands::config;
 use aspens::commands::trading::{balance, deposit, send_order, withdraw};
-use aspens::{AspensClient, AsyncExecutor, BlockingExecutor};
+use aspens::{AspensClient, AsyncExecutor, BlockingExecutor, Wallet};
 use eyre::Result;
 
 fn main() -> Result<()> {
@@ -21,6 +21,9 @@ fn main() -> Result<()> {
     // Builds a client from .env (reads ASPENS_MARKET_STACK_URL automatically).
     let client = AspensClient::builder().build()?;
     let stack_url = client.stack_url().to_string();
+    // Hold the privkey as a String — `Wallet` is not Clone (Solana
+    // keypairs intentionally aren't), so we re-build a fresh `Wallet`
+    // inside each `async move` block below.
     let privkey = client
         .get_env("TRADER_PRIVKEY")
         .expect("TRADER_PRIVKEY must be set in .env")
@@ -31,18 +34,30 @@ fn main() -> Result<()> {
     println!("Connected to {}", stack_url);
 
     // ── 2. Check balances ───────────────────────────────────────────────
-    executor.execute(balance::balance_from_config(cfg.clone(), privkey.clone()))?;
+    let cfg_clone = cfg.clone();
+    let pk = privkey.clone();
+    executor.execute(async move {
+        let wallet = Wallet::from_evm_hex(&pk)?;
+        let wallets: [&Wallet; 1] = [&wallet];
+        balance::balance_from_config_with_wallets(cfg_clone, &wallets).await
+    })?;
 
     // ── 3. Deposit ──────────────────────────────────────────────────────
     // Deposit 1000 units of USDC on the "anvil-1" network.
     // The amount is in the token's smallest unit (e.g. 1000 = 0.001 USDC if 6 decimals).
-    executor.execute(deposit::call_deposit_from_config(
-        "anvil-1".into(),
-        "USDC".into(),
-        1000,
-        privkey.clone(),
-        cfg.clone(),
-    ))?;
+    let cfg_clone = cfg.clone();
+    let pk = privkey.clone();
+    executor.execute(async move {
+        let wallet = Wallet::from_evm_hex(&pk)?;
+        deposit::call_deposit_from_config_with_wallet(
+            "anvil-1".into(),
+            "USDC".into(),
+            1000,
+            &wallet,
+            cfg_clone,
+        )
+        .await
+    })?;
     println!("Deposit successful");
 
     // ── 4. Trade ────────────────────────────────────────────────────────
@@ -54,27 +69,38 @@ fn main() -> Result<()> {
     // would cross at submission. Use it for guaranteed maker-side
     // execution; leave it false for the normal take-or-rest behavior.
     let market_id = "your-market-id"; // replace with an actual market ID from `config`
-    let result = executor.execute(send_order::send_order(
-        stack_url.clone(),
-        market_id.into(),
-        1,                     // side: 1 = BUY, 2 = SELL
-        "1.5".into(),          // quantity
-        Some("100.50".into()), // limit price (None for market order)
-        privkey.clone(),
-        cfg.clone(),
-        false, // post_only
-    ))?;
+    let cfg_clone = cfg.clone();
+    let stack_url_clone = stack_url.clone();
+    let pk = privkey.clone();
+    let result = executor.execute(async move {
+        let wallet = Wallet::from_evm_hex(&pk)?;
+        send_order::send_order_with_wallet(
+            stack_url_clone,
+            market_id.into(),
+            1,                     // side: 1 = BUY, 2 = SELL
+            "1.5".into(),          // quantity
+            Some("100.50".into()), // limit price (None for market order)
+            &wallet,
+            cfg_clone,
+            false, // post_only
+        )
+        .await
+    })?;
     println!("Order placed (order_id: {})", result.order_id);
 
     // ── 5. Withdraw ─────────────────────────────────────────────────────
     // Withdraw 500 units of USDC back to your wallet.
-    executor.execute(withdraw::call_withdraw_from_config(
-        "anvil-1".into(),
-        "USDC".into(),
-        500,
-        privkey.clone(),
-        cfg,
-    ))?;
+    executor.execute(async move {
+        let wallet = Wallet::from_evm_hex(&privkey)?;
+        withdraw::call_withdraw_from_config_with_wallet(
+            "anvil-1".into(),
+            "USDC".into(),
+            500,
+            &wallet,
+            cfg,
+        )
+        .await
+    })?;
     println!("Withdrawal successful");
 
     Ok(())

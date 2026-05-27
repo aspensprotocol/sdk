@@ -40,21 +40,6 @@ impl CancelOrderResponse {
     }
 }
 
-/// Cancel an order by its ID (legacy API; takes EVM private key).
-///
-/// Wraps `call_cancel_order_with_wallet` for backward compatibility.
-pub async fn call_cancel_order(
-    url: String,
-    market_id: String,
-    side: i32,
-    token_address: String,
-    order_id: u64,
-    privkey: String,
-) -> Result<CancelOrderResponse> {
-    let wallet = Wallet::from_evm_hex(&privkey)?;
-    call_cancel_order_with_wallet(url, market_id, side, token_address, order_id, &wallet).await
-}
-
 /// Cancel an order using a curve-agnostic wallet (EVM or Solana).
 pub async fn call_cancel_order_with_wallet(
     url: String,
@@ -110,31 +95,15 @@ pub async fn call_cancel_order_with_wallet(
     Ok(response_data)
 }
 
-/// Cancel an order using configuration from the server
-///
-/// This is the recommended way to cancel orders. It uses the configuration
-/// to look up the market and derive the token address.
+/// Cancel an order using configuration from the server with a curve-agnostic wallet.
 ///
 /// # Arguments
 /// * `url` - The Aspens Market Stack URL
 /// * `market_id` - The market identifier from config
 /// * `side` - Order side ("buy" or "sell")
 /// * `order_id` - The internal order ID to cancel
-/// * `privkey` - The private key of the user's wallet
+/// * `wallet` - The user's wallet (EVM or Solana)
 /// * `config` - The configuration response from the server
-pub async fn call_cancel_order_from_config(
-    url: String,
-    market_id: String,
-    side: String,
-    order_id: u64,
-    privkey: String,
-    config: GetConfigResponse,
-) -> Result<CancelOrderResponse> {
-    let wallet = Wallet::from_evm_hex(&privkey)?;
-    call_cancel_order_from_config_with_wallet(url, market_id, side, order_id, &wallet, config).await
-}
-
-/// Cancel an order using configuration from the server with a curve-agnostic wallet.
 pub async fn call_cancel_order_from_config_with_wallet(
     url: String,
     market_id: String,
