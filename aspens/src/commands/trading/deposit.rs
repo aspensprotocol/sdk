@@ -6,9 +6,9 @@ use alloy_chains::NamedChain;
 use eyre::Result;
 use url::Url;
 
-use super::{MidribV2, IERC20};
 use crate::chain_client::ARCH_SOLANA;
 use crate::commands::config::config_pb::GetConfigResponse;
+use crate::evm::rpc::{MidribV2, IERC20};
 use crate::wallet::{CurveType, Wallet};
 
 /// Minimum gas balance required for transactions (0.0001 ETH = 100000 gwei)

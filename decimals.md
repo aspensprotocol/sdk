@@ -59,23 +59,39 @@ the test suite that pins them.
 "10.5"                          ← what you type
    │ aspens::decimals::parse_decimal_amount(amount, token.decimals)
    ▼
-10_500_000  (u64, base units)   ← what the lib hands to ERC-20 / SPL
+10_500_000  (u128 → u64)        ← what the lib hands to ERC-20 / SPL
                                   for deposit / withdraw
 
 "10.5"                          ← what you type for an order
-   │ convert_to_pair_decimals(amount, market.pair_decimals)
+   │ send_order::convert_to_pair_decimals(amount, market.pair_decimals)
    ▼
 10_500_000  (gRPC integer)      ← what arborter receives in SendOrder
-   │ normalize_decimals(quantity, pair_decimals, side_token_decimals)
+   │ gasless::resolve_order
+   │   └─ gasless::normalize(amount, pair_decimals[*2], token.decimals)
    ▼
-on-chain integer                ← what the trade contract locks / settles
+on-chain integer                ← what the user's signature commits to
+                                  for the on-chain lock / settle
 ```
 
-For BID (buy) orders the `quantity × price` quote-token leg is
-normalised to the **quote** token's decimals; for ASK (sell) orders the
-`quantity` base-token leg is normalised to the **base** token's
-decimals. See `commands/trading/send_order.rs` for the
-arborter-side mirror.
+Both legs of every order are normalised, not just one. For a Bid
+(side = 1, locks on the quote chain):
+
+- `amount_in` = `quantity × price` (in `pair_decimals × 2`) normalised to
+  the **input/quote** token's native decimals.
+- `amount_out` = `quantity` (in `pair_decimals`) normalised to the
+  **output/base** token's native decimals.
+
+For an Ask (side = 2, locks on the base chain) the roles flip:
+
+- `amount_in` = `quantity` normalised to the **input/base** token's decimals.
+- `amount_out` = `quantity × price` (in `pair_decimals × 2`) normalised to
+  the **output/quote** token's decimals.
+
+These are the integers the user's EIP-712 (EVM) or Ed25519 (Solana)
+signature binds; the on-chain contract recomputes them and rejects the
+order if they don't match. See `commands/trading/gasless.rs::resolve_order`
+for the source; the on-chain verifier lives in arborter
+(`arborter/app/chain-evm` / `chain-solana`).
 
 ## Real-world examples
 
@@ -107,14 +123,25 @@ Internally:
 - ASK → base-leg lock normalised from 8 → 8 (no change) →
   `50_000_000` BTC base units.
 
-### Example 3: Buy 0.75 WBTC at market on a `pair_decimals = 10` market
+### Example 3: Market orders are not supported on the cross-chain path
 
 ```sh
-aspens-cli buy-market "$MARKET" 0.75
+aspens-cli buy-market "$MARKET" 0.75   # rejected by the SDK
 ```
 
-Internally `quantity = 0.75 × 10^10 = 7_500_000_000`. No price is
-signed; the matching engine fills against the resting book.
+Every order routes through the gasless cross-chain authorisation flow
+(see `send_order.rs` — the legacy `lock_for_order` path is gone). A
+market order has no committed price at signing time, so the SDK cannot
+honestly pre-compute the `amount_in` the user is locking, and the
+on-chain verifier would reject any guess. `gasless::resolve_order`
+fails fast with:
+
+> gasless cross-chain orders require a limit price — market orders
+> cannot pre-commit a lock amount the on-chain verifier will recompute
+> identically. Use buy-limit / sell-limit with a slippage-capped price.
+
+If you want market-like behaviour, use a limit at a slippage-capped
+price (e.g. `buy-limit` at `best_ask × 1.005`).
 
 ### Example 4: Deposit 10 USDC (token has 6 decimals)
 
@@ -194,5 +221,11 @@ your typed price scales to a non-zero pair-decimal integer.
 - `aspens/src/decimals.rs` test module — pins parsing, truncation,
   overflow, and rejection behaviour. If you change parsing rules,
   update those tests first.
-- `aspens/src/commands/trading/send_order.rs::convert_to_pair_decimals` —
-  the order path's thin wrapper that returns the gRPC `String` form.
+- `aspens/src/commands/trading/send_order.rs::convert_to_pair_decimals`
+  *(private)* — the order path's thin wrapper that returns the gRPC
+  `String` form; not callable from outside the crate.
+- `aspens/src/commands/trading/gasless.rs::normalize`
+  *(private)* — the per-leg `pair_decimals → token_decimals` rescale
+  that produces the integers the user's signature commits to. Unit
+  tests in the same file cover identity / downscale-truncation /
+  upscale-overflow.

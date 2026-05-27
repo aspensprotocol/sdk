@@ -1,0 +1,13 @@
+[package]
+name = "aspens-cliutil"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared CLI helpers (error formatting, amount parsing) for the Aspens CLI binaries"
+publish = false
+
+[dependencies]
+# Library — needs the client runtime to see `commands::config::config_pb`.
+aspens = { path = "../aspens", default-features = false, features = ["client", "trader", "evm", "solana", "formatting"] }
+eyre.workspace = true

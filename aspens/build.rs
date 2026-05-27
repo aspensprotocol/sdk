@@ -1,5 +1,9 @@
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+// Shared pure transform — also unit-tested under
+// `aspens/tests/build_attestation_paths.rs`.
+mod build_attestation_paths;
+
 fn main() -> Result<()> {
     // Tell Cargo to rerun this build script if proto files change
     println!("cargo:rerun-if-changed=proto/arborter.proto");
@@ -101,13 +105,7 @@ fn fix_attestation_paths() -> Result<()> {
 
     let config_file = "proto/generated/xyz.aspens.arborter_config.v1.rs";
     let content = fs::read_to_string(config_file)?;
-
-    // Replace relative attestation paths with absolute crate paths
-    let fixed_content = content.replace(
-        "super::super::super::attestation::v1::",
-        "crate::attestation::v1::",
-    );
-
+    let fixed_content = build_attestation_paths::rewrite_attestation_paths(&content);
     fs::write(config_file, fixed_content)?;
     Ok(())
 }

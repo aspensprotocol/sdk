@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use tracing::{info, warn};
 use url::Url;
 
-use super::{MidribV2, IERC20};
 use crate::chain_client::{ChainClient, ARCH_SOLANA};
 use crate::commands::config::config_pb::{Chain, Configuration, GetConfigResponse};
+use crate::evm::rpc::{MidribV2, IERC20};
 use crate::wallet::{load_trader_wallet, CurveType, Wallet};
 
 /// Represents a unique token across all chains

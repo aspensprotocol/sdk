@@ -1126,6 +1126,7 @@ version = "0.4.3"
 dependencies = [
  "alloy",
  "aspens",
+ "aspens-cliutil",
  "chrono",
  "clap",
  "clap-verbosity",
@@ -1146,6 +1147,7 @@ dependencies = [
  "alloy",
  "alloy-chains",
  "aspens",
+ "aspens-cliutil",
  "clap",
  "clap-verbosity",
  "eyre",
@@ -1159,12 +1161,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "aspens-cliutil"
+version = "0.4.3"
+dependencies = [
+ "aspens",
+ "eyre",
+]
+
+[[package]]
 name = "aspens-repl"
 version = "0.4.3"
 dependencies = [
  "alloy",
  "alloy-chains",
  "aspens",
+ "aspens-cliutil",
  "clap",
  "clap-repl",
  "eyre",

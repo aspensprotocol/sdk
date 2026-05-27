@@ -97,7 +97,7 @@ impl ChainClient {
     pub async fn token_balance(&self, token: &Token, owner: &str) -> Result<u128> {
         match self {
             ChainClient::Evm { rpc_url, chain_id } => {
-                use crate::commands::trading::IERC20;
+                use crate::evm::rpc::IERC20;
                 let url = Url::parse(rpc_url)?;
                 let named_chain =
                     NamedChain::try_from(*chain_id as u64).unwrap_or(NamedChain::BaseSepolia);
