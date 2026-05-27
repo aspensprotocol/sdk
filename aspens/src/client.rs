@@ -45,7 +45,10 @@ impl AspensClient {
     /// Fetch configuration from the server and cache it
     pub async fn fetch_config(&self) -> Result<()> {
         let config = crate::commands::config::get_config(self.stack_url.to_string()).await?;
-        let mut guard = self.config.write().unwrap();
+        let mut guard = self
+            .config
+            .write()
+            .expect("AspensClient config lock poisoned");
         *guard = Some(config);
         Ok(())
     }
@@ -54,7 +57,10 @@ impl AspensClient {
     pub async fn get_config(&self) -> Result<GetConfigResponse> {
         // Check if we have a cached config
         {
-            let guard = self.config.read().unwrap();
+            let guard = self
+                .config
+                .read()
+                .expect("AspensClient config lock poisoned");
             if let Some(config) = guard.as_ref() {
                 return Ok(config.clone());
             }
@@ -64,7 +70,10 @@ impl AspensClient {
         self.fetch_config().await?;
 
         // Return the newly fetched config
-        let guard = self.config.read().unwrap();
+        let guard = self
+            .config
+            .read()
+            .expect("AspensClient config lock poisoned");
         guard
             .as_ref()
             .cloned()
@@ -134,13 +143,19 @@ impl AspensClient {
 
     /// Set the JWT token for admin operations
     pub fn set_jwt_token(&self, token: String, expires_at: u64) {
-        let mut guard = self.jwt_token.write().unwrap();
+        let mut guard = self
+            .jwt_token
+            .write()
+            .expect("AspensClient JWT lock poisoned");
         *guard = Some(JwtToken { token, expires_at });
     }
 
     /// Get the current JWT token if valid
     pub fn get_jwt_token(&self) -> Option<String> {
-        let guard = self.jwt_token.read().unwrap();
+        let guard = self
+            .jwt_token
+            .read()
+            .expect("AspensClient JWT lock poisoned");
         guard.as_ref().and_then(|jwt| {
             if self.is_jwt_valid_internal(jwt) {
                 Some(jwt.token.clone())
@@ -152,7 +167,10 @@ impl AspensClient {
 
     /// Check if the current JWT token is valid
     pub fn is_jwt_valid(&self) -> bool {
-        let guard = self.jwt_token.read().unwrap();
+        let guard = self
+            .jwt_token
+            .read()
+            .expect("AspensClient JWT lock poisoned");
         guard
             .as_ref()
             .map(|jwt| self.is_jwt_valid_internal(jwt))
@@ -172,13 +190,19 @@ impl AspensClient {
 
     /// Clear the JWT token
     pub fn clear_jwt_token(&self) {
-        let mut guard = self.jwt_token.write().unwrap();
+        let mut guard = self
+            .jwt_token
+            .write()
+            .expect("AspensClient JWT lock poisoned");
         *guard = None;
     }
 
     /// Get JWT expiry time (if set)
     pub fn get_jwt_expiry(&self) -> Option<u64> {
-        let guard = self.jwt_token.read().unwrap();
+        let guard = self
+            .jwt_token
+            .read()
+            .expect("AspensClient JWT lock poisoned");
         guard.as_ref().map(|jwt| jwt.expires_at)
     }
 }

@@ -3,8 +3,8 @@
 //! Prerequisites:
 //!   1. A running Aspens Market Stack (e.g. http://localhost:50051)
 //!   2. A `.env` file with at least:
-//!        ASPENS_MARKET_STACK_URL=http://localhost:50051
-//!        TRADER_PRIVKEY=<your-64-char-hex-private-key>
+//!      ASPENS_MARKET_STACK_URL=http://localhost:50051
+//!      TRADER_PRIVKEY=<your-64-char-hex-private-key>
 //!
 //! Run:
 //!   cargo run --example quickstart
@@ -57,12 +57,12 @@ fn main() -> Result<()> {
     let result = executor.execute(send_order::send_order(
         stack_url.clone(),
         market_id.into(),
-        1,                       // side: 1 = BUY, 2 = SELL
-        "1.5".into(),            // quantity
-        Some("100.50".into()),   // limit price (None for market order)
+        1,                     // side: 1 = BUY, 2 = SELL
+        "1.5".into(),          // quantity
+        Some("100.50".into()), // limit price (None for market order)
         privkey.clone(),
         cfg.clone(),
-        false,                   // post_only
+        false, // post_only
     ))?;
     println!("Order placed (order_id: {})", result.order_id);
 

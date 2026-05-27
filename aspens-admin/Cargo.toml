@@ -11,8 +11,9 @@ name = "aspens-admin"
 path = "src/main.rs"
 
 [dependencies]
-# Core library with admin feature
-aspens = { path = "../aspens", features = ["admin"] }
+# Core library — features declared explicitly so changes to aspens'
+# default features don't silently affect this binary.
+aspens = { path = "../aspens", default-features = false, features = ["client", "trader", "evm", "solana", "formatting", "admin"] }
 
 # CLI dependencies
 clap = { workspace = true, features = ["env"] }

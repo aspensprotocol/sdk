@@ -107,3 +107,13 @@ tempfile.workspace = true
 # Unconditional dev-dep so async unit tests (e.g. sign_message) run under
 # every feature config, including lean-signing builds.
 tokio = { workspace = true, features = ["macros", "rt"] }
+
+# Examples depend on the full client runtime; skipped automatically when
+# building with `--no-default-features --features evm,solana`.
+[[example]]
+name = "quickstart"
+required-features = ["client"]
+
+[[example]]
+name = "transaction_hash_example"
+required-features = ["client"]

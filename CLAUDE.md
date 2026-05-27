@@ -10,8 +10,8 @@ Aspens SDK is a crosschain trading platform SDK written in Rust, organized as a 
 - **`aspens-cli/`** - Command-line interface binary for scripted trading operations
 - **`aspens-repl/`** - Interactive REPL binary for manual trading
 - **`aspens-admin/`** - Administrative CLI for stack configuration (chains, tokens, markets)
-- **`examples/`** - Practical examples and decimal conversion guides
-- **`scripts/`** - Utility scripts for testing (`ammit.sh`)
+- **`aspens/examples/`** - Practical examples (`quickstart.rs`, `transaction_hash_example.rs`); run via `cargo run -p aspens --example <name>`
+- **`scripts/`** - Utility scripts for testing (`ammit.py`)
 
 ## Build Commands
 

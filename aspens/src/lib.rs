@@ -41,7 +41,10 @@ pub mod evm;
 /// Async/sync execution strategies used by binaries to drive the client.
 #[cfg(feature = "client")]
 pub mod executor;
+// Internal — gRPC channel construction helpers shared by the commands
+// modules. Not part of the stable public API; may change without notice.
 #[cfg(feature = "client")]
+#[doc(hidden)]
 pub mod grpc;
 /// gRPC health-check helpers used to probe stack readiness.
 #[cfg(feature = "client")]
@@ -84,10 +87,13 @@ pub use chain_client::ChainClient;
 pub use client::{AspensClient, AspensClientBuilder, JwtToken};
 #[cfg(feature = "client")]
 pub use executor::{AsyncExecutor, BlockingExecutor, DirectExecutor};
-pub use wallet::{
-    chain_curve, load_admin_wallet, load_trader_wallet, load_trader_wallet_for_chain,
-    load_trader_wallet_for_network, CurveType, Wallet,
-};
+pub use wallet::{load_admin_wallet, load_trader_wallet, CurveType, Wallet};
+
+// Chain-aware wallet helpers depend on the proto-generated `Chain` /
+// `GetConfigResponse` types under `commands::config`, which only exist
+// when the `client` feature is enabled.
+#[cfg(feature = "client")]
+pub use wallet::{chain_curve, load_trader_wallet_for_chain, load_trader_wallet_for_network};
 
 // Re-export admin types when admin feature is enabled
 #[cfg(all(feature = "admin", feature = "client"))]
