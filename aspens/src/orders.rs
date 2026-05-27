@@ -20,6 +20,9 @@ use sha2::{Digest, Sha256};
 ///
 /// Both EVM and Solana clients MUST use this exact derivation — the arborter
 /// rehashes with the same recipe and will reject orders whose id doesn't match.
+// The argument list mirrors arborter's hashing recipe one-to-one; bundling
+// it into a struct here would just push the unpacking to every caller and
+// drift more easily from the arborter side. Kept flat on purpose.
 #[allow(clippy::too_many_arguments)]
 pub fn derive_order_id(
     user_pubkey: &[u8],

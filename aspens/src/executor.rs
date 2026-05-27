@@ -60,7 +60,7 @@ impl BlockingExecutor {
             rt: tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
-                .unwrap(),
+                .expect("failed to build tokio multi-thread runtime for BlockingExecutor"),
         }
     }
 }
