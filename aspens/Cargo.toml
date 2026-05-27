@@ -58,8 +58,14 @@ comfy-table = { workspace = true, optional = true }
 [features]
 default = ["trader", "formatting", "client", "evm", "solana"]
 
-# Legacy markers — kept for compatibility with existing callers; neither
-# gates deps today.
+# `trader` and `admin` don't pull additional dependencies, but they DO
+# gate which submodules of `commands` are compiled in (see
+# `aspens/src/commands/mod.rs`):
+#   - `trader`             → `commands::trading` (deposit/withdraw/order/balance/streams)
+#   - `admin`              → `commands::trading`, `commands::admin`, `commands::auth`
+# A `client`-only build with neither flag enabled gives you the
+# config-fetch surface and nothing else. Binaries enable `trader`
+# (and `admin` for aspens-admin) explicitly — see their Cargo.toml.
 trader = []
 admin = []
 formatting = ["dep:comfy-table"]

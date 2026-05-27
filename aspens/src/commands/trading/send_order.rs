@@ -17,8 +17,8 @@ use eyre::Result;
 use prost::Message;
 use url::Url;
 
-use super::MidribV2;
 use crate::commands::config::config_pb::GetConfigResponse;
+use crate::evm::rpc::MidribV2;
 use crate::grpc::create_channel;
 
 impl fmt::Display for Order {

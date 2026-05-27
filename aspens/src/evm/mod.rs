@@ -26,6 +26,11 @@ use std::str::FromStr;
 
 use crate::orders::GaslessLockParams;
 
+/// RPC-enabled (`#[sol(rpc)]`) bindings for MidribV2 + IERC20. Pulls
+/// `alloy-contract`; only available with the `client` feature.
+#[cfg(feature = "client")]
+pub mod rpc;
+
 // -- sol! bindings --------------------------------------------------------
 //
 // Mirror the arborter invocations so both sides build identical types. The
@@ -34,8 +39,8 @@ use crate::orders::GaslessLockParams;
 
 // Note: no `#[sol(rpc)]` — the stateless signing module only needs struct
 // types, and `rpc` would pull in `alloy-contract` (an RPC/provider
-// dep). The commands/trading module has its own `#[sol(rpc)]` invocations
-// behind the `client` feature for actual on-chain calls.
+// dep). The RPC-enabled bindings live in the [`rpc`] submodule above,
+// gated on the `client` feature.
 
 sol!(
     #[derive(Debug)]

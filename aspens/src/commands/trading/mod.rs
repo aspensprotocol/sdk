@@ -1,24 +1,6 @@
-use alloy_sol_types::sol;
-
-sol!(
-    #[derive(Debug)]
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    MidribV2,
-    "artifacts/MidribV2.json"
-);
-
-sol! {
-    #[sol(abi, rpc)]
-    contract IERC20 {
-        #[derive(Debug)]
-        function allowance(address owner, address spender) view returns (uint256);
-        #[derive(Debug)]
-        function approve(address spender, uint256 amount) external returns (bool);
-        #[derive(Debug)]
-        function balanceOf(address) external view returns (uint256);
-    }
-}
+// The RPC-enabled MidribV2 + IERC20 sol! bindings now live in
+// `aspens::evm::rpc` (gated on the `client` feature). Trading commands
+// import them via `use crate::evm::rpc::{MidribV2, IERC20};`.
 
 /// Query balances across chains (native gas, ERC-20 / SPL, locked / withdrawable).
 pub mod balance;

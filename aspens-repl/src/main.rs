@@ -2,8 +2,8 @@ use aspens::commands::config::config_pb::GetConfigResponse;
 use aspens::commands::trading::{
     balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
 };
-use aspens::decimals::parse_decimal_amount_u64;
 use aspens::{AspensClient, AsyncExecutor, BlockingExecutor};
+use aspens_cliutil::BinaryContext;
 use clap::Parser;
 use clap_repl::reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory};
 use clap_repl::ClapEditor;
@@ -11,222 +11,9 @@ use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-/// Analyze an error and return a user-friendly message with hints
+/// Local thin wrapper over [`aspens_cliutil::format_error`].
 fn format_error(err: &eyre::Report, context: &str) -> String {
-    let err_string = err.to_string().to_lowercase();
-    let root_cause = err.root_cause().to_string().to_lowercase();
-
-    // Helper to append the underlying error to the message
-    let with_underlying_error =
-        |msg: String| -> String { format!("{}\n\nUnderlying error: {}", msg, err) };
-
-    // Connection errors
-    if err_string.contains("failed to connect")
-        || err_string.contains("connection refused")
-        || root_cause.contains("connection refused")
-    {
-        return with_underlying_error(format!(
-            "Failed to {}: Could not connect to the server\n\n\
-             Possible causes:\n\
-               - The Aspens server is not running\n\
-               - The server URL is incorrect\n\
-               - A firewall is blocking the connection\n\n\
-             Hints:\n\
-               - Check server status with 'status' command\n\
-               - Verify ASPENS_MARKET_STACK_URL in your .env file",
-            context
-        ));
-    }
-
-    // DNS/hostname resolution errors
-    if err_string.contains("dns error")
-        || err_string.contains("no such host")
-        || err_string.contains("name or service not known")
-        || root_cause.contains("dns")
-    {
-        return with_underlying_error(format!(
-            "Failed to {}: Could not resolve server hostname\n\n\
-             Possible causes:\n\
-               - The server hostname is incorrect\n\
-               - DNS is not configured properly\n\
-               - No internet connection\n\n\
-             Hints:\n\
-               - Verify the stack URL is correct\n\
-               - Check your internet connection",
-            context
-        ));
-    }
-
-    // TLS/SSL errors
-    if err_string.contains("tls")
-        || err_string.contains("ssl")
-        || err_string.contains("certificate")
-        || root_cause.contains("certificate")
-    {
-        return with_underlying_error(format!(
-            "Failed to {}: TLS/SSL error\n\n\
-             Possible causes:\n\
-               - Using HTTP URL for HTTPS server or vice versa\n\
-               - Server certificate is invalid or expired\n\n\
-             Hints:\n\
-               - For local development, use http://localhost:50051\n\
-               - For remote servers, use https://",
-            context
-        ));
-    }
-
-    // Protocol/compression errors (HTTP/HTTPS mismatch)
-    if err_string.contains("compression flag")
-        || err_string.contains("protocol error")
-        || err_string.contains("invalid compression")
-    {
-        return with_underlying_error(format!(
-            "Failed to {}: Protocol mismatch\n\n\
-             Possible causes:\n\
-               - Using HTTP to connect to an HTTPS server\n\
-               - Using HTTPS to connect to an HTTP server\n\n\
-             Hints:\n\
-               - For remote servers, use https://\n\
-               - For local development, use http://",
-            context
-        ));
-    }
-
-    // Timeout errors
-    if err_string.contains("timeout") || err_string.contains("timed out") {
-        return with_underlying_error(format!(
-            "Failed to {}: Request timed out\n\n\
-             Possible causes:\n\
-               - Server is overloaded or unresponsive\n\
-               - Network latency is too high\n\n\
-             Hints:\n\
-               - Try again in a few moments\n\
-               - Check server status with 'status' command",
-            context
-        ));
-    }
-
-    // Chain/network not found
-    if err_string.contains("chain not found")
-        || err_string.contains("network not found")
-        || (err_string.contains("not found") && err_string.contains("chain"))
-    {
-        return with_underlying_error(format!(
-            "Failed to {}: Chain/network not found\n\n\
-             Hints:\n\
-               - Check available chains with 'config' command\n\
-               - Verify the network name is spelled correctly",
-            context
-        ));
-    }
-
-    // Token not found
-    if err_string.contains("token not found")
-        || (err_string.contains("not found") && err_string.contains("token"))
-    {
-        return with_underlying_error(format!(
-            "Failed to {}: Token not found\n\n\
-             Hints:\n\
-               - Check available tokens with 'config' command\n\
-               - Token symbols are case-sensitive (e.g., USDC, not usdc)",
-            context
-        ));
-    }
-
-    // Market not found
-    if err_string.contains("market not found")
-        || (err_string.contains("not found") && err_string.contains("market"))
-    {
-        return with_underlying_error(format!(
-            "Failed to {}: Market not found\n\n\
-             Hints:\n\
-               - Check available markets with 'config' command\n\
-               - Markets use format: chain_id::token::chain_id::token",
-            context
-        ));
-    }
-
-    // Insufficient gas (check before general insufficient balance)
-    if err_string.contains("insufficient gas") {
-        return with_underlying_error(format!(
-            "Failed to {}: Insufficient gas for transaction fees\n\n\
-             Your wallet needs native tokens (ETH, FLR, etc.) to pay for gas.\n\n\
-             Hints:\n\
-               - Fund your wallet with native tokens on the target chain\n\
-               - For testnets, use a faucet to get free test tokens\n\
-               - Base Sepolia: https://www.alchemy.com/faucets/base-sepolia\n\
-               - Flare Coston2: https://faucet.flare.network",
-            context
-        ));
-    }
-
-    // Insufficient token balance
-    if err_string.contains("insufficient")
-        || err_string.contains("not enough")
-        || err_string.contains("balance too low")
-    {
-        return with_underlying_error(format!(
-            "Failed to {}: Insufficient balance\n\n\
-             Hints:\n\
-               - Check your balances with 'balance' command\n\
-               - For trading: deposit tokens first\n\
-               - For deposits: ensure wallet has enough tokens",
-            context
-        ));
-    }
-
-    // Invalid string length (typically from address parsing issues on server)
-    if err_string.contains("invalid string length") {
-        return with_underlying_error(format!(
-            "Failed to {}: Server error during on-chain operation\n\n\
-             This error typically occurs when the server fails to parse an address.\n\
-             Please check server logs for more details.",
-            context
-        ));
-    }
-
-    // Transaction/RPC errors
-    if err_string.contains("transaction")
-        || err_string.contains("revert")
-        || err_string.contains("execution reverted")
-    {
-        return with_underlying_error(format!(
-            "Failed to {}: Transaction failed\n\n\
-             Possible causes:\n\
-               - Insufficient token balance or allowance\n\
-               - Contract execution reverted\n\n\
-             Hints:\n\
-               - Check your wallet balance\n\
-               - Try with a smaller amount",
-            context
-        ));
-    }
-
-    // Private key errors
-    if err_string.contains("invalid private key")
-        || err_string.contains("privkey")
-        || err_string.contains("secret key")
-        || err_string.contains("hex decode")
-    {
-        return with_underlying_error(format!(
-            "Failed to {}: Invalid private key format\n\n\
-             Hints:\n\
-               - TRADER_PRIVKEY should be a 64-character hex string\n\
-               - Do not include the '0x' prefix\n\
-               - Check for extra whitespace or newlines",
-            context
-        ));
-    }
-
-    // Generic fallback
-    format!(
-        "Failed to {}\n\n\
-         Hints:\n\
-           - Check server status with 'status' command\n\
-           - Verify your .env configuration\n\n\
-         Underlying error: {}",
-        context, err
-    )
+    aspens_cliutil::format_error(err, context, &BinaryContext::TRADER_REPL)
 }
 
 /// Print a friendly error message for missing TRADER_PRIVKEY
@@ -250,26 +37,14 @@ fn print_error(message: &str) {
     println!();
 }
 
-/// Print friendly status error with hints
-/// Convert a human-readable token amount (e.g. `"10.5"`) to base units
-/// using the token's `decimals` from the chain config. Centralised here
-/// so deposit and withdraw share identical parsing + lookup behaviour.
+/// Local thin wrapper over [`aspens_cliutil::resolve_token_amount`].
 fn resolve_token_amount(
     config: &GetConfigResponse,
     network: &str,
     token_symbol: &str,
     amount: &str,
 ) -> eyre::Result<u64> {
-    let token = config.get_token(network, token_symbol).ok_or_else(|| {
-        eyre::eyre!(
-            "Token '{}' not found on chain '{}'. \
-             Run `config` to see available tokens.",
-            token_symbol,
-            network
-        )
-    })?;
-    parse_decimal_amount_u64(amount, token.decimals)
-        .map_err(|e| eyre::eyre!("Invalid amount '{}' for {}: {}", amount, token_symbol, e))
+    aspens_cliutil::resolve_token_amount(config, network, token_symbol, amount)
 }
 
 fn print_status_error(error_msg: &str) {

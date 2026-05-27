@@ -15,6 +15,7 @@ path = "src/main.rs"
 # Core library — features declared explicitly so changes to aspens'
 # default features don't silently affect this binary.
 aspens = { path = "../aspens", default-features = false, features = ["client", "trader", "evm", "solana", "formatting", "admin"] }
+aspens-cliutil = { path = "../aspens-cliutil" }
 
 # CLI dependencies
 clap = { workspace = true, features = ["env"] }

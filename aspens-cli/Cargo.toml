@@ -14,6 +14,7 @@ path = "src/main.rs"
 # Local dependencies — features declared explicitly so changes to the
 # aspens crate's default features don't silently affect this binary.
 aspens = { path = "../aspens", default-features = false, features = ["client", "trader", "evm", "solana", "formatting"] }
+aspens-cliutil = { path = "../aspens-cliutil" }
 
 # Workspace dependencies
 alloy.workspace = true
