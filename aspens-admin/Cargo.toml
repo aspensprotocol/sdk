@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Admin CLI for an Aspens Market Stack"
+publish = false
 
 [[bin]]
 name = "aspens-admin"

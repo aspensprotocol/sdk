@@ -206,6 +206,62 @@ mod tests {
     }
 
     #[test]
+    fn envelope_digest_length_prefix_is_byte_count() {
+        // The EIP-191 prefix encodes the byte length of the message, not
+        // its character count. Cover a few sizes so a future refactor
+        // can't silently switch to e.g. char_indices().
+        for msg in [b"a".as_slice(), b"hello", &[0u8; 32], &[0xffu8; 256]] {
+            let digest = envelope_signing_digest(msg);
+            let mut buf = format!("\x19Ethereum Signed Message:\n{}", msg.len()).into_bytes();
+            buf.extend_from_slice(msg);
+            assert_eq!(digest, keccak256(&buf), "len={}", msg.len());
+        }
+    }
+
+    #[tokio::test]
+    async fn sign_send_order_envelope_round_trips_to_signer_address() {
+        // Contract with arborter: SDK signs the encoded order with
+        // EIP-191; arborter's `verify_secp256k1`
+        // (arborter/app/onchain/src/verify.rs) calls
+        // `Signature::recover_address_from_msg(message)` and compares to
+        // the trader address. A drift in the prefix or hashing here
+        // silently rejects every order — this is the single most
+        // important EVM signing test in the SDK.
+        use alloy_primitives::Signature;
+        use std::str::FromStr;
+
+        // Anvil test key #0.
+        let wallet = crate::wallet::Wallet::from_evm_hex(
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        )
+        .unwrap();
+        let signer_address = alloy_primitives::Address::from_str(&wallet.address()).unwrap();
+
+        // A representative encoded-order payload — exact bytes don't
+        // matter for this test, only that round-trip recovery succeeds.
+        let encoded_order = b"\x00\x01encoded-send-order-payload";
+        let sig_bytes = sign_send_order_envelope(&wallet, encoded_order)
+            .await
+            .unwrap();
+
+        // Arborter's strict length check (verify.rs:63).
+        assert_eq!(
+            sig_bytes.len(),
+            65,
+            "sign_send_order_envelope must return r||s||v = 65 bytes; arborter rejects anything else"
+        );
+
+        let sig = Signature::try_from(sig_bytes.as_slice()).unwrap();
+        let recovered = sig
+            .recover_address_from_msg(encoded_order.as_slice())
+            .unwrap();
+        assert_eq!(
+            recovered, signer_address,
+            "recovered address must match the signing wallet — this is exactly what arborter checks"
+        );
+    }
+
+    #[test]
     fn build_rejects_zero_deadline() {
         let params = GaslessLockParams {
             depositor_address: "0x0000000000000000000000000000000000000001",
