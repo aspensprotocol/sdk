@@ -1,10 +1,13 @@
 /// Generated protobuf bindings for the `arborter.v1` trading service.
 #[allow(missing_docs)]
 pub mod arborter_pb {
-    include!("../../../proto/generated/xyz.aspens.arborter.v1.rs");
+    include!("../../../../proto/generated/xyz.aspens.arborter.v1.rs");
 }
 
-use std::fmt;
+// `Display` impls + the inherent CLI-formatting helpers on the proto
+// types live next door in `display.rs` so this file can focus on the
+// call / signing logic.
+mod display;
 
 use crate::wallet::Wallet;
 use alloy::primitives::{Address, U256};
@@ -12,7 +15,7 @@ use alloy::providers::ProviderBuilder;
 use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
-use arborter_pb::{Order, SendOrderRequest, SendOrderResponse, TransactionHash};
+use arborter_pb::{Order, SendOrderRequest, SendOrderResponse};
 use eyre::Result;
 use prost::Message;
 use url::Url;
@@ -21,96 +24,10 @@ use crate::commands::config::config_pb::GetConfigResponse;
 use crate::evm::rpc::MidribV2;
 use crate::grpc::create_channel;
 
-impl fmt::Display for Order {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Order {{\n  side: {},\n  quantity: {},\n  price: {},\n  market_id: {},\n  base_account_address: {},\n  quote_account_address: {},\n  execution_type: {},\n  matching_order_ids: {:?}\n}}",
-            self.side,
-            self.quantity,
-            self.price.clone().map_or("None".to_string(), |p| p.to_string()),
-            self.market_id,
-            self.base_account_address,
-            self.quote_account_address,
-            self.execution_type,
-            self.matching_order_ids
-        )
-    }
-}
-
-/// Transaction hash information for blockchain transactions
-///
-/// This struct contains information about transaction hashes that are generated
-/// when orders are processed on the blockchain. Each transaction hash includes
-/// a type (e.g., "deposit", "settlement", "withdrawal") and the actual hash value.
-impl fmt::Display for TransactionHash {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "TransactionHash {{ hash_type: {}, hash_value: {} }}",
-            self.hash_type, self.hash_value
-        )
-    }
-}
-
-impl TransactionHash {
-    /// Format transaction hash for CLI display
-    ///
-    /// Returns a user-friendly string representation of the transaction hash
-    /// in the format "type: hash_value"
-    pub fn format_for_cli(&self) -> String {
-        format!("[{}] {}", self.hash_type.to_uppercase(), self.hash_value)
-    }
-
-    /// Get block explorer URL hints based on common chains
-    ///
-    /// Returns a suggested block explorer base URL for common chains
-    pub fn get_explorer_hint(&self) -> Option<String> {
-        // This is a simple implementation - could be enhanced with actual chain detection
-        Some(
-            "Paste this hash into your chain's block explorer (e.g., Etherscan, Basescan)"
-                .to_string(),
-        )
-    }
-}
-
-impl SendOrderResponse {
-    /// Get formatted transaction hashes for CLI display
-    ///
-    /// Returns a vector of formatted transaction hash strings that can be
-    /// easily displayed in the CLI or REPL interface
-    pub fn get_formatted_transaction_hashes(&self) -> Vec<String> {
-        self.transaction_hashes
-            .iter()
-            .map(|th| th.format_for_cli())
-            .collect()
-    }
-}
-
-impl fmt::Display for SendOrderResponse {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "SendOrderResponse {{\n  order_id: {},\n  order_in_book: {},\n  order: {},\n  trades: [{}],\n  transaction_hashes: [{}]\n}}",
-            self.order_id,
-            self.order_in_book,
-            self.order
-                .as_ref()
-                .map_or("None".to_string(), |o| format!("{}", o)),
-            self.trades
-                .iter()
-                .map(|t| format!("{:?}", t))
-                .collect::<Vec<_>>()
-                .join(", "),
-            self.transaction_hashes
-                .iter()
-                .map(|th| format!("{}: {}", th.hash_type, th.hash_value))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    }
-}
-
+// Internal RPC dispatcher: encodes the protobuf request fields the gRPC
+// server expects. The argument list intentionally mirrors the
+// `SendOrderRequest` protobuf shape — bundling fields into a struct here
+// would split the protobuf-mapping site across two locations.
 #[allow(clippy::too_many_arguments)]
 async fn call_send_order(
     url: String,
@@ -360,6 +277,9 @@ pub fn derive_address(privkey: &str) -> Result<(Address, String)> {
 /// * `post_only` - Reject if the order would cross at submission. Limit
 ///   orders only; ignored semantics-wise for market orders (arborter
 ///   rejects post-only without a price).
+// Public top-level API — the argument list is the documented entry
+// point; introducing a builder/struct here would break every caller
+// (CLI, REPL, examples) for no behavioural gain.
 #[allow(clippy::too_many_arguments)]
 pub async fn send_order_with_wallet(
     url: String,
@@ -397,6 +317,8 @@ pub async fn send_order_with_wallet(
 /// Errors if a wallet of the right curve is missing for either chain.
 ///
 /// `post_only`: see [`send_order_with_wallet`].
+// Public top-level API — same rationale as `send_order_with_wallet`
+// for keeping the argument list flat.
 #[allow(clippy::too_many_arguments)]
 pub async fn send_order_with_wallets(
     url: String,

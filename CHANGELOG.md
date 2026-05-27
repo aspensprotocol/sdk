@@ -9,6 +9,32 @@ change before 1.0.
 
 ## [Unreleased]
 
+### Changed
+- Split `commands/trading/gasless.rs` (810 LOC) into
+  `gasless/{mod.rs, evm.rs, solana.rs}` — the EVM and Solana
+  `build_*` branches each live next door to the dispatcher now
+  instead of all sharing one file.
+- Split `commands/trading/send_order.rs` (855 LOC) — the proto
+  `Display` impls and CLI-formatting helpers moved to a sibling
+  `send_order/display.rs`; signing / RPC dispatch stays in `mod.rs`.
+- Introduced a `GaslessBuildArgs` struct used by both gasless
+  branches; retires four `#[allow(clippy::too_many_arguments)]`
+  attributes (was 8, now 4). The 4 remaining allows are on the
+  public top-level `send_order` API and `derive_order_id` —
+  documented with comments explaining why those argument lists
+  stay flat (consensus recipe / public API surface).
+- Production-path `.unwrap()` calls now `.expect("...")` with a
+  descriptive message:
+  - `executor::BlockingExecutor::new` (tokio runtime build)
+  - `solana::{sysvar_rent_id, sysvar_instructions_id,
+    ata_program_id, ed25519_program_id}` (well-known program /
+    sysvar pubkeys — parse failure would mean a catastrophic
+    solana-sdk regression, but the panic message now says so)
+- The other ~140 `.unwrap()` calls in the lib were audited and
+  found to be inside `#[cfg(test)]` modules or doc-test examples,
+  where the test framework already prints clear failures. No
+  changes to test code.
+
 ### Removed (breaking, pre-1.0)
 - Retired the legacy `privkey: String` wrappers around the
   curve-agnostic trading API. The `_with_wallet` (and `_with_wallets`)

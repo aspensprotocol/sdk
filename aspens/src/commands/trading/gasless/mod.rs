@@ -35,10 +35,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use eyre::{eyre, Result};
 
 use crate::commands::config::config_pb::{Chain, GetConfigResponse, Market};
-use crate::orders::{derive_order_id, GaslessLockParams};
+use crate::orders::derive_order_id;
 use crate::wallet::{CurveType, Wallet};
 
 use super::send_order::arborter_pb::GaslessAuthorization;
+
+mod evm;
+mod solana;
+
+use evm::build_evm;
+use solana::build_solana;
 
 /// EVM architecture tag stored on `Chain.architecture` by the arborter.
 /// Kept local — only consumed here.
@@ -50,13 +56,13 @@ const ARCH_SOLANA: &str = "Solana";
 ///   `chain-evm::lock_for_order` so external tooling expecting the same
 ///   horizons keeps working.
 /// - `FILL_DEADLINE` = now + 24h.
-const EVM_OPEN_DEADLINE_SECS: u64 = 3_600;
-const EVM_FILL_DEADLINE_SECS: u64 = 86_400;
+pub(super) const EVM_OPEN_DEADLINE_SECS: u64 = 3_600;
+pub(super) const EVM_FILL_DEADLINE_SECS: u64 = 86_400;
 
 /// Solana slot buffer — how far ahead the arborter must land the tx.
 /// 100 slots ≈ 40s which is comfortably larger than the bursty RPC
 /// + confirmation round-trip.
-const SOLANA_DEADLINE_SLOT_BUFFER: u64 = 100;
+pub(super) const SOLANA_DEADLINE_SLOT_BUFFER: u64 = 100;
 
 /// Build a `GaslessAuthorization` for the given order.
 ///
@@ -106,33 +112,21 @@ pub async fn build_gasless_authorization(
     let order_id_hex = format!("0x{}", hex::encode(order_id_bytes));
 
     let arch = origin_chain.architecture.as_str();
+    let args = GaslessBuildArgs {
+        origin_chain,
+        destination_chain,
+        wallet,
+        input_token_address: &input_token_address,
+        output_token_address: &output_token_address,
+        amount_in,
+        amount_out,
+        nonce,
+        order_id_hex,
+    };
     if arch.eq_ignore_ascii_case(ARCH_EVM) {
-        build_evm(
-            origin_chain,
-            destination_chain,
-            wallet,
-            &input_token_address,
-            &output_token_address,
-            amount_in,
-            amount_out,
-            nonce,
-            order_id_hex,
-        )
-        .await
+        build_evm(args).await
     } else if arch.eq_ignore_ascii_case(ARCH_SOLANA) {
-        build_solana(
-            origin_chain,
-            destination_chain,
-            wallet,
-            &input_token_address,
-            &output_token_address,
-            amount_in,
-            amount_out,
-            nonce,
-            order_id_bytes,
-            order_id_hex,
-        )
-        .await
+        build_solana(args, order_id_bytes).await
     } else {
         Err(eyre!(
             "gasless auth not implemented for chain architecture {arch:?}"
@@ -320,215 +314,21 @@ fn resolve_order<'a>(
     })
 }
 
-#[cfg(feature = "evm")]
-#[allow(clippy::too_many_arguments)]
-async fn build_evm(
-    origin_chain: &Chain,
-    destination_chain: &Chain,
-    wallet: &Wallet,
-    input_token_address: &str,
-    output_token_address: &str,
-    amount_in: u128,
-    amount_out: u128,
-    nonce: u64,
-    order_id_hex: String,
-) -> Result<GaslessAuthorization> {
-    use alloy_primitives::Address;
-
-    let now = unix_secs()?;
-    let open_deadline = now + EVM_OPEN_DEADLINE_SECS;
-    let fill_deadline = now + EVM_FILL_DEADLINE_SECS;
-
-    let depositor = wallet.address();
-    let dest_chain_id = destination_chain.chain_id.to_string();
-    let params = GaslessLockParams {
-        depositor_address: &depositor,
-        token_contract: input_token_address,
-        token_contract_destination_chain: output_token_address,
-        destination_chain_id: &dest_chain_id,
-        amount_in,
-        amount_out,
-        order_id: &order_id_hex,
-        deadline: fill_deadline,
-        nonce,
-        open_deadline,
-        user_signature: &[],
-    };
-
-    let arborter: Address = origin_chain
-        .instance_signer_address
-        .parse()
-        .map_err(|e| eyre!("invalid instance_signer_address on origin chain: {e}"))?;
-    let origin_settler: Address = origin_chain
-        .trade_contract
-        .as_ref()
-        .ok_or_else(|| eyre!("origin chain has no trade_contract configured"))?
-        .address
-        .parse()
-        .map_err(|e| eyre!("invalid trade_contract.address on origin chain: {e}"))?;
-    let digest = crate::evm::gasless_lock_signing_hash(
-        &params,
-        arborter,
-        origin_settler,
-        origin_chain.chain_id as u64,
-    )?;
-
-    // `Wallet::sign_message` on EVM applies EIP-191, which is what
-    // MidribV2._verifyOrder wraps the digest with before ecrecover.
-    // `sign_hash` / `sign_eip712_digest` would NOT wrap and would be
-    // rejected as INVALID_SIGNER on-chain.
-    let sig = wallet.sign_message(digest.as_slice()).await?;
-
-    if sig.len() != 65 {
-        return Err(eyre!(
-            "EVM gasless signature must be 65 bytes (r||s||v); got {}",
-            sig.len()
-        ));
-    }
-
-    Ok(GaslessAuthorization {
-        user_signature: sig,
-        deadline: fill_deadline,
-        order_id: order_id_hex,
-        nonce,
-        open_deadline,
-        // Echo the user-signed amounts to the arborter so it can build
-        // the on-chain GaslessLockParams with identical values. The
-        // contract hashes these into the EIP-712 digest and ecrecover's
-        // against `order.user`; any divergence between SDK-signed and
-        // arborter-rebuilt amounts surfaces as `INVALID_SIGNER`.
-        amount_in: amount_in.to_string(),
-        amount_out: amount_out.to_string(),
-    })
-}
-
-#[cfg(not(feature = "evm"))]
-#[allow(clippy::too_many_arguments)]
-async fn build_evm(
-    _: &Chain,
-    _: &Chain,
-    _: &Wallet,
-    _: &str,
-    _: &str,
-    _: u128,
-    _: u128,
-    _: u64,
-    _: String,
-) -> Result<GaslessAuthorization> {
-    Err(eyre!(
-        "EVM gasless authorization requires the `evm` feature of the aspens crate"
-    ))
-}
-
-#[cfg(feature = "solana")]
-#[allow(clippy::too_many_arguments)]
-async fn build_solana(
-    origin_chain: &Chain,
-    destination_chain: &Chain,
-    wallet: &Wallet,
-    input_token_address: &str,
-    output_token_address: &str,
-    amount_in: u128,
-    amount_out: u128,
-    nonce: u64,
-    order_id_bytes: [u8; 32],
-    order_id_hex: String,
-) -> Result<GaslessAuthorization> {
-    use crate::solana::{gasless_lock_signing_message, OpenOrderArgs};
-    use solana_sdk::pubkey::Pubkey;
-
-    // Deadline = current_slot + buffer. Fetches once from origin chain's RPC.
-    let rpc = solana_client::nonblocking::rpc_client::RpcClient::new(origin_chain.rpc_url.clone());
-    let current_slot = rpc
-        .get_slot()
-        .await
-        .map_err(|e| eyre!("solana get_slot: {e}"))?;
-    let deadline = current_slot + SOLANA_DEADLINE_SLOT_BUFFER;
-
-    let instance_pda: Pubkey = origin_chain
-        .trade_contract
-        .as_ref()
-        .ok_or_else(|| eyre!("origin chain has no trade_contract configured"))?
-        .address
-        .parse()
-        .map_err(|e| eyre!("invalid trade_contract.address on origin chain: {e}"))?;
-    let user_pubkey: Pubkey = wallet.address().parse().map_err(|e| {
-        eyre!(
-            "wallet address {:?} not a valid Solana pubkey: {e}",
-            wallet.address()
-        )
-    })?;
-    let input_token: Pubkey = input_token_address
-        .parse()
-        .map_err(|e| eyre!("input token {input_token_address:?} not a Solana pubkey: {e}"))?;
-
-    // For EVM destination tokens (0x-prefixed 20-byte hex), the address
-    // won't be a 32-byte Solana pubkey. Left-pad into a 32-byte slot so
-    // it fits OpenOrderArgs::output_token. Arborter-side unpacks by
-    // convention (low-order 20 bytes = EVM addr).
-    let output_token_bytes = parse_cross_chain_token_into_32(output_token_address)?;
-
-    let amount_in_u64 = u64::try_from(amount_in)
-        .map_err(|_| eyre!("Solana amount_in {amount_in} exceeds u64::MAX"))?;
-    let amount_out_u64 = u64::try_from(amount_out)
-        .map_err(|_| eyre!("Solana amount_out {amount_out} exceeds u64::MAX"))?;
-
-    let order = OpenOrderArgs {
-        order_id: order_id_bytes,
-        origin_chain_id: origin_chain.chain_id as u64,
-        destination_chain_id: destination_chain.chain_id as u64,
-        input_token,
-        input_amount: amount_in_u64,
-        output_token: output_token_bytes,
-        output_amount: amount_out_u64,
-    };
-    let message = gasless_lock_signing_message(&instance_pda, &user_pubkey, deadline, &order)?;
-
-    // Wallet::sign_message on Solana → raw Ed25519 sign, 64 bytes.
-    let sig = wallet.sign_message(&message).await?;
-    if sig.len() != 64 {
-        return Err(eyre!(
-            "Solana gasless signature must be 64 bytes (Ed25519); got {}",
-            sig.len()
-        ));
-    }
-
-    // Placate the unused-var lints on both paths.
-    let _ = nonce;
-
-    Ok(GaslessAuthorization {
-        user_signature: sig,
-        deadline,
-        order_id: order_id_hex,
-        nonce: 0,
-        open_deadline: 0,
-        // Same semantics as the EVM path: send the exact integers the
-        // user signed inside the borsh `OpenForSignedPayload`. The
-        // arborter rebuilds the open_for ix from `auth.amount_in` so
-        // its OpenOrderArgs match the user's signed message byte-for-byte
-        // and the Ed25519Program precompile accepts the signature.
-        amount_in: amount_in.to_string(),
-        amount_out: amount_out.to_string(),
-    })
-}
-
-#[cfg(not(feature = "solana"))]
-#[allow(clippy::too_many_arguments)]
-async fn build_solana(
-    _: &Chain,
-    _: &Chain,
-    _: &Wallet,
-    _: &str,
-    _: &str,
-    _: u128,
-    _: u128,
-    _: u64,
-    _: [u8; 32],
-    _: String,
-) -> Result<GaslessAuthorization> {
-    Err(eyre!(
-        "Solana gasless authorization requires the `solana` feature of the aspens crate"
-    ))
+/// Bundle of arguments shared by `build_evm` (in the `evm` submodule)
+/// and `build_solana` (in the `solana` submodule). Kept as a struct so
+/// the dispatcher in [`build_gasless_authorization`] doesn't have to
+/// pass nine separate arguments through (and trip clippy's
+/// `too_many_arguments`).
+pub(super) struct GaslessBuildArgs<'a> {
+    pub(super) origin_chain: &'a Chain,
+    pub(super) destination_chain: &'a Chain,
+    pub(super) wallet: &'a Wallet,
+    pub(super) input_token_address: &'a str,
+    pub(super) output_token_address: &'a str,
+    pub(super) amount_in: u128,
+    pub(super) amount_out: u128,
+    pub(super) nonce: u64,
+    pub(super) order_id_hex: String,
 }
 
 fn wallet_pubkey_bytes(wallet: &Wallet) -> Vec<u8> {
@@ -548,7 +348,7 @@ fn wallet_pubkey_bytes(wallet: &Wallet) -> Vec<u8> {
     }
 }
 
-fn parse_cross_chain_token_into_32(addr: &str) -> Result<[u8; 32]> {
+pub(super) fn parse_cross_chain_token_into_32(addr: &str) -> Result<[u8; 32]> {
     // Solana mint — 32-byte base58 pubkey.
     if let Ok(bytes) = bs58::decode(addr).into_vec() {
         if bytes.len() == 32 {
@@ -572,7 +372,7 @@ fn parse_cross_chain_token_into_32(addr: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 
-fn unix_secs() -> Result<u64> {
+pub(super) fn unix_secs() -> Result<u64> {
     Ok(SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| eyre!("system clock before epoch: {e}"))?

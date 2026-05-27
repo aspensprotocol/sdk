@@ -47,7 +47,8 @@ pub mod seeds {
 
 /// Sysvar Rent — `"SysvarRent111111111111111111111111111111111"`.
 pub fn sysvar_rent_id() -> Pubkey {
-    Pubkey::from_str("SysvarRent111111111111111111111111111111111").unwrap()
+    Pubkey::from_str("SysvarRent111111111111111111111111111111111")
+        .expect("SysvarRent id is a well-known constant; parse must succeed")
 }
 
 /// Sysvar Instructions — `"Sysvar1nstructions1111111111111111111111111"`.
@@ -55,19 +56,22 @@ pub fn sysvar_rent_id() -> Pubkey {
 /// transaction's instruction list (e.g. `openFor`, which verifies that an
 /// Ed25519Program instruction precedes it).
 pub fn sysvar_instructions_id() -> Pubkey {
-    Pubkey::from_str("Sysvar1nstructions1111111111111111111111111").unwrap()
+    Pubkey::from_str("Sysvar1nstructions1111111111111111111111111")
+        .expect("Sysvar Instructions id is a well-known constant; parse must succeed")
 }
 
 /// SPL Associated Token Account program ID —
 /// `"ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"`.
 pub fn ata_program_id() -> Pubkey {
-    Pubkey::from_str("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL").unwrap()
+    Pubkey::from_str("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+        .expect("ATA program id is a well-known constant; parse must succeed")
 }
 
 /// Ed25519 signature-verification precompile program id —
 /// `"Ed25519SigVerify111111111111111111111111111"`.
 pub fn ed25519_program_id() -> Pubkey {
-    Pubkey::from_str("Ed25519SigVerify111111111111111111111111111").unwrap()
+    Pubkey::from_str("Ed25519SigVerify111111111111111111111111111")
+        .expect("Ed25519 precompile id is a well-known constant; parse must succeed")
 }
 
 /// Compute Anchor's 8-byte instruction discriminator for `<method>`.
