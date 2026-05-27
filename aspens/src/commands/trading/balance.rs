@@ -753,3 +753,157 @@ pub fn balance_table(
 
     table
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- format_balance_with_decimals ------------------------------------
+
+    #[test]
+    fn format_balance_with_decimals_passes_sentinels_through() {
+        // "error" and "not deployed" are sentinel strings the RPC layer
+        // emits when a balance call fails; they must reach the user
+        // verbatim, not get mangled by the formatter.
+        assert_eq!(format_balance_with_decimals("error", 6), "error");
+        assert_eq!(
+            format_balance_with_decimals("not deployed", 18),
+            "not deployed"
+        );
+    }
+
+    #[test]
+    fn format_balance_with_decimals_renders_typical_amounts() {
+        // 1 USDC (6 decimals).
+        assert_eq!(format_balance_with_decimals("1000000", 6), "1.000000");
+        // 1.5 USDC.
+        assert_eq!(format_balance_with_decimals("1500000", 6), "1.500000");
+        // Sub-unit amount must keep the zero-padded fractional part.
+        assert_eq!(
+            format_balance_with_decimals("1", 18),
+            "0.000000000000000001"
+        );
+        // Zero.
+        assert_eq!(format_balance_with_decimals("0", 6), "0.000000");
+    }
+
+    #[test]
+    fn format_balance_with_decimals_falls_back_on_unparseable_input() {
+        // Anything that isn't a u128 (negative numbers, hex, garbage)
+        // round-trips unchanged rather than panicking.
+        assert_eq!(format_balance_with_decimals("0xdeadbeef", 6), "0xdeadbeef");
+        assert_eq!(format_balance_with_decimals("-1", 6), "-1");
+        assert_eq!(format_balance_with_decimals("garbage", 6), "garbage");
+    }
+
+    // -- format_balance (Uint<256, 4> variant) ---------------------------
+
+    #[test]
+    fn format_balance_handles_zero_decimals() {
+        // decimals=0 → integer-only output, no decimal point.
+        assert_eq!(format_balance(Uint::<256, 4>::from(0u64), 0), "0");
+        assert_eq!(format_balance(Uint::<256, 4>::from(12345u64), 0), "12345");
+    }
+
+    #[test]
+    fn format_balance_pads_subunit_values() {
+        // Value shorter than `decimals` must left-pad with zeros after
+        // the implicit "0." prefix.
+        assert_eq!(
+            format_balance(Uint::<256, 4>::from(1u64), 18),
+            "0.000000000000000001"
+        );
+        assert_eq!(
+            format_balance(Uint::<256, 4>::from(1500000u64), 6),
+            "1.500000"
+        );
+    }
+
+    #[test]
+    fn format_balance_splits_above_unit_values() {
+        // Value longer than `decimals` splits at len - decimals.
+        assert_eq!(
+            format_balance(Uint::<256, 4>::from(123456789u64), 6),
+            "123.456789"
+        );
+    }
+
+    // -- select_wallet_for_chain -----------------------------------------
+
+    fn evm_chain() -> Chain {
+        Chain {
+            architecture: "EVM".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn solana_chain() -> Chain {
+        Chain {
+            architecture: ARCH_SOLANA.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn evm_wallet() -> Wallet {
+        // Anvil test key #0.
+        Wallet::from_evm_hex("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+            .unwrap()
+    }
+
+    #[cfg(feature = "solana")]
+    fn solana_wallet() -> Wallet {
+        use solana_keypair::Keypair;
+        let kp = Keypair::new();
+        Wallet::from_solana_base58(&bs58::encode(kp.to_bytes()).into_string()).unwrap()
+    }
+
+    #[test]
+    fn select_wallet_for_chain_routes_evm_to_secp256k1() {
+        let w = evm_wallet();
+        let chain = evm_chain();
+        let wallets: [&Wallet; 1] = [&w];
+        let picked = select_wallet_for_chain(&chain, &wallets);
+        assert!(picked.is_some());
+        assert_eq!(picked.unwrap().curve(), CurveType::Secp256k1);
+    }
+
+    #[cfg(feature = "solana")]
+    #[test]
+    fn select_wallet_for_chain_routes_solana_to_ed25519() {
+        let w = solana_wallet();
+        let chain = solana_chain();
+        let wallets: [&Wallet; 1] = [&w];
+        let picked = select_wallet_for_chain(&chain, &wallets);
+        assert!(picked.is_some());
+        assert_eq!(picked.unwrap().curve(), CurveType::Ed25519);
+    }
+
+    #[cfg(feature = "solana")]
+    #[test]
+    fn select_wallet_for_chain_picks_matching_curve_from_mixed_set() {
+        // Caller passes both wallets; the helper must pick by curve,
+        // not by list order. Regression guard for the multi-wallet
+        // cross-chain order flow.
+        let evm = evm_wallet();
+        let sol = solana_wallet();
+        let sol_addr = sol.address();
+
+        let mixed_a: [&Wallet; 2] = [&evm, &sol];
+        let pick = select_wallet_for_chain(&solana_chain(), &mixed_a).unwrap();
+        assert_eq!(pick.curve(), CurveType::Ed25519);
+        assert_eq!(pick.address(), sol_addr);
+
+        let mixed_b: [&Wallet; 2] = [&sol, &evm];
+        let pick = select_wallet_for_chain(&evm_chain(), &mixed_b).unwrap();
+        assert_eq!(pick.curve(), CurveType::Secp256k1);
+    }
+
+    #[test]
+    fn select_wallet_for_chain_returns_none_when_no_curve_matches() {
+        // EVM-only caller, Solana chain → no match (reported as
+        // "no wallet" downstream rather than erroring out).
+        let w = evm_wallet();
+        let wallets: [&Wallet; 1] = [&w];
+        assert!(select_wallet_for_chain(&solana_chain(), &wallets).is_none());
+    }
+}

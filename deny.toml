@@ -1,0 +1,83 @@
+# cargo-deny policy for the Aspens SDK workspace.
+#
+# Run locally:    cargo deny --workspace check
+# Run one check:  cargo deny --workspace check advisories
+#
+# CI runs this on every PR + a daily cron — see
+# .github/workflows/security-audit.yml.
+#
+# Mirrors arborter/app/deny.toml in shape; the SDK tree pulls a narrower
+# set of deps so the ignore list is shorter.
+
+[graph]
+all-features = false
+no-default-features = false
+
+# Vulnerability + yanked-crate gate. Anything matched here fails CI;
+# tweak `ignore` (with a justification) only when the upstream fix isn't
+# out yet.
+[advisories]
+version = 2
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+# Ignored advisories must be revisited when upstream ships a fix. Each
+# entry needs a one-line justification — silent ignores rot.
+ignore = [
+  # bincode 1.x is officially feature-frozen ("no safe upgrade
+  # available"). Used transitively by solana-sdk's native serialization;
+  # migrating means changing Solana's wire format, which is upstream's
+  # call. Mirrors the arborter ignore.
+  "RUSTSEC-2025-0141",
+  # paste is unmaintained but has no replacement; transitive via many
+  # macro crates (sol! / Solana). Track but don't block. Mirrors the
+  # arborter ignore.
+  "RUSTSEC-2024-0436",
+]
+
+# Source restriction: only crates.io is allowed today (no git deps in
+# the workspace). Adding a git dep should be a deliberate act — extend
+# `allow-git` here when you do.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-DFS-2016",
+  "Unicode-3.0",
+  "MPL-2.0",
+  "Zlib",
+  "0BSD",
+  "CC0-1.0",
+  # CDLA-Permissive-2.0 — Linux Foundation data license (webpki-roots
+  # cert bundles). BSL-1.0 — Boost Software License (xxhash-rust).
+  # Both are permissive OSI-equivalent licenses safe for production use.
+  "CDLA-Permissive-2.0",
+  "BSL-1.0",
+]
+# Workspace crates aren't published with a `license` field on every
+# member; skip the check for the unpublished members so cargo-deny
+# doesn't flag them as `unlicensed`.
+[licenses.private]
+ignore = true
+
+# Bans / dup-version detection. Wildcards on external deps are denied
+# (they break reproducibility), but intra-workspace `path = "..."`
+# entries are allowed — cargo treats those as version-pinned implicitly.
+# Multiple versions of the same crate are only a warning: alloy / tokio
+# / Solana churn means the workspace usually carries a few transitive
+# duplicates not worth blocking on.
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true

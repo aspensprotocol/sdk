@@ -1,0 +1,47 @@
+name: Security Audit
+
+# Gate dependency advisories, yanked crates, license drift, and unknown
+# sources at PR time so a vulnerable transitive dep can't reach main.
+# Lives in its own workflow (rather than tacking onto ci.yml) so the
+# daily cron only re-runs the cheap audit step, not the full build/test
+# matrix.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - 'deny.toml'
+      - '.github/workflows/security-audit.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - 'deny.toml'
+  # Catch advisories that publish hours/days after our last commit.
+  # 06:00 UTC ≈ start of EU workday; failures land in time to triage.
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    runs-on: ubuntu-latest
+    # `check` is the union (advisories ∪ bans ∪ licenses ∪ sources).
+    # Each category is configured in deny.toml at the workspace root.
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [advisories, bans, licenses, sources]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.check }}
+          arguments: ''
