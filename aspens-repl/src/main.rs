@@ -2,7 +2,7 @@ use aspens::commands::config::config_pb::GetConfigResponse;
 use aspens::commands::trading::{
     balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
 };
-use aspens::{AspensClient, AsyncExecutor, BlockingExecutor};
+use aspens::{AspensClient, AsyncExecutor, BlockingExecutor, Wallet};
 use aspens_cliutil::BinaryContext;
 use clap::Parser;
 use clap_repl::reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory};
@@ -26,6 +26,27 @@ fn print_missing_privkey_error() {
     println!("  - The private key should be a 64-character hex string");
     println!("  - Do not include the '0x' prefix");
     println!();
+}
+
+/// Pull `TRADER_PRIVKEY` from the REPL's session env (not process env, so
+/// `.env` changes during the session are honoured) and build an EVM
+/// [`Wallet`]. Returns `None` after printing a user-friendly error if the
+/// key is missing or malformed — call sites just `return` in that case.
+fn load_trader_wallet_or_complain(app_state: &AppState) -> Option<Wallet> {
+    let key = match app_state.get_env("TRADER_PRIVKEY") {
+        Some(k) => k,
+        None => {
+            print_missing_privkey_error();
+            return None;
+        }
+    };
+    match Wallet::from_evm_hex(&key) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            print_error(&format_error(&eyre::eyre!(e), "load TRADER_PRIVKEY"));
+            None
+        }
+    }
 }
 
 /// Print a friendly error message
@@ -361,21 +382,28 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
-                Some(key) => key,
-                None => {
-                    print_missing_privkey_error();
-                    return;
-                }
+            let wallet = match load_trader_wallet_or_complain(&app_state) {
+                Some(w) => w,
+                None => return,
             };
 
-            match executor.execute(deposit::call_deposit_from_config(
-                network.clone(),
-                token.clone(),
-                amount_base,
-                privkey,
-                config,
-            )) {
+            // `async move` so `wallet` moves into the future and the
+            // executor sees a `'static` future. The library's
+            // `*_with_wallet` API takes `&Wallet`, so we re-borrow inside
+            // the closure.
+            let net = network.clone();
+            let tok = token.clone();
+            let res = executor.execute(async move {
+                deposit::call_deposit_from_config_with_wallet(
+                    net,
+                    tok,
+                    amount_base,
+                    &wallet,
+                    config,
+                )
+                .await
+            });
+            match res {
                 Ok(_) => info!("Deposit successful"),
                 Err(e) => print_error(&format_error(
                     &e,
@@ -410,21 +438,24 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
-                Some(key) => key,
-                None => {
-                    print_missing_privkey_error();
-                    return;
-                }
+            let wallet = match load_trader_wallet_or_complain(&app_state) {
+                Some(w) => w,
+                None => return,
             };
 
-            match executor.execute(withdraw::call_withdraw_from_config(
-                network.clone(),
-                token.clone(),
-                amount_base,
-                privkey,
-                config,
-            )) {
+            let net = network.clone();
+            let tok = token.clone();
+            let res = executor.execute(async move {
+                withdraw::call_withdraw_from_config_with_wallet(
+                    net,
+                    tok,
+                    amount_base,
+                    &wallet,
+                    config,
+                )
+                .await
+            });
+            match res {
                 Ok(_) => info!("Withdraw successful"),
                 Err(e) => print_error(&format_error(
                     &e,
@@ -444,24 +475,23 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
-                Some(key) => key,
-                None => {
-                    print_missing_privkey_error();
-                    return;
-                }
+            let wallet = match load_trader_wallet_or_complain(&app_state) {
+                Some(w) => w,
+                None => return,
             };
 
-            match executor.execute(send_order::send_order(
-                app_state.stack_url(),
-                market.clone(),
-                1, // Buy side
-                amount.clone(),
-                None, // No limit price (market order)
-                privkey,
-                config,
-                false, // post_only meaningless for market orders
-            )) {
+            let url = app_state.stack_url();
+            let mkt = market.clone();
+            let amt = amount.clone();
+            let res = executor.execute(async move {
+                send_order::send_order_with_wallet(
+                    url, mkt, 1, // Buy side
+                    amt, None, // No limit price (market order)
+                    &wallet, config, false, // post_only meaningless for market orders
+                )
+                .await
+            });
+            match res {
                 Ok(result) => {
                     info!(
                         "Market buy order sent successfully (order_id: {})",
@@ -501,24 +531,29 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
-                Some(key) => key,
-                None => {
-                    print_missing_privkey_error();
-                    return;
-                }
+            let wallet = match load_trader_wallet_or_complain(&app_state) {
+                Some(w) => w,
+                None => return,
             };
 
-            match executor.execute(send_order::send_order(
-                app_state.stack_url(),
-                market.clone(),
-                1, // Buy side
-                amount.clone(),
-                Some(price.clone()),
-                privkey,
-                config,
-                post_only,
-            )) {
+            let url = app_state.stack_url();
+            let mkt = market.clone();
+            let amt = amount.clone();
+            let prc = price.clone();
+            let res = executor.execute(async move {
+                send_order::send_order_with_wallet(
+                    url,
+                    mkt,
+                    1, // Buy side
+                    amt,
+                    Some(prc),
+                    &wallet,
+                    config,
+                    post_only,
+                )
+                .await
+            });
+            match res {
                 Ok(result) => {
                     info!(
                         "Limit buy order sent successfully (order_id: {})",
@@ -553,24 +588,23 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
-                Some(key) => key,
-                None => {
-                    print_missing_privkey_error();
-                    return;
-                }
+            let wallet = match load_trader_wallet_or_complain(&app_state) {
+                Some(w) => w,
+                None => return,
             };
 
-            match executor.execute(send_order::send_order(
-                app_state.stack_url(),
-                market.clone(),
-                2, // Sell side
-                amount.clone(),
-                None, // No limit price (market order)
-                privkey,
-                config,
-                false, // post_only meaningless for market orders
-            )) {
+            let url = app_state.stack_url();
+            let mkt = market.clone();
+            let amt = amount.clone();
+            let res = executor.execute(async move {
+                send_order::send_order_with_wallet(
+                    url, mkt, 2, // Sell side
+                    amt, None, // No limit price (market order)
+                    &wallet, config, false, // post_only meaningless for market orders
+                )
+                .await
+            });
+            match res {
                 Ok(result) => {
                     info!(
                         "Market sell order sent successfully (order_id: {})",
@@ -610,24 +644,29 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
-                Some(key) => key,
-                None => {
-                    print_missing_privkey_error();
-                    return;
-                }
+            let wallet = match load_trader_wallet_or_complain(&app_state) {
+                Some(w) => w,
+                None => return,
             };
 
-            match executor.execute(send_order::send_order(
-                app_state.stack_url(),
-                market.clone(),
-                2, // Sell side
-                amount.clone(),
-                Some(price.clone()),
-                privkey,
-                config,
-                post_only,
-            )) {
+            let url = app_state.stack_url();
+            let mkt = market.clone();
+            let amt = amount.clone();
+            let prc = price.clone();
+            let res = executor.execute(async move {
+                send_order::send_order_with_wallet(
+                    url,
+                    mkt,
+                    2, // Sell side
+                    amt,
+                    Some(prc),
+                    &wallet,
+                    config,
+                    post_only,
+                )
+                .await
+            });
+            match res {
                 Ok(result) => {
                     info!(
                         "Limit sell order sent successfully (order_id: {})",
@@ -669,22 +708,21 @@ fn main() {
                 }
             };
 
-            let privkey = match app_state.get_env("TRADER_PRIVKEY") {
-                Some(key) => key,
-                None => {
-                    print_missing_privkey_error();
-                    return;
-                }
+            let wallet = match load_trader_wallet_or_complain(&app_state) {
+                Some(w) => w,
+                None => return,
             };
 
-            match executor.execute(cancel_order::call_cancel_order_from_config(
-                app_state.stack_url(),
-                market.clone(),
-                side.clone(),
-                order_id,
-                privkey,
-                config,
-            )) {
+            let url = app_state.stack_url();
+            let mkt = market.clone();
+            let sd = side.clone();
+            let res = executor.execute(async move {
+                cancel_order::call_cancel_order_from_config_with_wallet(
+                    url, mkt, sd, order_id, &wallet, config,
+                )
+                .await
+            });
+            match res {
                 Ok(result) => {
                     if result.order_canceled {
                         info!("Order {} canceled successfully", order_id);
@@ -712,15 +750,15 @@ fn main() {
             let stack_url = app_state.stack_url();
             match executor.execute(config::get_config(stack_url.clone())) {
                 Ok(config) => {
-                    let privkey = match app_state.get_env("TRADER_PRIVKEY") {
-                        Some(key) => key,
-                        None => {
-                            print_missing_privkey_error();
-                            return;
-                        }
+                    let wallet = match load_trader_wallet_or_complain(&app_state) {
+                        Some(w) => w,
+                        None => return,
                     };
-                    if let Err(e) = executor.execute(balance::balance_from_config(config, privkey))
-                    {
+                    let res = executor.execute(async move {
+                        let wallets: [&Wallet; 1] = [&wallet];
+                        balance::balance_from_config_with_wallets(config, &wallets).await
+                    });
+                    if let Err(e) = res {
                         print_error(&format_error(&e, "fetch balances"));
                     }
                 }

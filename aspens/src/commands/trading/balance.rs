@@ -1,6 +1,5 @@
 use alloy::primitives::{Address, Uint};
 use alloy::providers::{Provider, ProviderBuilder};
-use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
 use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
 use eyre::Result;
@@ -11,7 +10,9 @@ use url::Url;
 use crate::chain_client::{ChainClient, ARCH_SOLANA};
 use crate::commands::config::config_pb::{Chain, Configuration, GetConfigResponse};
 use crate::evm::rpc::{MidribV2, IERC20};
-use crate::wallet::{load_trader_wallet, CurveType, Wallet};
+#[cfg(test)]
+use crate::wallet::CurveType;
+use crate::wallet::Wallet;
 
 /// Represents a unique token across all chains
 #[derive(Debug, Clone)]
@@ -473,151 +474,8 @@ pub async fn balance_from_config_with_wallets(
     Ok(())
 }
 
-/// New config-driven balance function
-/// Legacy EVM-privkey entry point. Kept for existing CLI/REPL call sites.
-///
-/// Builds an EVM wallet from `privkey` and opportunistically also loads a
-/// Solana trader wallet from `TRADER_PRIVKEY_SOLANA` (when present and the
-/// `solana` feature is on), then delegates to
-/// [`balance_from_config_with_wallets`]. Chains whose architecture has no
-/// matching wallet are reported as "no wallet" in the table.
-pub async fn balance_from_config(config: GetConfigResponse, privkey: String) -> Result<()> {
-    let evm = Wallet::from_evm_hex(&privkey)?;
-    let solana = load_trader_wallet(CurveType::Ed25519).ok();
-    let mut wallets: Vec<&Wallet> = vec![&evm];
-    if let Some(ref s) = solana {
-        wallets.push(s);
-    }
-    balance_from_config_with_wallets(config, &wallets).await
-}
-
-/// Legacy two-chain balance printer. Prints wallet, available, and locked
-/// USDC balances for `(base_chain, quote_chain)` to `info!`.
-///
-/// Prefer the config-driven [`balance_from_config`] /
-/// [`balance_from_config_with_wallet`] entry points; this function is kept
-/// for compatibility with older scripts that pass raw RPC URLs.
-pub async fn balance(
-    base_chain_rpc_url: String,
-    base_chain_usdc_token_address: String,
-    quote_chain_rpc_url: String,
-    quote_chain_usdc_token_address: String,
-    base_chain_contract_address: String,
-    quote_chain_contract_address: String,
-    privkey: String,
-) -> Result<()> {
-    let base_wallet_balance = call_get_erc20_balance(
-        NamedChain::BaseGoerli,
-        &base_chain_rpc_url,
-        &base_chain_usdc_token_address,
-        &privkey,
-    )
-    .await
-    .map_or("error".to_string(), |v| v.to_string());
-    let base_available_balance = call_get_balance(
-        NamedChain::BaseGoerli,
-        &base_chain_rpc_url,
-        &base_chain_usdc_token_address,
-        &base_chain_contract_address,
-        &privkey,
-    )
-    .await
-    .map_or("error".to_string(), |v| v.to_string());
-    let base_locked_balance = call_get_locked_balance(
-        &base_chain_rpc_url,
-        &base_chain_usdc_token_address,
-        &base_chain_contract_address,
-        &privkey,
-    )
-    .await
-    .map_or("error".to_string(), |v| v.to_string());
-    let quote_wallet_balance = call_get_erc20_balance(
-        NamedChain::BaseSepolia,
-        &quote_chain_rpc_url,
-        &quote_chain_usdc_token_address,
-        &privkey,
-    )
-    .await
-    .map_or("error".to_string(), |v| v.to_string());
-    let quote_available_balance = call_get_balance(
-        NamedChain::BaseSepolia,
-        &quote_chain_rpc_url,
-        &quote_chain_usdc_token_address,
-        &quote_chain_contract_address,
-        &privkey,
-    )
-    .await
-    .map_or("error".to_string(), |v| v.to_string());
-    let quote_locked_balance = call_get_locked_balance(
-        &quote_chain_rpc_url,
-        &quote_chain_usdc_token_address,
-        &quote_chain_contract_address,
-        &privkey,
-    )
-    .await
-    .map_or("error".to_string(), |v| v.to_string());
-    let balance_table = balance_table(
-        vec!["USDC", "Base Chain", "Quote Chain"],
-        &base_wallet_balance,
-        &base_available_balance,
-        &base_locked_balance,
-        &quote_wallet_balance,
-        &quote_available_balance,
-        &quote_locked_balance,
-    );
-    info!("\n{}", balance_table);
-    Ok(())
-}
-
 /// Read the trader's available trade balance from MidribV2's
 /// `tradeBalance(owner, token)` accessor.
-pub async fn call_get_balance(
-    chain: NamedChain,
-    rpc_url: &str,
-    token_address: &str,
-    contract_address: &str,
-    privkey: &str,
-) -> Result<Uint<256, 4>> {
-    let contract_addr: Address = contract_address.parse()?;
-    let token_addr: Address = token_address.parse()?;
-    let signer = privkey.parse::<PrivateKeySigner>()?;
-    let depositer_address: Address = signer.address();
-    let rpc_url = Url::parse(rpc_url)?;
-    let provider = ProviderBuilder::new()
-        .with_chain(chain)
-        .connect_http(rpc_url);
-    let contract = MidribV2::new(contract_addr, &provider);
-    let result = contract
-        .tradeBalance(depositer_address, token_addr)
-        .call()
-        .await?;
-    Ok(result)
-}
-
-/// Read the trader's locked (in-flight) trade balance from MidribV2's
-/// `lockedTradeBalance(owner, token)` accessor.
-pub async fn call_get_locked_balance(
-    rpc_url: &str,
-    token_address: &str,
-    contract_address: &str,
-    privkey: &str,
-) -> Result<Uint<256, 4>> {
-    let contract_addr: Address = contract_address.parse()?;
-    let token_addr: Address = token_address.parse()?;
-    let signer = privkey.parse::<PrivateKeySigner>()?;
-    let depositer_address: Address = signer.address();
-    let rpc_url = Url::parse(rpc_url)?;
-    let provider = ProviderBuilder::new().connect_http(rpc_url);
-    let contract = MidribV2::new(contract_addr, &provider);
-    let result = contract
-        .lockedTradeBalance(depositer_address, token_addr)
-        .call()
-        .await?;
-    Ok(result)
-}
-
-/// Variant of `call_get_balance` that takes an `Address` directly instead of
-/// deriving it from a private key. Used by curve-aware balance queries.
 pub async fn call_get_balance_for_address(
     chain: NamedChain,
     rpc_url: &str,
@@ -656,32 +514,6 @@ pub async fn call_get_locked_balance_for_address(
         .call()
         .await?;
     Ok(result)
-}
-
-/// Read the ERC-20 wallet balance for the address derived from `privkey`.
-pub async fn call_get_erc20_balance(
-    chain: NamedChain,
-    rpc_url: &str,
-    token_address: &str,
-    privkey: &str,
-) -> Result<Uint<256, 4>> {
-    let token_addr: Address = token_address.parse()?;
-    let signer = privkey.parse::<PrivateKeySigner>()?;
-    let depositer_address: Address = signer.address();
-    let rpc_url = Url::parse(rpc_url)?;
-    let provider = ProviderBuilder::new()
-        .with_chain(chain)
-        .connect_http(rpc_url);
-    let contract = IERC20::new(token_addr, &provider);
-    let result = contract.balanceOf(depositer_address).call().await?;
-    Ok(result)
-}
-
-/// Read the native gas balance (wei) for the address derived from `privkey`.
-pub async fn call_get_native_balance(rpc_url: &str, privkey: &str) -> Result<Uint<256, 4>> {
-    let signer = privkey.parse::<PrivateKeySigner>()?;
-    let address = signer.address();
-    call_get_native_balance_for_address(rpc_url, address).await
 }
 
 /// Read the native gas balance (wei) for an explicit `address`.
@@ -725,33 +557,6 @@ pub fn format_balance(value: Uint<256, 4>, decimals: u32) -> String {
         let (int_part, frac_part) = s.split_at(s.len() - dec);
         format!("{}.{}", int_part, frac_part)
     }
-}
-
-/// Build the legacy two-chain (base / quote) balance table used by the
-/// `balance` command's pretty printer.
-pub fn balance_table(
-    header: Vec<&str>,
-    base_wallet_bal: &str,
-    base_available_bal: &str,
-    base_locked_bal: &str,
-    quote_wallet_bal: &str,
-    quote_available_bal: &str,
-    quote_locked_bal: &str,
-) -> Table {
-    let mut table = Table::new();
-
-    table
-        .load_preset(UTF8_BORDERS_ONLY)
-        .set_header(header)
-        .add_row(vec!["Wallet Balance", base_wallet_bal, quote_wallet_bal])
-        .add_row(vec![
-            "Available Balance",
-            base_available_bal,
-            quote_available_bal,
-        ])
-        .add_row(vec!["Locked Balance", base_locked_bal, quote_locked_bal]);
-
-    table
 }
 
 #[cfg(test)]

@@ -116,7 +116,8 @@ impl ChainClient {
                     .map_err(|e| eyre!("invalid Solana owner address: {}", e))?;
                 let mint_pubkey = Pubkey::from_str(&token.address)
                     .map_err(|e| eyre!("invalid Solana mint address: {}", e))?;
-                let ata = derive_associated_token_account(&owner_pubkey, &mint_pubkey);
+                let ata =
+                    crate::solana::derive_associated_token_account(&owner_pubkey, &mint_pubkey);
 
                 match client.get_token_account_balance(&ata).await {
                     Ok(b) => b
@@ -130,18 +131,10 @@ impl ChainClient {
     }
 }
 
-/// Derive the Solana Associated Token Account (ATA) address for `(owner, mint)`.
-///
-/// Re-exported from `crate::solana` for backward compatibility with callers
-/// that imported it from this module before the Solana code moved.
-#[cfg(feature = "solana")]
-pub fn derive_associated_token_account(owner: &Pubkey, mint: &Pubkey) -> Pubkey {
-    crate::solana::derive_associated_token_account(owner, mint)
-}
-
 #[cfg(all(test, feature = "solana"))]
 mod tests {
     use super::*;
+    use crate::solana::derive_associated_token_account;
 
     #[test]
     fn ata_derivation_matches_known_pair() {

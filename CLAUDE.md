@@ -203,8 +203,11 @@ that accept a `&Wallet` and dispatch internally:
 - `deposit::call_deposit_from_config_with_wallet`
 - `withdraw::call_withdraw_from_config_with_wallet`
 
-The legacy `privkey: String` functions still exist as thin wrappers that
-construct an `Wallet::Evm` and delegate, so existing EVM callers are unchanged.
+The `_with_wallet` (and `_with_wallets`) family is the only public
+shape now. The earlier `privkey: String` wrappers (`send_order::send_order`,
+`call_cancel_order`, `balance_from_config`, `call_deposit_from_config`,
+`call_withdraw_from_config`, `authenticate_with_signature`) were
+retired in Phase 4 — callers always go through `Wallet` directly.
 
 **Chain-aware RPC**: `aspens/src/chain_client.rs` defines a `ChainClient` enum
 that dispatches between Alloy (EVM) and `solana-client` based on

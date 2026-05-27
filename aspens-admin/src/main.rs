@@ -387,12 +387,14 @@ async fn run() -> Result<()> {
             info!("Authenticating with EIP-712 signature...");
             info!("  Wallet address: {}", address);
 
+            // Re-build the admin wallet from the same privkey — the
+            // address parse above was just for the user-facing message.
+            let wallet = aspens::Wallet::from_evm_hex(privkey)?;
+            let url = stack_url.clone();
             let result = executor
-                .execute(auth::authenticate_with_signature(
-                    stack_url.clone(),
-                    privkey.clone(),
-                    Some(chain_id),
-                ))
+                .execute(async move {
+                    auth::authenticate_with_wallet(url, &wallet, Some(chain_id)).await
+                })
                 .map_err(|e| {
                     // Include the address in the error context for better debugging
                     let err_msg = format_error(&e, "authenticate");

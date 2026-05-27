@@ -14,20 +14,6 @@ use crate::wallet::{CurveType, Wallet};
 /// Minimum gas balance required for transactions (0.0001 ETH = 100000 gwei)
 const MIN_GAS_BALANCE: u128 = 100_000_000_000_000; // 0.0001 ETH in wei
 
-/// Deposit tokens using configuration from the server (legacy EVM API).
-///
-/// Wraps `call_deposit_from_config_with_wallet` for backward compatibility.
-pub async fn call_deposit_from_config(
-    network: String,
-    token_symbol: String,
-    amount: u64,
-    privkey: String,
-    config: GetConfigResponse,
-) -> Result<()> {
-    let wallet = Wallet::from_evm_hex(&privkey)?;
-    call_deposit_from_config_with_wallet(network, token_symbol, amount, &wallet, config).await
-}
-
 /// Deposit tokens using a curve-agnostic wallet.
 ///
 /// Branches on `chain.architecture`:
