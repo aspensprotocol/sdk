@@ -10,8 +10,9 @@ name = "aspens-cli"
 path = "src/main.rs"
 
 [dependencies]
-# Local dependencies
-aspens = { path = "../aspens" }
+# Local dependencies — features declared explicitly so changes to the
+# aspens crate's default features don't silently affect this binary.
+aspens = { path = "../aspens", default-features = false, features = ["client", "evm", "solana", "formatting"] }
 
 # Workspace dependencies
 alloy.workspace = true

@@ -83,9 +83,10 @@ prep-for-pr: lint fmt-check test
 test-live-send-order:
     cargo test -p aspens --test send_order_live --all-features -- --ignored --nocapture
 
-# Run AMMIT tests with specific environment
+# Run AMMIT tests against a local anvil stack (default --stack-url http://localhost:50051)
 test-anvil:
-    ./scripts/ammit.sh anvil
+    python3 scripts/ammit.py
 
+# Run AMMIT tests against a testnet stack — set $ASPENS_MARKET_STACK_URL or pass --stack-url
 test-testnet:
-    ./scripts/ammit.sh testnet
+    python3 scripts/ammit.py --stack-url ${ASPENS_MARKET_STACK_URL}

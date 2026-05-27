@@ -311,7 +311,31 @@ For gasless `open_for` flows the user signs an `OpenForSignedPayload` with an `a
 ## Documentation
 
 - [Decimal Conversion Guide](decimals.md) - Understanding decimal handling
+- [CHANGELOG.md](CHANGELOG.md) - Release notes per version
 - [CLAUDE.md](CLAUDE.md) - Architecture guide for development
+
+## Versioning
+
+The `aspens` crate follows [Semantic Versioning](https://semver.org/). The
+workspace is pre-1.0, so the conventions in effect today are:
+
+- **Patch releases (`0.4.x` → `0.4.y`)** — bug fixes, performance work,
+  internal refactors. No source-breaking changes to public items in
+  `aspens::{client, wallet, orders, evm, solana, decimals}` or to the
+  re-exports at the crate root.
+- **Minor releases (`0.4.x` → `0.5.0`)** — may include breaking changes
+  to the public API surface (renames, signature changes, removals).
+  Notable changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+- **Internal modules** — `aspens::grpc` (and any module marked
+  `#[doc(hidden)]` or `pub(crate)`) are implementation details and may
+  change in any release. Generated proto bindings under
+  `aspens::proto::*` and `aspens::attestation::*` track the upstream
+  `protos/` repo and follow its compatibility, not the SDK's.
+- **CLI / REPL / Admin binaries** — version-bumped together with the
+  library. Flag and command renames are called out in `CHANGELOG.md`.
+
+When in doubt about whether a change is breaking, check the changelog
+entry for the target version.
 
 ## License
 

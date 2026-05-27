@@ -57,12 +57,12 @@ fn main() -> Result<()> {
     let result = executor.execute(send_order::send_order(
         stack_url.clone(),
         market_id.into(),
-        1,                       // side: 1 = BUY, 2 = SELL
-        "1.5".into(),            // quantity
-        Some("100.50".into()),   // limit price (None for market order)
+        1,                     // side: 1 = BUY, 2 = SELL
+        "1.5".into(),          // quantity
+        Some("100.50".into()), // limit price (None for market order)
         privkey.clone(),
         cfg.clone(),
-        false,                   // post_only
+        false, // post_only
     ))?;
     println!("Order placed (order_id: {})", result.order_id);
 
