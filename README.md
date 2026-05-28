@@ -11,24 +11,52 @@ workspace and are built from source.
 
 ## Available Commands
 
+### Trader commands (`aspens-cli` / `aspens-repl`)
+
 | Command | Description |
 |---------|-------------|
-| `config` | Fetch and display the configuration from the server |
+| `config [--output-file <path>]` | Fetch and display the configuration from the server (saves to `.json` / `.toml` if `--output-file` is set) |
 | `deposit <network> <token> <amount>` | Deposit tokens to make them available for trading |
 | `withdraw <network> <token> <amount>` | Withdraw tokens to a local wallet |
 | `buy-market <market> <amount>` | Send a market BUY order (executes at best available price) |
 | `buy-limit <market> <amount> <price> [--post-only]` | Send a limit BUY order (executes at specified price or better). With `--post-only`, the order is rejected if it would cross at submission — guarantees maker-side execution. |
 | `sell-market <market> <amount>` | Send a market SELL order (executes at best available price) |
 | `sell-limit <market> <amount> <price> [--post-only]` | Send a limit SELL order (executes at specified price or better). See `--post-only` above. |
+| `buy-marketable <market> <amount> [--slippage-bps <bps>]` | **CLI only.** Snapshot the resting book, cap slippage above best ask (default 50 bps = 0.5%), submit as a buy-limit. The gasless cross-chain protocol rejects true market orders; this turns "take the top of book with a slippage cap" into the equivalent priced order. |
+| `sell-marketable <market> <amount> [--slippage-bps <bps>]` | **CLI only.** Same as `buy-marketable`, but capping slippage below best bid. |
 | `cancel-order <market> <side> <order_id>` | Cancel an existing order by its ID |
 | `stream-orderbook <market> [--historical] [--trader <addr>]` | Stream orderbook entries in real-time |
 | `stream-trades <market> [--historical] [--trader <addr>]` | Stream executed trades in real-time |
 | `balance` | Fetch the current balances for all supported tokens across all chains |
 | `status` | Show current configuration and connection status |
 | `trader-public-key` | Get the public key and address for the trader wallet |
-| `signer-public-key [--chain-id <id>]` | Get the signer public key(s) for the trading instance |
+| `signer-public-key [--chain-network <network>]` | Get the signer public key(s) for the trading instance (filtered to a chain network if provided) |
+| `get-attestation [--report-data <hex>] [-o text\|json]` | Fetch the TEE attestation report from the signer; optionally bind up to 64 bytes of user-supplied data into the report |
 
-All commands are available in both `aspens-cli` and `aspens-repl`.
+All commands above are available in both `aspens-cli` and `aspens-repl`, except `buy-marketable` / `sell-marketable` which are CLI-only. The REPL also adds a `quit` command to exit the session.
+
+### Admin commands (`aspens-admin`)
+
+Most commands below require a JWT (set via `--jwt`, `ASPENS_JWT` in `.env`, or the `aspens-admin login` flow).
+
+| Command | Description |
+|---------|-------------|
+| `init-admin --address <eth-address>` | Initialize the first admin on a fresh stack (no JWT required) |
+| `login [--chain-id <id>]` | Authenticate via EIP-712 signature using `ADMIN_PRIVKEY` and obtain a JWT |
+| `update-admin --address <eth-address>` | Update the admin address |
+| `set-chain --architecture … --name … --network … --chain-id … --rpc-url … --factory-address … --permit2-address … [--block-explorer-url …] [--instance-signer-address …]` | Add or update a chain entry |
+| `delete-chain --network <network>` | Remove a chain from the configuration |
+| `set-token --network … --name … --symbol … --address … --decimals … [--token-id …]` | Add or update a token on a chain |
+| `delete-token --network <network> --symbol <symbol>` | Remove a token from a chain |
+| `set-market --base-network … --quote-network … --base-symbol … --quote-symbol … --base-address … --quote-address … --base-decimals … --quote-decimals … --pair-decimals …` | Add or update a market |
+| `delete-market --market-id <id>` | Remove a market |
+| `deploy-contract --network <network> --fee-pct <bps>` | Deploy a trade contract on a chain (fee in basis points) |
+| `set-trade-contract --address <addr> --network <network>` | Register an existing trade contract address on a chain |
+| `delete-trade-contract --network <network>` | Remove the trade contract association from a chain |
+| `version` | Show server version information |
+| `status` | Show current configuration and connection status |
+| `admin-public-key` | Get the public key and address for the admin wallet (from `ADMIN_PRIVKEY`) |
+| `balances` | Show balances for owner, signers, and contracts across all chains |
 
 ## Project Structure
 
