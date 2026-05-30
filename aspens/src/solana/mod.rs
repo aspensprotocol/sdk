@@ -40,6 +40,10 @@ pub mod seeds {
     /// Prevents replay of a gasless signature after the corresponding Order
     /// PDA is closed by `unlock_for_canceled`.
     pub const USED_NONCE_SEED: &[u8] = b"used_nonce";
+    /// Seed for the single-use withdrawal-voucher tombstone (Track A §8),
+    /// distinct from `USED_NONCE_SEED` so order and withdrawal nonces never
+    /// collide.
+    pub const WITHDRAW_NONCE_SEED: &[u8] = b"withdraw_nonce";
     /// Seed for the per-(instance, mint) FeeAccrual PDA — running total of
     /// settle-time fees awaiting `sweep_fees`.
     pub const FEE_ACCRUAL_SEED: &[u8] = b"fee_accrual";
@@ -263,6 +267,113 @@ pub fn withdraw_ix(
             AccountMeta::new_readonly(vault_authority, false),
             AccountMeta::new_readonly(*user, true),
             AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+        ],
+        data,
+    })
+}
+
+// -- Withdrawal voucher (Track A §8) --------------------------------------
+
+/// Derive the single-use withdrawal-voucher tombstone PDA
+/// (`[WITHDRAW_NONCE_SEED, instance, account, nonce]`). Mirrors the program's
+/// `withdraw_voucher` account seeds.
+pub fn derive_withdraw_nonce_pda(
+    instance: &Pubkey,
+    account: &Pubkey,
+    nonce: u64,
+    program_id: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            seeds::WITHDRAW_NONCE_SEED,
+            instance.as_ref(),
+            account.as_ref(),
+            &nonce.to_le_bytes(),
+        ],
+        program_id,
+    )
+}
+
+/// The exact bytes the instance `signer` (TEE) Ed25519-signs to authorize a
+/// `withdraw_voucher`. Borsh layout MUST match the program's + adapter's
+/// `WithdrawalVoucherPayload` byte-for-byte.
+#[derive(borsh::BorshSerialize, Debug)]
+pub struct WithdrawalVoucherPayload {
+    pub instance: Pubkey,
+    pub account: Pubkey,
+    pub mint: Pubkey,
+    pub amount: u64,
+    pub nonce: u64,
+    pub deadline: u64,
+}
+
+/// Args to the Midrib `withdraw_voucher` instruction.
+#[derive(borsh::BorshSerialize, Debug)]
+pub struct WithdrawVoucherArgs {
+    pub amount: u64,
+    pub nonce: u64,
+    pub deadline: u64,
+    /// The TEE's 64-byte Ed25519 signature (informational on-chain; the
+    /// verified copy lives in the paired Ed25519Program ix).
+    pub signature: [u8; 64],
+}
+
+/// Produce the exact bytes the arborter signed for a withdrawal voucher — what
+/// the SDK must put in the `ed25519_verify_ix` message region.
+pub fn withdrawal_voucher_signing_message(
+    instance: &Pubkey,
+    account: &Pubkey,
+    mint: &Pubkey,
+    amount: u64,
+    nonce: u64,
+    deadline: u64,
+) -> Result<Vec<u8>> {
+    let payload = WithdrawalVoucherPayload {
+        instance: *instance,
+        account: *account,
+        mint: *mint,
+        amount,
+        nonce,
+        deadline,
+    };
+    borsh::to_vec(&payload).map_err(|e| eyre!("borsh encode WithdrawalVoucherPayload: {}", e))
+}
+
+/// Build the `withdraw_voucher` instruction. Pair it (in the same tx, AFTER the
+/// matching [`ed25519_verify_ix`]) — the program introspects the preceding ix.
+/// `payer` is the fee payer + sole tx signer; `account` is the withdrawer (funds
+/// go to `user_token_account`), which does NOT sign.
+#[allow(clippy::too_many_arguments)]
+pub fn withdraw_voucher_ix(
+    program_id: &Pubkey,
+    instance: &Pubkey,
+    account: &Pubkey,
+    mint: &Pubkey,
+    user_token_account: &Pubkey,
+    payer: &Pubkey,
+    args: &WithdrawVoucherArgs,
+) -> Result<Instruction> {
+    let (user_balance, _) = derive_user_balance_pda(instance, account, mint, program_id);
+    let (instance_vault, _) = derive_instance_vault(instance, mint, program_id);
+    let (vault_authority, _) = derive_vault_authority(instance, program_id);
+    let (used_nonce, _) = derive_withdraw_nonce_pda(instance, account, args.nonce, program_id);
+    let data = encode_ix("withdraw_voucher", args)?;
+    // Account order MUST match the program's `WithdrawVoucher` accounts struct.
+    Ok(Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(*instance, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(user_balance, false),
+            AccountMeta::new(*user_token_account, false),
+            AccountMeta::new(instance_vault, false),
+            AccountMeta::new_readonly(vault_authority, false),
+            AccountMeta::new(used_nonce, false),
+            AccountMeta::new_readonly(*account, false),
+            AccountMeta::new(*payer, true),
+            AccountMeta::new_readonly(sysvar_instructions_id(), false),
+            AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ],
         data,
     })

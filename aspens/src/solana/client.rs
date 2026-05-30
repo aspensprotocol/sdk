@@ -64,6 +64,17 @@ pub async fn submit_user_signed(
     user_keypair: &Keypair,
     ix: Instruction,
 ) -> Result<String> {
+    submit_user_signed_multi(rpc_url, user_keypair, &[ix]).await
+}
+
+/// Like [`submit_user_signed`] but for a multi-instruction transaction (e.g. an
+/// Ed25519Program verify ix paired with the Midrib ix that introspects it, as in
+/// the withdrawal-voucher flow). `user_keypair` is the sole signer + fee payer.
+pub async fn submit_user_signed_multi(
+    rpc_url: &str,
+    user_keypair: &Keypair,
+    ixs: &[Instruction],
+) -> Result<String> {
     use solana_client::nonblocking::rpc_client::RpcClient;
     let client = RpcClient::new(rpc_url.to_string());
     let blockhash = client
@@ -71,7 +82,7 @@ pub async fn submit_user_signed(
         .await
         .map_err(|e| eyre!("get_latest_blockhash: {}", e))?;
     let tx = Transaction::new_signed_with_payer(
-        &[ix],
+        ixs,
         Some(&user_keypair.pubkey()),
         &[user_keypair],
         blockhash,
