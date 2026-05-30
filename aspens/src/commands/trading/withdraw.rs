@@ -102,6 +102,26 @@ async fn solana_withdraw(
         .map_err(|e| eyre::eyre!("invalid Solana mint '{}': {}", token.address, e))?;
     let user_ata = crate::solana::derive_associated_token_account(&user, &mint);
 
+    // 0) Pre-flight SOL check BEFORE requesting a voucher. A voucher places an
+    //    off-chain withdraw HOLD on the funds (the arborter reserves them so
+    //    they can't be re-withdrawn/traded until the voucher lands or expires).
+    //    Requesting one we can't pay to submit — a 0-lamport fee-payer fails
+    //    with "Attempt to debit an account but found no record of a prior
+    //    credit" — would strand that hold until expiry. Fail fast instead so
+    //    the funds stay immediately withdrawable.
+    {
+        use solana_client::nonblocking::rpc_client::RpcClient;
+        let rpc = RpcClient::new(chain.rpc_url.clone());
+        let lamports = rpc.get_balance(&user).await.unwrap_or(0);
+        if lamports < MIN_SOL_LAMPORTS {
+            return Err(eyre::eyre!(
+                "insufficient SOL for fees: wallet {user} has {lamports} lamports, \
+                 need >= {MIN_SOL_LAMPORTS}. Fund/airdrop SOL before withdrawing — \
+                 requesting a voucher now would place an off-chain hold you can't submit.",
+            ));
+        }
+    }
+
     // 1) Authenticate the request: Ed25519-sign the canonical bytes the arborter
     //    rebuilds (`network|token|account|amount`).
     let account_str = user.to_string();
@@ -222,6 +242,11 @@ async fn solana_withdraw(
     Ok(())
 }
 
+/// Minimum SOL (lamports) the fee-payer needs before we request a Solana
+/// voucher. ~0.001 SOL — a couple of tx fees of headroom.
+#[cfg(feature = "solana")]
+const MIN_SOL_LAMPORTS: u64 = 1_000_000;
+
 /// Max attempts for the Solana voucher submit (retries a transient post-drain
 /// `InsufficientBalance` while the force-settle propagates).
 #[cfg(feature = "solana")]
@@ -336,7 +361,35 @@ async fn call_withdraw_from_config_evm(
     let token_addr: Address = token.address.parse()?;
     let signer_address = signer.address();
 
-    // 1) Request a TEE-signed voucher from the arborter. Authenticate the
+    // Build the wallet-enabled provider up front so the gas pre-check and the
+    // submit share it.
+    let wallet = EthereumWallet::new(signer.clone());
+    let rpc_url = Url::parse(&chain.rpc_url)?;
+    let provider = ProviderBuilder::new()
+        .with_chain(chain_type)
+        .wallet(wallet)
+        .connect_http(rpc_url);
+
+    // 1) Pre-flight gas check BEFORE requesting a voucher. A voucher places an
+    //    off-chain withdraw HOLD on the funds (reserved until the voucher lands
+    //    or expires), so requesting one we can't submit (no gas) would strand
+    //    that hold until expiry. Fail fast instead so the funds stay
+    //    immediately withdrawable.
+    let gas_balance = provider.get_balance(signer_address).await?;
+    tracing::info!("Gas balance: {} wei", gas_balance);
+    if gas_balance < U256::from(MIN_GAS_BALANCE) {
+        let balance_eth = gas_balance.to::<u128>() as f64 / 1e18;
+        return Err(eyre::eyre!(
+            "insufficient gas: wallet has {:.6} native tokens, need at least 0.0001 for gas. \
+            Fund your wallet ({}) with native tokens on {} to pay for transaction fees. \
+            (No voucher requested — your withdrawable balance is untouched.)",
+            balance_eth,
+            signer_address,
+            network
+        ));
+    }
+
+    // 2) Request a TEE-signed voucher from the arborter. Authenticate the
     //    request by signing the canonical bytes the arborter rebuilds
     //    (`network|token|account|amount`) with the wallet key (EIP-191). The
     //    request strings below MUST match those bytes exactly.
@@ -364,27 +417,12 @@ async fn call_withdraw_from_config_evm(
         voucher.expiry
     );
 
-    // 2) Submit withdraw(voucher, signature) on-chain (the wallet pays gas).
-    let wallet = EthereumWallet::new(signer);
-    let rpc_url = Url::parse(&chain.rpc_url)?;
-    let provider = ProviderBuilder::new()
-        .with_chain(chain_type)
-        .wallet(wallet)
-        .connect_http(rpc_url);
-
-    let gas_balance = provider.get_balance(signer_address).await?;
-    tracing::info!("Gas balance: {} wei", gas_balance);
-    if gas_balance < U256::from(MIN_GAS_BALANCE) {
-        let balance_eth = gas_balance.to::<u128>() as f64 / 1e18;
-        return Err(eyre::eyre!(
-            "insufficient gas: wallet has {:.6} native tokens, need at least 0.0001 for gas. \
-            Fund your wallet ({}) with native tokens on {} to pay for transaction fees.",
-            balance_eth,
-            signer_address,
-            network
-        ));
-    }
-
+    // 3) Submit withdraw(voucher, signature) on-chain, RESUBMITTING the SAME
+    //    voucher on a transient failure. A settle-propagation race can briefly
+    //    revert `MidribV3.withdraw` with INSUFFICIENT_BALANCE (the drain settle
+    //    that backs the voucher isn't visible to this tx yet); a reverted tx
+    //    never sets `usedWithdrawNonces`, so resubmitting the identical voucher
+    //    is safe and avoids re-requesting (which would hit the now-held balance).
     let contract = MidribV3::new(contract_addr, &provider);
     let onchain_voucher = MidribV3::WithdrawalVoucher {
         account: signer_address,
@@ -394,15 +432,57 @@ async fn call_withdraw_from_config_evm(
         nonce: U256::from(voucher.nonce),
         expiry: U256::from(voucher.expiry),
     };
-    let result = contract
-        .withdraw(onchain_voucher, Bytes::from(voucher.signature))
-        .send()
-        .await?
-        .with_required_confirmations(1)
-        .watch()
-        .await?;
+    let voucher_sig = Bytes::from(voucher.signature);
+    let mut last_err = None;
+    let mut result = None;
+    for attempt in 0..EVM_VOUCHER_SUBMIT_MAX_ATTEMPTS {
+        // `send` and `watch` surface distinct alloy error types, so match each
+        // rather than `?`-unify them; flatten both into the retry's last_err.
+        let outcome = match contract
+            .withdraw(onchain_voucher.clone(), voucher_sig.clone())
+            .send()
+            .await
+        {
+            Ok(pending) => pending
+                .with_required_confirmations(1)
+                .watch()
+                .await
+                .map_err(|e| eyre::eyre!("{e}")),
+            Err(e) => Err(eyre::eyre!("{e}")),
+        };
+        match outcome {
+            Ok(tx) => {
+                result = Some(tx);
+                break;
+            }
+            Err(e) => {
+                last_err = Some(e);
+                if attempt + 1 < EVM_VOUCHER_SUBMIT_MAX_ATTEMPTS {
+                    tracing::warn!(
+                        attempt,
+                        "voucher submit failed (possibly settle-propagation race); \
+                         resubmitting the same voucher"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        EVM_VOUCHER_SUBMIT_RETRY_MS,
+                    ))
+                    .await;
+                }
+            }
+        }
+    }
+    let result = result.ok_or_else(|| {
+        last_err.unwrap_or_else(|| eyre::eyre!("voucher submit failed after retries"))
+    })?;
 
     tracing::info!("Withdraw voucher submitted on-chain: {result:?}");
 
     Ok(())
 }
+
+/// EVM voucher-submit retries: resubmit the SAME voucher on a transient
+/// settle-propagation revert. Bounded; a reverted tx doesn't consume the
+/// on-chain nonce, so resubmission is safe.
+const EVM_VOUCHER_SUBMIT_MAX_ATTEMPTS: usize = 4;
+/// Backoff between EVM voucher-submit retries.
+const EVM_VOUCHER_SUBMIT_RETRY_MS: u64 = 700;
