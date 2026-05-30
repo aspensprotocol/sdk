@@ -201,18 +201,15 @@ fn resolve_order<'a>(
             // a specific `amount_in` (the lock amount the EIP-712 /
             // Ed25519 signature binds). Market orders have no price at
             // signing time, so there's no honest value to put in
-            // `amount_in` — any placeholder (e.g. `quantity` as a
-            // base-amount stand-in for a quote lock) diverges from
-            // whatever the arborter ends up locking and the contract
-            // rejects the order with `INVALID_SIGNER`. Force the user
-            // to commit explicit slippage via a buy-limit / sell-limit
-            // at a price ceiling / floor they're willing to accept.
+            // `amount_in` — the committed input amount the arborter
+            // reserves. Force the user to commit explicit slippage via a
+            // buy-limit / sell-limit at a price ceiling / floor they're
+            // willing to accept.
             return Err(eyre!(
-                "gasless cross-chain orders require a limit price — \
-                 market orders cannot pre-commit a lock amount the on-chain \
-                 verifier will recompute identically. Use buy-limit / \
-                 sell-limit with a slippage-capped price (e.g. price ≥ best \
-                 ask × (1 + slippage) for a buy)."
+                "cross-chain orders require a limit price — a market order \
+                 can't pre-commit the `amount_in` the arborter reserves. Use \
+                 buy-limit / sell-limit with a slippage-capped price (e.g. \
+                 price ≥ best ask × (1 + slippage) for a buy)."
             ));
         }
     };
