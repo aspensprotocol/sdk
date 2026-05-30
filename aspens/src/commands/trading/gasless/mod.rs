@@ -1,12 +1,15 @@
 //! Build the `GaslessAuthorization` proto payload for a `SendOrderRequest`.
 //!
-//! Stateless — no gRPC, no arborter round-trip. Pure data + one optional
-//! RPC (Solana: `getSlot`) to compute the chain-specific deadline.
+//! Stateless — no gRPC, no arborter round-trip, no chain RPC. Pure data.
 //!
-//! Cross-checked against arborter's `GaslessLockParams` /
-//! `GaslessAuthorization` — every field the arborter's
-//! `lock_for_order_gasless` consumes is produced here with the right
-//! semantics (EVM vs Solana).
+//! Under the optimistic shadow ledger, order entry never touches the chain:
+//! the arborter authenticates the order via the **outer envelope** signature
+//! (`aspens::evm::sign_send_order_envelope`) and consumes only two fields from
+//! this payload — the canonical `order_id` (`aspens::orders::derive_order_id`)
+//! and the committed `amount_in`. The legacy gasless on-chain-lock signing
+//! (EVM EIP-712 `GaslessCrossChainOrder` / Solana `OpenForSignedPayload`) is
+//! gone with the on-chain order machinery, so this helper no longer signs a
+//! lock or dispatches per chain architecture.
 //!
 //! # Usage sketch
 //!
@@ -15,18 +18,11 @@
 //!
 //! let gasless = build_gasless_authorization(
 //!     &config, market, side, &wallet, &quantity_raw, price_raw.as_deref(),
-//! ).await?;
+//! )?;
 //! request.gasless = Some(gasless);
 //! ```
 //!
-//! See also `aspens::orders::derive_order_id`,
-//! `aspens::evm::gasless_lock_signing_hash`,
-//! `aspens::solana::gasless_lock_signing_message`.
-//!
-//! NOTE: this helper is behind the default `client` feature because it
-//! reaches for `solana-client` to read the current slot when the origin
-//! chain is Solana. Lean-signing consumers that build their own
-//! `GaslessAuthorization` can use the lower-level helpers directly.
+//! See also `aspens::orders::derive_order_id`.
 
 #![cfg(feature = "client")]
 
@@ -40,43 +36,14 @@ use crate::wallet::{CurveType, Wallet};
 
 use super::send_order::arborter_pb::GaslessAuthorization;
 
-mod evm;
-mod solana;
-
-use evm::build_evm;
-use solana::build_solana;
-
-/// EVM architecture tag stored on `Chain.architecture` by the arborter.
-/// Kept local — only consumed here.
-const ARCH_EVM: &str = "EVM";
-const ARCH_SOLANA: &str = "Solana";
-
-/// Hard deadlines for the EVM gasless order:
-/// - `OPEN_DEADLINE` = now + 1h — matches arborter's legacy recipe in
-///   `chain-evm::lock_for_order` so external tooling expecting the same
-///   horizons keeps working.
-/// - `FILL_DEADLINE` = now + 24h.
-pub(super) const EVM_OPEN_DEADLINE_SECS: u64 = 3_600;
-pub(super) const EVM_FILL_DEADLINE_SECS: u64 = 86_400;
-
-/// Solana slot buffer — how far ahead the arborter must land the tx.
-/// 100 slots ≈ 40s which is comfortably larger than the bursty RPC
-/// + confirmation round-trip.
-pub(super) const SOLANA_DEADLINE_SLOT_BUFFER: u64 = 100;
-
 /// Build a `GaslessAuthorization` for the given order.
 ///
-/// Dispatches on the **origin** chain's architecture — Bid → quote
-/// chain, Ask → base chain (matches arborter's handler convention:
-/// locked funds live on the chain the user is paying FROM).
-///
-/// * EVM: produces an EIP-712 digest via `aspens::evm::gasless_lock_signing_hash`
-///   and has the wallet sign it via `Wallet::sign_message` (which applies
-///   the EIP-191 wrap MidribV2's `_verifyOrder` expects).
-/// * Solana: produces the borsh-encoded `OpenForSignedPayload` via
-///   `aspens::solana::gasless_lock_signing_message` and has the wallet
-///   Ed25519-sign it.
-pub async fn build_gasless_authorization(
+/// Resolves the order's chains/tokens/amounts, derives the canonical
+/// `order_id`, and returns a payload carrying only the fields the arborter
+/// still consumes: `order_id` and `amount_in` (the committed lock amount in
+/// the input token's native base units). Order authentication is via the
+/// outer envelope signature, not a per-order on-chain lock signature.
+pub fn build_gasless_authorization(
     config: &GetConfigResponse,
     market: &Market,
     side: i32,
@@ -93,10 +60,9 @@ pub async fn build_gasless_authorization(
         amount_out,
     } = resolve_order(config, market, side, quantity_raw, price_raw)?;
 
-    // Client nonce: millis-since-epoch. Millis (not seconds) gives 1000×
-    // collision headroom over the old unix-seconds scheme arborter used
-    // — two clients issuing in the same second would otherwise have
-    // produced the same Permit2 nonce and one would reject as replay.
+    // Client nonce: millis-since-epoch. Folded into `derive_order_id` purely
+    // to keep the derived id unique across a wallet's orders (millis gives
+    // 1000× collision headroom over a unix-seconds scheme).
     let nonce = unix_millis()?;
 
     let order_id_bytes = derive_order_id(
@@ -111,27 +77,11 @@ pub async fn build_gasless_authorization(
     );
     let order_id_hex = format!("0x{}", hex::encode(order_id_bytes));
 
-    let arch = origin_chain.architecture.as_str();
-    let args = GaslessBuildArgs {
-        origin_chain,
-        destination_chain,
-        wallet,
-        input_token_address: &input_token_address,
-        output_token_address: &output_token_address,
-        amount_in,
-        amount_out,
-        nonce,
-        order_id_hex,
-    };
-    if arch.eq_ignore_ascii_case(ARCH_EVM) {
-        build_evm(args).await
-    } else if arch.eq_ignore_ascii_case(ARCH_SOLANA) {
-        build_solana(args, order_id_bytes).await
-    } else {
-        Err(eyre!(
-            "gasless auth not implemented for chain architecture {arch:?}"
-        ))
-    }
+    Ok(GaslessAuthorization {
+        order_id: order_id_hex,
+        amount_in: amount_in.to_string(),
+        ..Default::default()
+    })
 }
 
 #[cfg_attr(test, derive(Debug))]
@@ -314,23 +264,6 @@ fn resolve_order<'a>(
     })
 }
 
-/// Bundle of arguments shared by `build_evm` (in the `evm` submodule)
-/// and `build_solana` (in the `solana` submodule). Kept as a struct so
-/// the dispatcher in [`build_gasless_authorization`] doesn't have to
-/// pass nine separate arguments through (and trip clippy's
-/// `too_many_arguments`).
-pub(super) struct GaslessBuildArgs<'a> {
-    pub(super) origin_chain: &'a Chain,
-    pub(super) destination_chain: &'a Chain,
-    pub(super) wallet: &'a Wallet,
-    pub(super) input_token_address: &'a str,
-    pub(super) output_token_address: &'a str,
-    pub(super) amount_in: u128,
-    pub(super) amount_out: u128,
-    pub(super) nonce: u64,
-    pub(super) order_id_hex: String,
-}
-
 fn wallet_pubkey_bytes(wallet: &Wallet) -> Vec<u8> {
     // EVM: 20-byte address. Solana: 32-byte Ed25519 pubkey. The
     // `derive_order_id` hash treats the pubkey as opaque bytes so both
@@ -348,37 +281,6 @@ fn wallet_pubkey_bytes(wallet: &Wallet) -> Vec<u8> {
     }
 }
 
-pub(super) fn parse_cross_chain_token_into_32(addr: &str) -> Result<[u8; 32]> {
-    // Solana mint — 32-byte base58 pubkey.
-    if let Ok(bytes) = bs58::decode(addr).into_vec() {
-        if bytes.len() == 32 {
-            let mut out = [0u8; 32];
-            out.copy_from_slice(&bytes);
-            return Ok(out);
-        }
-    }
-    // EVM address — 20 bytes, left-pad.
-    let trimmed = addr.strip_prefix("0x").unwrap_or(addr);
-    let bytes = hex::decode(trimmed)
-        .map_err(|e| eyre!("token {addr:?} is neither base58 nor 0x-hex: {e}"))?;
-    if bytes.len() > 32 {
-        return Err(eyre!(
-            "token {addr:?} is {} bytes — too large for 32-byte output_token slot",
-            bytes.len()
-        ));
-    }
-    let mut out = [0u8; 32];
-    out[32 - bytes.len()..].copy_from_slice(&bytes);
-    Ok(out)
-}
-
-pub(super) fn unix_secs() -> Result<u64> {
-    Ok(SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| eyre!("system clock before epoch: {e}"))?
-        .as_secs())
-}
-
 fn unix_millis() -> Result<u64> {
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -390,29 +292,6 @@ fn unix_millis() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cross_chain_token_evm_pads_to_32() {
-        let addr = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"; // USDC mainnet
-        let bytes = parse_cross_chain_token_into_32(addr).unwrap();
-        assert_eq!(&bytes[..12], &[0u8; 12]);
-        assert_eq!(&bytes[12..], &hex::decode(&addr[2..]).unwrap()[..]);
-    }
-
-    #[test]
-    fn cross_chain_token_solana_fills_32() {
-        // 32-byte base58 pubkey
-        let pk = "Ed25519SigVerify111111111111111111111111111";
-        let bytes = parse_cross_chain_token_into_32(pk).unwrap();
-        assert_eq!(bytes.len(), 32);
-    }
-
-    #[test]
-    fn cross_chain_token_rejects_oversize() {
-        // >32 bytes of hex
-        let too_big = format!("0x{}", "aa".repeat(33));
-        assert!(parse_cross_chain_token_into_32(&too_big).is_err());
-    }
 
     // ----- normalize() decimal-scale helper ----------------------------
 

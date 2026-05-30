@@ -32,14 +32,8 @@ pub mod seeds {
     pub const INSTANCE_SEED: &[u8] = b"instance";
     /// Seed for per-(instance, user) balance PDAs.
     pub const BALANCE_SEED: &[u8] = b"balance";
-    /// Seed for per-order PDAs (`init`-ed inside `open` / `open_for`).
-    pub const ORDER_SEED: &[u8] = b"order";
     /// Seed for the per-instance SPL token vault authority / account.
     pub const INSTANCE_VAULT_SEED: &[u8] = b"instance_vault";
-    /// Seed for the permanent UsedNonce tombstone written by `open_for`.
-    /// Prevents replay of a gasless signature after the corresponding Order
-    /// PDA is closed by `unlock_for_canceled`.
-    pub const USED_NONCE_SEED: &[u8] = b"used_nonce";
     /// Seed for the single-use withdrawal-voucher tombstone (Track A §8),
     /// distinct from `USED_NONCE_SEED` so order and withdrawal nonces never
     /// collide.
@@ -118,18 +112,6 @@ pub fn derive_instance_pda(
     )
 }
 
-/// Derive the `Order` PDA for `(instance, order_id)`.
-pub fn derive_order_pda(
-    instance: &Pubkey,
-    order_id: &[u8; 32],
-    program_id: &Pubkey,
-) -> (Pubkey, u8) {
-    Pubkey::find_program_address(
-        &[seeds::ORDER_SEED, instance.as_ref(), order_id.as_ref()],
-        program_id,
-    )
-}
-
 /// Derive the user-balance PDA for `(instance, user, mint)`.
 pub fn derive_user_balance_pda(
     instance: &Pubkey,
@@ -143,25 +125,6 @@ pub fn derive_user_balance_pda(
             instance.as_ref(),
             user.as_ref(),
             mint.as_ref(),
-        ],
-        program_id,
-    )
-}
-
-/// Derive the permanent `UsedNonce` tombstone PDA written by `open_for`.
-/// Seeds: `[USED_NONCE_SEED, instance, user, order_id]`.
-pub fn derive_used_nonce_pda(
-    instance: &Pubkey,
-    user: &Pubkey,
-    order_id: &[u8; 32],
-    program_id: &Pubkey,
-) -> (Pubkey, u8) {
-    Pubkey::find_program_address(
-        &[
-            seeds::USED_NONCE_SEED,
-            instance.as_ref(),
-            user.as_ref(),
-            order_id.as_ref(),
         ],
         program_id,
     )
@@ -379,90 +342,14 @@ pub fn withdraw_voucher_ix(
     })
 }
 
-// -- Gasless `open` / `open_for` client helpers ---------------------------
-//
-// The `open_for` Midrib instruction is the Solana counterpart to EVM's
-// `lock_for_order_gasless`: the arborter pays the fee, but the user must
-// have signed the canonical `OpenForSignedPayload` bytes with their
-// Ed25519 key. The Ed25519SigVerify precompile then verifies the signature
-// on-chain before `open_for` accepts the instruction.
-
-/// Arguments to the Midrib `open` and `open_for` instructions — user-level
-/// order intent.
-#[derive(borsh::BorshSerialize, Clone, Debug)]
-pub struct OpenOrderArgs {
-    /// 32-byte canonical order id (see [`crate::orders::derive_order_id`]).
-    pub order_id: [u8; 32],
-    /// Chain id of the origin chain (where this order is being opened).
-    pub origin_chain_id: u64,
-    /// Chain id of the destination chain.
-    pub destination_chain_id: u64,
-    /// Mint of the token being deposited.
-    pub input_token: Pubkey,
-    /// Amount of `input_token` deposited, in pair decimals.
-    pub input_amount: u64,
-    /// Token address on the destination chain (32-byte big-endian for EVM,
-    /// raw pubkey bytes for Solana).
-    pub output_token: [u8; 32],
-    /// Amount of `output_token` the user expects out, in pair decimals.
-    pub output_amount: u64,
-}
-
-/// The exact payload the user must sign for a gasless `open_for`. Structure
-/// must match the arborter verbatim — it re-serializes this and feeds it to
-/// `ed25519_verify_ix` alongside the user's signature.
-#[derive(borsh::BorshSerialize, Debug)]
-pub struct OpenForSignedPayload {
-    /// Market `instance` PDA this order belongs to.
-    pub instance: Pubkey,
-    /// User pubkey funding the lock — the Ed25519 signer.
-    pub user: Pubkey,
-    /// Absolute deadline (Solana slot) after which `open_for` must reject.
-    pub deadline: u64,
-    /// User-level order intent.
-    pub order: OpenOrderArgs,
-}
-
-/// Arborter-facing `open_for` args: the signed payload fields plus the
-/// user's 64-byte Ed25519 signature.
-#[derive(borsh::BorshSerialize, Debug)]
-pub struct OpenForArgs {
-    /// User-level order intent (must match the signed payload).
-    pub order: OpenOrderArgs,
-    /// User pubkey funding the lock (must match the signed payload).
-    pub user: Pubkey,
-    /// Absolute deadline (Solana slot) (must match the signed payload).
-    pub deadline: u64,
-    /// User's 64-byte Ed25519 signature over [`OpenForSignedPayload`].
-    pub signature: [u8; 64],
-}
-
-/// Produce the exact bytes a user's Ed25519 key must sign to authorize a
-/// gasless lock on Solana. The arborter will reconstruct the same payload
-/// and check the signature via the Ed25519SigVerify precompile.
-pub fn gasless_lock_signing_message(
-    instance: &Pubkey,
-    user: &Pubkey,
-    deadline: u64,
-    order: &OpenOrderArgs,
-) -> Result<Vec<u8>> {
-    let payload = OpenForSignedPayload {
-        instance: *instance,
-        user: *user,
-        deadline,
-        order: order.clone(),
-    };
-    borsh::to_vec(&payload).map_err(|e| eyre!("borsh encode OpenForSignedPayload: {}", e))
-}
-
 /// Build an Ed25519Program instruction that verifies `signature` was
 /// produced by `pubkey` over `message`. Data layout matches the Solana
 /// Ed25519SigVerify precompile's expectation: a 16-byte header followed by
 /// `signature(64) || pubkey(32) || message`.
 ///
-/// Pair this with the paired Midrib `open_for` instruction in the same
+/// Pair this with the Midrib `withdraw_voucher` instruction in the same
 /// transaction — the program reads the sysvar instructions list and verifies
-/// the preceding Ed25519Program ix matches.
+/// the preceding Ed25519Program ix matches the TEE-signed voucher.
 pub fn ed25519_verify_ix(pubkey: &[u8; 32], signature: &[u8; 64], message: &[u8]) -> Instruction {
     let signature_offset: u16 = 16;
     let public_key_offset: u16 = 16 + 64;
@@ -545,26 +432,6 @@ mod tests {
     }
 
     #[test]
-    fn gasless_lock_signing_message_is_deterministic() {
-        let instance = Pubkey::new_from_array([1; 32]);
-        let user = Pubkey::new_from_array([2; 32]);
-        let order = OpenOrderArgs {
-            order_id: [3; 32],
-            origin_chain_id: 501,
-            destination_chain_id: 8453,
-            input_token: Pubkey::new_from_array([4; 32]),
-            input_amount: 100,
-            output_token: [5; 32],
-            output_amount: 200,
-        };
-        let a = gasless_lock_signing_message(&instance, &user, 1_000, &order).unwrap();
-        let b = gasless_lock_signing_message(&instance, &user, 1_000, &order).unwrap();
-        assert_eq!(a, b);
-        // Borsh layout: 32+32+8 + (32+8+8+32+8+32+8) = 200 bytes
-        assert_eq!(a.len(), 32 + 32 + 8 + 32 + 8 + 8 + 32 + 8 + 32 + 8);
-    }
-
-    #[test]
     fn ed25519_verify_ix_has_no_accounts_and_targets_precompile() {
         let ix = ed25519_verify_ix(&[0; 32], &[0; 64], b"hi");
         assert!(ix.accounts.is_empty());
@@ -580,7 +447,9 @@ mod tests {
         let (factory_b, _) = derive_factory_pda(&program_id);
         assert_eq!(factory_a, factory_b);
         let (inst, _) = derive_instance_pda(&factory_a, 1, &program_id);
-        let (order, _) = derive_order_pda(&inst, &[7; 32], &program_id);
-        assert_ne!(order, inst);
+        let user = Pubkey::new_from_array([7; 32]);
+        let mint = Pubkey::new_from_array([8; 32]);
+        let (bal, _) = derive_user_balance_pda(&inst, &user, &mint, &program_id);
+        assert_ne!(bal, inst);
     }
 }
