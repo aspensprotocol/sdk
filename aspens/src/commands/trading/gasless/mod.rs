@@ -1,4 +1,4 @@
-//! Build the `GaslessAuthorization` proto payload for a `SendOrderRequest`.
+//! Build the `OrderAuthorization` proto payload for a `SendOrderRequest`.
 //!
 //! Stateless — no gRPC, no arborter round-trip, no chain RPC. Pure data.
 //!
@@ -19,7 +19,7 @@
 //! let gasless = build_gasless_authorization(
 //!     &config, market, side, &wallet, &quantity_raw, price_raw.as_deref(),
 //! )?;
-//! request.gasless = Some(gasless);
+//! request.authorization = Some(auth);
 //! ```
 //!
 //! See also `aspens::orders::derive_order_id`.
@@ -34,9 +34,9 @@ use crate::commands::config::config_pb::{Chain, GetConfigResponse, Market};
 use crate::orders::derive_order_id;
 use crate::wallet::{CurveType, Wallet};
 
-use super::send_order::arborter_pb::GaslessAuthorization;
+use super::send_order::arborter_pb::OrderAuthorization;
 
-/// Build a `GaslessAuthorization` for the given order.
+/// Build an `OrderAuthorization` for the given order.
 ///
 /// Resolves the order's chains/tokens/amounts, derives the canonical
 /// `order_id`, and returns a payload carrying only the fields the arborter
@@ -50,7 +50,7 @@ pub fn build_gasless_authorization(
     wallet: &Wallet,
     quantity_raw: &str,
     price_raw: Option<&str>,
-) -> Result<GaslessAuthorization> {
+) -> Result<OrderAuthorization> {
     let OrderResolution {
         origin_chain,
         destination_chain,
@@ -77,10 +77,9 @@ pub fn build_gasless_authorization(
     );
     let order_id_hex = format!("0x{}", hex::encode(order_id_bytes));
 
-    Ok(GaslessAuthorization {
+    Ok(OrderAuthorization {
         order_id: order_id_hex,
         amount_in: amount_in.to_string(),
-        ..Default::default()
     })
 }
 

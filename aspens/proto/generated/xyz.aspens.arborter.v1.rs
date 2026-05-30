@@ -96,63 +96,35 @@ pub struct SendOrderRequest {
     /// Valid EIP-712 signature hash of this order
     #[prost(bytes = "vec", tag = "2")]
     pub signature_hash: ::prost::alloc::vec::Vec<u8>,
-    /// Gasless authorization: the arborter drives the on-chain lock via the
-    /// chain's gasless path (Solana: MidribOpenFor with Ed25519 precompile;
-    /// EVM: MidribV2.openFor with Permit2). Required — the legacy
-    /// arborter-signed lock path has been removed. For message-typed
-    /// fields, proto3 tracks presence by default, so the generated Rust
-    /// API remains `Option<GaslessAuthorization>`; the arborter handler
-    /// enforces presence at the request boundary.
+    /// Order authorization carrying the SDK-derived canonical order id and the
+    /// committed lock amount. Required. For message-typed fields proto3 tracks
+    /// presence by default, so the generated Rust API is
+    /// `Option<OrderAuthorization>`; the arborter handler enforces presence at
+    /// the request boundary.
     #[prost(message, optional, tag = "3")]
-    pub gasless: ::core::option::Option<GaslessAuthorization>,
+    pub authorization: ::core::option::Option<OrderAuthorization>,
 }
-/// User-produced authorization bundle for a gasless on-chain open. The
-/// signature semantics + deadline units are chain-specific and match the
-/// `chain_traits::market::GaslessLockParams` fields:
-///
-/// * Solana: 64-byte Ed25519 signature; deadline is a slot number.
-/// * EVM:    65-byte ECDSA signature; deadline is a unix timestamp.
+/// SDK-derived order authorization. Under the optimistic shadow ledger, order
+/// entry never touches the chain — the arborter authenticates the order via the
+/// outer envelope signature (`SendOrderRequest.signature_hash`) and consumes
+/// only the two fields below. The legacy gasless on-chain-lock fields
+/// (user_signature / deadline / nonce / open_deadline / amount_out) were removed
+/// with the on-chain order machinery; the message and its `SendOrderRequest`
+/// field were renamed from `GaslessAuthorization` / `gasless` to match.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GaslessAuthorization {
-    /// Raw signature bytes — see chain-specific format above.
-    #[prost(bytes = "vec", tag = "1")]
-    pub user_signature: ::prost::alloc::vec::Vec<u8>,
-    /// Absolute deadline the arborter must land the tx before.
-    /// Solana: slot number. EVM: fillDeadline (unix seconds).
-    #[prost(uint64, tag = "2")]
-    pub deadline: u64,
-    /// On-chain order id (32-byte hex, 0x-prefixed) that the user's
-    /// signature binds to — matches the on-chain Order PDA / EVM intent id.
-    #[prost(string, tag = "3")]
+pub struct OrderAuthorization {
+    /// The canonical on-chain order id (32-byte hex, 0x-prefixed), derived by the
+    /// SDK (`aspens::orders::derive_order_id`). The arborter uses it verbatim as
+    /// the order's id throughout match / settle, so it MUST match the SDK's
+    /// derivation exactly.
+    #[prost(string, tag = "1")]
     pub order_id: ::prost::alloc::string::String,
-    /// Permit2 / EIP-712 nonce stamped on the user-signed EVM order.
-    /// Ignored by Solana (the Order PDA init serves as the nonce).
-    #[prost(uint64, tag = "4")]
-    pub nonce: u64,
-    /// EVM openDeadline (unix seconds). Ignored by Solana.
-    #[prost(uint64, tag = "5")]
-    pub open_deadline: u64,
-    /// Amounts the user actually signed in their EIP-712 / Ed25519 payload,
-    /// in the origin / destination token's native base units (NOT pair
-    /// decimals). Decimal-string encoding of `u128` (no `0x` prefix, no
-    /// thousands separators) so values up to 2^128-1 round-trip exactly
-    /// across the gRPC boundary — protobuf has no native 128-bit integer.
-    ///
-    /// `amount_in` is what the user locks on the origin chain (input token).
-    /// `amount_out` is what the user expects to receive on the destination
-    /// chain (output token).
-    ///
-    /// The arborter MUST use these values verbatim when constructing the
-    /// `GaslessLockParams` passed to `lock_for_order_gasless` — recomputing
-    /// amounts independently from quantity / price (the prior behaviour)
-    /// produces a different EIP-712 / Ed25519 digest from what the user
-    /// signed and triggers `INVALID_SIGNER` revert on-chain. This makes the
-    /// user-signed payload the single authoritative source of truth for
-    /// the lock leg, matching the gasless-intent design pattern.
-    #[prost(string, tag = "6")]
+    /// The committed lock amount on the origin chain (input token), in that
+    /// token's native base units (NOT pair decimals). Decimal-string encoding of
+    /// `u128` (no `0x` prefix, no separators) so values up to 2^128-1 round-trip
+    /// exactly across the gRPC boundary — protobuf has no native 128-bit integer.
+    #[prost(string, tag = "2")]
     pub amount_in: ::prost::alloc::string::String,
-    #[prost(string, tag = "7")]
-    pub amount_out: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Order {
