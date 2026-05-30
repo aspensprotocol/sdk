@@ -181,15 +181,54 @@ async fn solana_withdraw(
         &user,
         &args,
     )?;
-    let sig = crate::solana::client::submit_user_signed_multi(
-        &chain.rpc_url,
-        keypair,
-        &[verify_ix, wd_ix],
-    )
-    .await?;
+    // Submit, with a bounded retry on a transient `InsufficientBalance` (custom
+    // program error 0x1771 / 6001). The arborter only issues a voucher once it has
+    // CONFIRMED a sufficient settled balance — including after a drain-on-demand
+    // (§9) that force-settles the chain right before returning the voucher. In
+    // that case the on-chain settle may not yet be visible to this tx's
+    // `deposited >= amount` check, so the first submit can fail preflight. A
+    // failed-at-simulation tx never executes (no `used_nonce` tombstone is
+    // created), so resubmitting the SAME voucher is safe once the settle lands.
+    let ixs = [verify_ix, wd_ix];
+    let mut last_err = None;
+    let mut sig = None;
+    for attempt in 0..VOUCHER_SUBMIT_MAX_ATTEMPTS {
+        match crate::solana::client::submit_user_signed_multi(&chain.rpc_url, keypair, &ixs).await {
+            Ok(s) => {
+                sig = Some(s);
+                break;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                let transient = msg.contains("0x1771") || msg.contains("InsufficientBalance");
+                if transient && attempt + 1 < VOUCHER_SUBMIT_MAX_ATTEMPTS {
+                    tracing::warn!(
+                        attempt,
+                        "voucher submit hit transient InsufficientBalance (settle not yet visible); retrying"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(VOUCHER_SUBMIT_RETRY_MS))
+                        .await;
+                    last_err = Some(e);
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+    let sig = sig.ok_or_else(|| {
+        last_err.unwrap_or_else(|| eyre::eyre!("voucher submit failed after retries"))
+    })?;
     tracing::info!("Solana withdraw voucher submitted: {}", sig);
     Ok(())
 }
+
+/// Max attempts for the Solana voucher submit (retries a transient post-drain
+/// `InsufficientBalance` while the force-settle propagates).
+#[cfg(feature = "solana")]
+const VOUCHER_SUBMIT_MAX_ATTEMPTS: usize = 6;
+/// Backoff between voucher-submit retries (~ a couple of slots at 400ms each).
+#[cfg(feature = "solana")]
+const VOUCHER_SUBMIT_RETRY_MS: u64 = 700;
 
 #[cfg(not(feature = "solana"))]
 async fn solana_withdraw(
