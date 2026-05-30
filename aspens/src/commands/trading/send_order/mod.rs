@@ -38,7 +38,7 @@ async fn call_send_order(
     base_account_address: String,
     quote_account_address: String,
     wallet: &Wallet,
-    gasless: Option<arborter_pb::GaslessAuthorization>,
+    authorization: Option<arborter_pb::OrderAuthorization>,
     post_only: bool,
 ) -> Result<SendOrderResponse> {
     // Create a channel to connect to the gRPC server (with TLS support for HTTPS)
@@ -79,7 +79,7 @@ async fn call_send_order(
     let request = SendOrderRequest {
         order: Some(order_for_sending),
         signature_hash: signature_bytes,
-        gasless,
+        authorization,
     };
 
     // Create a tonic request
@@ -420,7 +420,7 @@ pub async fn send_order_with_wallets(
     // optimistic ledger the arborter authenticates via the outer envelope
     // signature and reads only `order_id` + `amount_in` from this payload —
     // there is no per-order on-chain lock signature.
-    let gasless = super::gasless::build_gasless_authorization(
+    let authorization = super::gasless::build_gasless_authorization(
         &config,
         market,
         side,
@@ -440,7 +440,7 @@ pub async fn send_order_with_wallets(
         base_account_address,
         quote_account_address,
         signing_wallet,
-        Some(gasless),
+        Some(authorization),
         post_only,
     )
     .await;
