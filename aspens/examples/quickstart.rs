@@ -93,6 +93,7 @@ fn main() -> Result<()> {
     executor.execute(async move {
         let wallet = Wallet::from_evm_hex(&privkey)?;
         withdraw::call_withdraw_from_config_with_wallet(
+            stack_url,
             "anvil-1".into(),
             "USDC".into(),
             500,
