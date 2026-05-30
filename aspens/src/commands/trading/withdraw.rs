@@ -11,7 +11,7 @@ use url::Url;
 
 use crate::chain_client::ARCH_SOLANA;
 use crate::commands::config::config_pb::GetConfigResponse;
-use crate::evm::rpc::MidribV2;
+use crate::evm::rpc::MidribV3;
 use crate::grpc::create_channel;
 use crate::wallet::{CurveType, Wallet};
 
@@ -30,7 +30,7 @@ const MIN_GAS_BALANCE: u128 = 100_000_000_000_000; // 0.0001 ETH in wei
 ///
 /// Branches on `chain.architecture`:
 /// - **EVM**: requests a TEE-signed withdrawal voucher from the arborter
-///   (`url`) over gRPC, then submits `MidribV2.withdraw(voucher, signature)`
+///   (`url`) over gRPC, then submits `MidribV3.withdraw(voucher, signature)`
 ///   on-chain (the wallet pays gas). The permissionless on-chain `withdraw`
 ///   was removed (Track A §8); the voucher is the authorization.
 /// - **Solana**: builds + submits the user-signed Midrib `withdraw` instruction
@@ -385,8 +385,8 @@ async fn call_withdraw_from_config_evm(
         ));
     }
 
-    let contract = MidribV2::new(contract_addr, &provider);
-    let onchain_voucher = MidribV2::WithdrawalVoucher {
+    let contract = MidribV3::new(contract_addr, &provider);
+    let onchain_voucher = MidribV3::WithdrawalVoucher {
         account: signer_address,
         token: token_addr,
         // Echoed back by the arborter; fall back to the requested amount.

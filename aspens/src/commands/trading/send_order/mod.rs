@@ -21,7 +21,7 @@ use prost::Message;
 use url::Url;
 
 use crate::commands::config::config_pb::GetConfigResponse;
-use crate::evm::rpc::MidribV2;
+use crate::evm::rpc::MidribV3;
 use crate::grpc::create_channel;
 
 // Internal RPC dispatcher: encodes the protobuf request fields the gRPC
@@ -115,7 +115,7 @@ async fn query_deposited_balance(
     let provider = ProviderBuilder::new()
         .with_chain(named_chain)
         .connect_http(rpc_url);
-    let contract = MidribV2::new(contract_addr, &provider);
+    let contract = MidribV3::new(contract_addr, &provider);
     let result = contract
         .tradeBalance(user_address, token_addr)
         .call()
@@ -416,9 +416,10 @@ pub async fn send_order_with_wallets(
         signing_wallet.curve()
     );
 
-    // Build the gasless authorization for the SendOrderRequest. Arborter's
-    // legacy `lock_for_order` path is deprecated on both chains, so every
-    // order now carries a user-signed `GaslessAuthorization`.
+    // Build the order authorization for the SendOrderRequest. Under the
+    // optimistic ledger the arborter authenticates via the outer envelope
+    // signature and reads only `order_id` + `amount_in` from this payload —
+    // there is no per-order on-chain lock signature.
     let gasless = super::gasless::build_gasless_authorization(
         &config,
         market,
@@ -426,8 +427,7 @@ pub async fn send_order_with_wallets(
         signing_wallet,
         &quantity_raw,
         price_raw.as_deref(),
-    )
-    .await?;
+    )?;
 
     // Send using the resolved market_id from config
     let resolved_market_id = market.market_id.clone();

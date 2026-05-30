@@ -155,10 +155,10 @@ Administrative CLI for managing the Aspens stack configuration. Structure:
 ### Smart Contract Integration
 
 The SDK uses Alloy for Ethereum-compatible chain interactions:
-- **MidribV2**: Main trading contract (loaded from `artifacts/MidribV2.json`)
+- **MidribV3**: Main trading contract (loaded from `artifacts/MidribV3.json`) — the optimistic-ledger contract (deposit / withdraw-voucher / settleBatch / tradeBalance)
 - **IERC20**: Standard ERC20 interface for token operations (approve, allowance, balanceOf)
 
-Contract ABIs are generated at compile time using `alloy-sol-types` macros in `aspens/src/commands/trading/mod.rs`.
+Contract ABIs are bound at compile time via `alloy-sol-types` `sol!` macros in `aspens/src/evm/rpc.rs` (RPC-enabled, `client` feature).
 
 ### Protocol Buffers
 
@@ -250,22 +250,27 @@ the hashing / signing recipes:
 - **`aspens::orders`** (always-on): `derive_order_id` — the single SHA-256
   reference used by both EVM and Solana clients and the arborter. If this
   derivation drifts, submitted orders silently fail id validation. Also
-  exposes `GaslessLockParams`, the shared input struct fed to the
-  chain-specific signing helpers.
-- **`aspens::evm`** (feature `evm`, default-on): `sol!` bindings for
-  `MidribV2` / `IAllowanceTransfer` / `MidribDataTypes` (shared artifacts
-  under `aspens/artifacts/`); `MIDRIB_EIP712_NAME` / `MIDRIB_EIP712_VERSION`;
-  `build_gasless_cross_chain_order`; `gasless_lock_signing_hash` (EIP-712
-  digest for the gasless lock); `envelope_signing_digest` /
-  `sign_send_order_envelope` (EIP-191 outer envelope over the encoded order,
-  the counterpart to arborter's `is_signature_valid`).
-- **`aspens::solana`** (feature `solana`, default-on): in addition to the
-  deposit/withdraw/balance flow, exposes `OpenOrderArgs` /
-  `OpenForSignedPayload` / `OpenForArgs`, `gasless_lock_signing_message`
-  (borsh payload the user's Ed25519 key must sign), `ed25519_verify_ix`,
-  the full PDA-derivation set (`factory`, `instance`, `user_balance`,
-  `order`, `instance_vault`, `vault_authority`, SPL ATA), and well-known
-  program-id helpers.
+  exposes `parse_destination_token_bytes32`, the shared cross-chain-token
+  decoder (parity-pinned against the arborter).
+- **`aspens::evm`** (feature `evm`, default-on): `MIDRIB_EIP712_NAME` /
+  `MIDRIB_EIP712_VERSION` (domain constants — version is `"3"` for MidribV3);
+  `envelope_signing_digest` / `sign_send_order_envelope` (EIP-191 outer
+  envelope over the encoded order, the counterpart to arborter's
+  `is_signature_valid` — the ONLY signature order entry needs under the
+  optimistic ledger). RPC-enabled `MidribV3` + `IERC20` `sol!` bindings live
+  in `aspens::evm::rpc` (feature `client`) for deposit / withdraw-voucher /
+  tradeBalance calls. The legacy gasless on-chain-lock signing
+  (`build_gasless_cross_chain_order`, `gasless_lock_signing_hash`) +
+  `MidribV2`/`IAllowanceTransfer`/`MidribDataTypes` bindings were removed with
+  the on-chain order machinery.
+- **`aspens::solana`** (feature `solana`, default-on): the deposit / withdraw
+  (TEE voucher) / balance flow — `ed25519_verify_ix`,
+  `withdrawal_voucher_signing_message`, the PDA-derivation set (`factory`,
+  `instance`, `user_balance`, `instance_vault`, `vault_authority`,
+  `withdraw_nonce`, SPL ATA), and well-known program-id helpers. The gasless
+  `open_for` surface (`OpenOrderArgs` / `OpenForSignedPayload` / `OpenForArgs`
+  / `gasless_lock_signing_message` / order + used-nonce PDAs) was removed with
+  the on-chain order machinery.
 
 These are ports of the single reference implementations in
 `arborter/app/chain-traits` / `arborter/app/chain-evm` /

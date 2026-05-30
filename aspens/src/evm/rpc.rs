@@ -1,14 +1,13 @@
-//! On-chain (RPC) sol! bindings for Midrib V2 + IERC20.
+//! On-chain (RPC) sol! bindings for Midrib V3 + IERC20.
 //!
-//! Mirrors the struct-only bindings in the parent `aspens::evm`
-//! module, but adds `#[sol(rpc)]` so callers can build alloy contract
-//! handles (`MidribV2::new(addr, provider)`) and dispatch on-chain
-//! calls. Pulls `alloy-contract`, which is why this submodule is gated
-//! on the `client` feature.
+//! `#[sol(rpc)]` so callers can build alloy contract handles
+//! (`MidribV3::new(addr, provider)`) and dispatch on-chain calls
+//! (deposit, withdraw-voucher, tradeBalance). Pulls `alloy-contract`,
+//! which is why this submodule is gated on the `client` feature.
 //!
-//! Lean-signing consumers stay on `aspens::evm::MidribV2` — same JSON
-//! artifact, no RPC traits — and avoid the `alloy-contract` /
-//! `alloy-provider` dependency cone.
+//! MidribV3 is the optimistic-ledger contract — the V2 on-chain order
+//! machinery is burned. The kept surface the SDK calls here is deposit /
+//! withdraw(voucher, sig) / tradeBalance.
 
 use alloy_sol_types::sol;
 
@@ -16,8 +15,8 @@ sol!(
     #[derive(Debug)]
     #[allow(missing_docs)]
     #[sol(rpc)]
-    MidribV2,
-    "artifacts/MidribV2.json"
+    MidribV3,
+    "artifacts/MidribV3.json"
 );
 
 sol! {

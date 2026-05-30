@@ -9,7 +9,7 @@ use url::Url;
 
 use crate::chain_client::{ChainClient, ARCH_SOLANA};
 use crate::commands::config::config_pb::{Chain, Configuration, GetConfigResponse};
-use crate::evm::rpc::{MidribV2, IERC20};
+use crate::evm::rpc::{MidribV3, IERC20};
 #[cfg(test)]
 use crate::wallet::CurveType;
 use crate::wallet::Wallet;
@@ -278,7 +278,7 @@ async fn query_token_balance_via_client(
         );
 
     // Locked/deposited balances come from the trade contract.
-    // Solana side is not yet wired up; EVM uses MidribV2.
+    // Solana side is not yet wired up; EVM uses MidribV3.
     let (available_balance, locked_balance) =
         if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
             solana_user_balance(chain, token, owner_address).await
@@ -354,7 +354,7 @@ async fn query_token_balance_via_client(
 /// Curve-agnostic config-driven balance function.
 ///
 /// Dispatches per-chain based on `chain.architecture`:
-/// - EVM chains query via Alloy + MidribV2
+/// - EVM chains query via Alloy + MidribV3
 /// - Solana chains query via solana-client (SOL + SPL); deposited/locked
 ///   balances are scaffolded as "not deployed" until the on-chain program lands
 pub async fn balance_from_config_with_wallet(
@@ -474,7 +474,7 @@ pub async fn balance_from_config_with_wallets(
     Ok(())
 }
 
-/// Read the trader's available trade balance from MidribV2's
+/// Read the trader's available trade balance from MidribV3's
 /// `tradeBalance(owner, token)` accessor.
 pub async fn call_get_balance_for_address(
     chain: NamedChain,
@@ -489,7 +489,7 @@ pub async fn call_get_balance_for_address(
     let provider = ProviderBuilder::new()
         .with_chain(chain)
         .connect_http(rpc_url);
-    let contract = MidribV2::new(contract_addr, &provider);
+    let contract = MidribV3::new(contract_addr, &provider);
     let result = contract
         .tradeBalance(depositer_address, token_addr)
         .call()
@@ -498,22 +498,18 @@ pub async fn call_get_balance_for_address(
 }
 
 /// Variant of `call_get_locked_balance` that takes an `Address` directly.
+///
+/// MidribV3 has no on-chain locked balance: under the optimistic shadow
+/// ledger, order reservations live off-chain in the TEE (the chain only sees
+/// deposits, net settlement, and voucher withdrawals). There is nothing on
+/// the contract to query, so the EVM locked balance is always zero.
 pub async fn call_get_locked_balance_for_address(
-    rpc_url: &str,
-    token_address: &str,
-    contract_address: &str,
-    depositer_address: Address,
+    _rpc_url: &str,
+    _token_address: &str,
+    _contract_address: &str,
+    _depositer_address: Address,
 ) -> Result<Uint<256, 4>> {
-    let contract_addr: Address = contract_address.parse()?;
-    let token_addr: Address = token_address.parse()?;
-    let rpc_url = Url::parse(rpc_url)?;
-    let provider = ProviderBuilder::new().connect_http(rpc_url);
-    let contract = MidribV2::new(contract_addr, &provider);
-    let result = contract
-        .lockedTradeBalance(depositer_address, token_addr)
-        .call()
-        .await?;
-    Ok(result)
+    Ok(Uint::<256, 4>::ZERO)
 }
 
 /// Read the native gas balance (wei) for an explicit `address`.

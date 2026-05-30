@@ -1,9 +1,9 @@
 //! Chain-agnostic order primitives.
 //!
 //! `derive_order_id` is the single reference recipe for producing the 32-byte
-//! order id that the client and arborter MUST hash identically. `GaslessLockParams`
-//! is the shared input struct fed to chain-specific signing helpers
-//! (`aspens::evm::gasless_lock_signing_hash`, `aspens::solana::gasless_lock_signing_message`).
+//! order id that the client and arborter MUST hash identically.
+//! `parse_destination_token_bytes32` is the shared cross-chain-token decoder
+//! (parity-pinned against the arborter).
 
 use eyre::{eyre, Result};
 use sha2::{Digest, Sha256};
@@ -46,58 +46,6 @@ pub fn derive_order_id(
     let mut out = [0u8; 32];
     out.copy_from_slice(&h.finalize());
     out
-}
-
-/// Shared input struct fed to chain-specific signing helpers.
-///
-/// Fields are chain-specific where noted; harmless-but-ignored defaults are
-/// fine for the other chain. A client constructs one of these and passes it
-/// to either `aspens::evm::gasless_lock_signing_hash` or
-/// `aspens::solana::gasless_lock_signing_message`.
-#[derive(Debug, Clone)]
-pub struct GaslessLockParams<'a> {
-    /// User funding the lock — hex address on EVM, base58 pubkey on Solana.
-    pub depositor_address: &'a str,
-    /// Address / mint of the token being deposited on the origin chain.
-    pub token_contract: &'a str,
-    /// Address / mint of the token the user expects to receive on the
-    /// destination chain.
-    pub token_contract_destination_chain: &'a str,
-    /// Chain id of the destination chain (decimal string).
-    pub destination_chain_id: &'a str,
-    /// Amount of `token_contract` being deposited, in that token's
-    /// native base units (NOT pair_decimals). The on-chain EIP-712 /
-    /// Ed25519 digest is computed over this exact integer; the
-    /// arborter and contract recompute identically only when they
-    /// receive the same value. Callers feeding values from the
-    /// matching engine's pair-decimal representation must normalise
-    /// first via `gasless::normalize` (private) or its public mirror
-    /// `chain_traits::convert_decimals::normalize_decimals` (arborter).
-    pub amount_in: u128,
-    /// Amount of `token_contract_destination_chain` the user expects
-    /// out, in that token's native base units. Same scale convention
-    /// as `amount_in` above.
-    pub amount_out: u128,
-    /// Opaque order id — typically a 32-byte hex string. On Solana this
-    /// is the key under which the `Order` PDA is `init`-ed; on EVM it's
-    /// the intent id. Chains that want to derive it internally may
-    /// accept an empty string.
-    pub order_id: &'a str,
-    /// Chain-specific absolute deadline:
-    ///   * Solana: slot number.
-    ///   * EVM:    unix-seconds `fillDeadline` stamped on the GaslessCrossChainOrder.
-    pub deadline: u64,
-    /// Permit2 / EIP-712 nonce, embedded in the EVM `PermitSingle`. The user's
-    /// signature is computed over the exact struct that includes this nonce,
-    /// so the arborter must pass it through verbatim. Ignored by Solana
-    /// (the `Order` PDA's `init` serves as the single-use nonce).
-    pub nonce: u64,
-    /// EVM-only `openDeadline` field on `GaslessCrossChainOrder` (unix
-    /// seconds). Ignored by Solana.
-    pub open_deadline: u64,
-    /// User-produced signature. 64 bytes Ed25519 on Solana; 65 bytes
-    /// ECDSA on EVM; length and semantics are chain-specific.
-    pub user_signature: &'a [u8],
 }
 
 /// Decode a cross-chain destination token identifier into a 32-byte slot.

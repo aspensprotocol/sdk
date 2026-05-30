@@ -8,7 +8,7 @@ use url::Url;
 
 use crate::chain_client::ARCH_SOLANA;
 use crate::commands::config::config_pb::GetConfigResponse;
-use crate::evm::rpc::{MidribV2, IERC20};
+use crate::evm::rpc::{MidribV3, IERC20};
 use crate::wallet::{CurveType, Wallet};
 
 /// Minimum gas balance required for transactions (0.0001 ETH = 100000 gwei)
@@ -17,7 +17,7 @@ const MIN_GAS_BALANCE: u128 = 100_000_000_000_000; // 0.0001 ETH in wei
 /// Deposit tokens using a curve-agnostic wallet.
 ///
 /// Branches on `chain.architecture`:
-/// - **EVM**: existing MidribV2 deposit flow
+/// - **EVM**: existing MidribV3 deposit flow
 /// - **Solana**: scaffolded — returns a clear error until the on-chain
 ///   trade program is finalized and its instruction layout is known
 pub async fn call_deposit_from_config_with_wallet(
@@ -235,7 +235,7 @@ async fn call_deposit_from_config_evm(
     }
 
     // Get an instance of the contract
-    let contract = MidribV2::new(contract_addr, &provider);
+    let contract = MidribV3::new(contract_addr, &provider);
 
     let erc20 = IERC20::new(token_addr, &provider);
     // Get the allowance
