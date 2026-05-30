@@ -1,7 +1,10 @@
+use std::str::FromStr;
+
 use alloy::network::EthereumWallet;
-use alloy::primitives::{Address, U160, U256};
+use alloy::primitives::{Address, Bytes, U256};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::PrivateKeySigner;
+use alloy::signers::Signer;
 use alloy_chains::NamedChain;
 use eyre::Result;
 use url::Url;
@@ -9,7 +12,16 @@ use url::Url;
 use crate::chain_client::ARCH_SOLANA;
 use crate::commands::config::config_pb::GetConfigResponse;
 use crate::evm::rpc::MidribV2;
+use crate::grpc::create_channel;
 use crate::wallet::{CurveType, Wallet};
+
+/// Generated protobuf bindings for the `arborter.v1` trading service.
+#[allow(missing_docs)]
+pub mod arborter_pb {
+    include!("../../../proto/generated/xyz.aspens.arborter.v1.rs");
+}
+use arborter_pb::arborter_service_client::ArborterServiceClient;
+use arborter_pb::WithdrawRequest;
 
 /// Minimum gas balance required for transactions (0.0001 ETH = 100000 gwei)
 const MIN_GAS_BALANCE: u128 = 100_000_000_000_000; // 0.0001 ETH in wei
@@ -17,10 +29,14 @@ const MIN_GAS_BALANCE: u128 = 100_000_000_000_000; // 0.0001 ETH in wei
 /// Withdraw tokens using a curve-agnostic wallet.
 ///
 /// Branches on `chain.architecture`:
-/// - **EVM**: existing MidribV2 withdraw flow
-/// - **Solana**: scaffolded — returns a clear error until the on-chain
-///   trade program is finalized
+/// - **EVM**: requests a TEE-signed withdrawal voucher from the arborter
+///   (`url`) over gRPC, then submits `MidribV2.withdraw(voucher, signature)`
+///   on-chain (the wallet pays gas). The permissionless on-chain `withdraw`
+///   was removed (Track A §8); the voucher is the authorization.
+/// - **Solana**: builds + submits the user-signed Midrib `withdraw` instruction
+///   directly (the Solana program is unchanged; no voucher path yet).
 pub async fn call_withdraw_from_config_with_wallet(
+    url: String,
     network: String,
     token_symbol: String,
     amount: u64,
@@ -50,7 +66,7 @@ pub async fn call_withdraw_from_config_with_wallet(
         .ok_or_else(|| eyre::eyre!("expected EVM wallet for chain '{}'", network))?
         .clone();
 
-    call_withdraw_from_config_evm(network, token_symbol, amount, signer, config).await
+    call_withdraw_from_config_evm(url, network, token_symbol, amount, signer, config).await
 }
 
 /// Solana withdraw — builds and submits the user-signed Midrib `withdraw`
@@ -115,9 +131,10 @@ async fn solana_withdraw(
     ))
 }
 
-/// Original EVM withdraw logic — kept private and called from the
-/// wallet-aware dispatcher above.
+/// EVM withdraw via the TEE voucher flow (Track A §8): authenticate the request,
+/// get an owner-signed voucher from the arborter, submit it on-chain.
 async fn call_withdraw_from_config_evm(
+    url: String,
     network: String,
     token_symbol: String,
     amount: u64,
@@ -202,24 +219,48 @@ async fn call_withdraw_from_config_evm(
         chain.rpc_url
     );
 
-    // Perform the withdrawal
-    let withdrawal_amount = U160::from(amount);
     let contract_addr: Address = contract_address.parse()?;
     let token_addr: Address = token.address.parse()?;
     let signer_address = signer.address();
+
+    // 1) Request a TEE-signed voucher from the arborter. Authenticate the
+    //    request by signing the canonical bytes the arborter rebuilds
+    //    (`network|token|account|amount`) with the wallet key (EIP-191). The
+    //    request strings below MUST match those bytes exactly.
+    let req_account = signer_address.to_string();
+    let req_token = token.address.clone();
+    let req_amount = amount.to_string();
+    let canonical = format!("{network}|{req_token}|{req_account}|{req_amount}");
+    let req_sig = signer.sign_message(canonical.as_bytes()).await?;
+
+    let channel = create_channel(&url).await?;
+    let mut client = ArborterServiceClient::new(channel);
+    let voucher = client
+        .withdraw(tonic::Request::new(WithdrawRequest {
+            network: network.clone(),
+            token: req_token,
+            account: req_account,
+            amount: req_amount,
+            signature: req_sig.as_bytes().to_vec(),
+        }))
+        .await?
+        .into_inner();
+    tracing::info!(
+        "Received withdrawal voucher (nonce={}, expiry={})",
+        voucher.nonce,
+        voucher.expiry
+    );
+
+    // 2) Submit withdraw(voucher, signature) on-chain (the wallet pays gas).
     let wallet = EthereumWallet::new(signer);
     let rpc_url = Url::parse(&chain.rpc_url)?;
-
-    // Set up the provider
     let provider = ProviderBuilder::new()
         .with_chain(chain_type)
         .wallet(wallet)
         .connect_http(rpc_url);
 
-    // Check gas balance before attempting any transactions
     let gas_balance = provider.get_balance(signer_address).await?;
     tracing::info!("Gas balance: {} wei", gas_balance);
-
     if gas_balance < U256::from(MIN_GAS_BALANCE) {
         let balance_eth = gas_balance.to::<u128>() as f64 / 1e18;
         return Err(eyre::eyre!(
@@ -231,19 +272,24 @@ async fn call_withdraw_from_config_evm(
         ));
     }
 
-    // Get an instance of the contract
     let contract = MidribV2::new(contract_addr, &provider);
-
-    // Call the contract function
+    let onchain_voucher = MidribV2::WithdrawalVoucher {
+        account: signer_address,
+        token: token_addr,
+        // Echoed back by the arborter; fall back to the requested amount.
+        amount: U256::from_str(&voucher.amount).unwrap_or(U256::from(amount)),
+        nonce: U256::from(voucher.nonce),
+        expiry: U256::from(voucher.expiry),
+    };
     let result = contract
-        .withdraw(token_addr, withdrawal_amount)
+        .withdraw(onchain_voucher, Bytes::from(voucher.signature))
         .send()
         .await?
         .with_required_confirmations(1)
         .watch()
         .await?;
 
-    tracing::info!("Withdraw result: {result:?}");
+    tracing::info!("Withdraw voucher submitted on-chain: {result:?}");
 
     Ok(())
 }

@@ -443,10 +443,12 @@ fn main() {
                 None => return,
             };
 
+            let stack_url = app_state.stack_url();
             let net = network.clone();
             let tok = token.clone();
             let res = executor.execute(async move {
                 withdraw::call_withdraw_from_config_with_wallet(
+                    stack_url,
                     net,
                     tok,
                     amount_base,

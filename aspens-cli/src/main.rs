@@ -452,7 +452,7 @@ async fn run() -> Result<()> {
 
             let stack_url = client.stack_url().to_string();
             let config = executor
-                .execute(aspens::commands::config::get_config(stack_url))
+                .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let amount_base = resolve_token_amount(&config, &network, &token, &amount)?;
             let wallet = load_trader_wallet_for_network(&config, &network)?;
@@ -460,6 +460,7 @@ async fn run() -> Result<()> {
             executor
                 .execute(async move {
                     withdraw::call_withdraw_from_config_with_wallet(
+                        stack_url,
                         network,
                         token,
                         amount_base,
