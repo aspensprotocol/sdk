@@ -51,7 +51,7 @@ pub async fn call_withdraw_from_config_with_wallet(
         .architecture
         .eq_ignore_ascii_case(ARCH_SOLANA)
     {
-        return solana_withdraw(chain_for_arch, &token_symbol, amount, wallet).await;
+        return solana_withdraw(url, chain_for_arch, &token_symbol, amount, wallet).await;
     }
 
     if wallet.curve() != CurveType::Secp256k1 {
@@ -73,6 +73,7 @@ pub async fn call_withdraw_from_config_with_wallet(
 /// instruction. Requires the `solana` feature.
 #[cfg(feature = "solana")]
 async fn solana_withdraw(
+    url: String,
     chain: &crate::commands::config::config_pb::Chain,
     token_symbol: &str,
     amount: u64,
@@ -88,7 +89,6 @@ async fn solana_withdraw(
             chain.network
         )
     })?;
-
     let keypair = wallet.as_solana().ok_or_else(|| {
         eyre::eyre!(
             "Solana chain '{}' requires an Ed25519 wallet (TRADER_PRIVKEY_SOLANA)",
@@ -102,24 +102,98 @@ async fn solana_withdraw(
         .map_err(|e| eyre::eyre!("invalid Solana mint '{}': {}", token.address, e))?;
     let user_ata = crate::solana::derive_associated_token_account(&user, &mint);
 
+    // 1) Authenticate the request: Ed25519-sign the canonical bytes the arborter
+    //    rebuilds (`network|token|account|amount`).
+    let account_str = user.to_string();
+    let canonical = format!(
+        "{}|{}|{}|{}",
+        chain.network, token.address, account_str, amount
+    );
+    let req_sig = wallet.sign_message(canonical.as_bytes()).await?;
+
+    // 2) Request the TEE-signed voucher.
+    let channel = create_channel(&url).await?;
+    let mut client = ArborterServiceClient::new(channel);
+    let voucher = client
+        .withdraw(tonic::Request::new(WithdrawRequest {
+            network: chain.network.clone(),
+            token: token.address.clone(),
+            account: account_str,
+            amount: amount.to_string(),
+            signature: req_sig,
+        }))
+        .await?
+        .into_inner();
     tracing::info!(
-        "Solana withdraw: {} {} from {} (program={}, instance={}, ata={})",
-        amount,
-        token_symbol,
-        chain.network,
-        program_id,
-        instance,
-        user_ata
+        "Received Solana withdrawal voucher (nonce={}, deadline_slot={})",
+        voucher.nonce,
+        voucher.expiry
     );
 
-    let ix = crate::solana::withdraw_ix(&program_id, &instance, &user, &mint, &user_ata, amount)?;
-    let sig = crate::solana::client::submit_user_signed(&chain.rpc_url, keypair, ix).await?;
-    tracing::info!("Solana withdraw confirmed: {}", sig);
+    // 3) Fetch the instance signer pubkey (the Ed25519 key that signed the
+    //    voucher) so the program's Ed25519 verify recovers to it.
+    let signer_resp =
+        crate::commands::config::get_signer_public_key(url.clone(), Some(chain.network.clone()))
+            .await?;
+    let signer_str = signer_resp
+        .chain_keys
+        .get(&chain.network)
+        .map(|k| k.public_key.clone())
+        .ok_or_else(|| eyre::eyre!("no signer public key for chain '{}'", chain.network))?;
+    let signer_pk = Pubkey::from_str(&signer_str)
+        .map_err(|e| eyre::eyre!("invalid signer pubkey '{}': {}", signer_str, e))?;
+
+    // 4) Rebuild the exact signed payload + the voucher signature.
+    let deadline = voucher.expiry; // Solana on-chain deadline is a slot
+    let nonce = voucher.nonce;
+    let voucher_amount: u64 = voucher
+        .amount
+        .parse()
+        .map_err(|_| eyre::eyre!("invalid voucher amount '{}'", voucher.amount))?;
+    let voucher_sig: [u8; 64] = voucher
+        .signature
+        .as_slice()
+        .try_into()
+        .map_err(|_| eyre::eyre!("voucher signature must be 64 bytes (Ed25519)"))?;
+    let msg = crate::solana::withdrawal_voucher_signing_message(
+        &instance,
+        &user,
+        &mint,
+        voucher_amount,
+        nonce,
+        deadline,
+    )?;
+
+    // 5) Submit [Ed25519 verify ix, withdraw_voucher ix] — the user pays + signs.
+    let verify_ix = crate::solana::ed25519_verify_ix(&signer_pk.to_bytes(), &voucher_sig, &msg);
+    let args = crate::solana::WithdrawVoucherArgs {
+        amount: voucher_amount,
+        nonce,
+        deadline,
+        signature: voucher_sig,
+    };
+    let wd_ix = crate::solana::withdraw_voucher_ix(
+        &program_id,
+        &instance,
+        &user,
+        &mint,
+        &user_ata,
+        &user,
+        &args,
+    )?;
+    let sig = crate::solana::client::submit_user_signed_multi(
+        &chain.rpc_url,
+        keypair,
+        &[verify_ix, wd_ix],
+    )
+    .await?;
+    tracing::info!("Solana withdraw voucher submitted: {}", sig);
     Ok(())
 }
 
 #[cfg(not(feature = "solana"))]
 async fn solana_withdraw(
+    _url: String,
     chain: &crate::commands::config::config_pb::Chain,
     _token_symbol: &str,
     _amount: u64,
