@@ -9,9 +9,41 @@ service ArborterService {
   rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse) {}
   rpc Trades(TradeRequest) returns (stream Trade) {}
   rpc Orderbook(OrderbookRequest) returns (stream OrderbookEntry) {}
+  // Request a TEE-signed withdrawal voucher (Track A §8). The chain can no
+  // longer self-judge a withdrawal under the optimistic shadow ledger, so the
+  // arborter freezes the settled funds and returns an owner-signed voucher the
+  // holder submits to MidribV2.withdraw(voucher, signature).
+  rpc Withdraw(WithdrawRequest) returns (WithdrawResponse) {}
 }
 
 message Empty {}
+
+/* rpc: Withdraw */
+message WithdrawRequest {
+  // The chain/network the funds sit on (network key, e.g. "flare-coston2").
+  string network = 1;
+  // Token contract address on `network`.
+  string token = 2;
+  // The withdrawer's wallet address on `network`. The resulting voucher pays
+  // this address regardless of who submits it on-chain.
+  string account = 3;
+  // Amount in token base units, as a decimal string (u128).
+  string amount = 4;
+  // Signature by `account`'s key over the canonical request bytes
+  // ("network|token|account|amount"): Secp256k1 on EVM, Ed25519 on Solana.
+  bytes signature = 5;
+}
+
+message WithdrawResponse {
+  // The voucher fields the holder submits to MidribV2.withdraw(...).
+  string account = 1;
+  string token = 2;
+  string amount = 3;
+  uint64 nonce = 4;
+  uint64 expiry = 5;
+  // The TEE (instance-owner) EIP-712 signature over the voucher.
+  bytes signature = 6;
+}
 
 message CancelOrderRequest {
   OrderToCancel order = 1;
