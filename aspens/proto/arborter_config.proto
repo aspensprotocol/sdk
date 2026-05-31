@@ -209,8 +209,6 @@ message Chain {
   string rpc_url = 7;
   // The address of the factory contract on this chain. This is the address to call to deploy a new trading instance
   string factory_address = 8;
-  // The address of the permit2 contract on this chain
-  string permit2_address = 9;
   // The trading instance details
   TradeContract trade_contract = 10;
   // Mapping of token symbols to token details
