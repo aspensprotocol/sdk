@@ -228,9 +228,6 @@ pub struct Chain {
     /// The address of the factory contract on this chain. This is the address to call to deploy a new trading instance
     #[prost(string, tag = "8")]
     pub factory_address: ::prost::alloc::string::String,
-    /// The address of the permit2 contract on this chain
-    #[prost(string, tag = "9")]
-    pub permit2_address: ::prost::alloc::string::String,
     /// The trading instance details
     #[prost(message, optional, tag = "10")]
     pub trade_contract: ::core::option::Option<TradeContract>,

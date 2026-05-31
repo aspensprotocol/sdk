@@ -113,10 +113,6 @@ enum Commands {
         #[arg(long)]
         factory_address: String,
 
-        /// Permit2 contract address
-        #[arg(long)]
-        permit2_address: String,
-
         /// Optional block explorer URL
         #[arg(long)]
         explorer_url: Option<String>,
@@ -440,7 +436,6 @@ async fn run() -> Result<()> {
             chain_id,
             rpc_url,
             factory_address,
-            permit2_address,
             explorer_url,
             instance_signer_address,
         } => {
@@ -456,7 +451,6 @@ async fn run() -> Result<()> {
                 explorer_url,
                 rpc_url,
                 factory_address,
-                permit2_address,
                 trade_contract: None,
                 tokens: HashMap::new(),
             };

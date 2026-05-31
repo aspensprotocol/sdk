@@ -372,7 +372,6 @@ mod tests {
             explorer_url: None,
             rpc_url: "http://localhost".into(),
             factory_address: "0xfactory".into(),
-            permit2_address: "0xpermit2".into(),
             trade_contract: Some(TradeContract {
                 contract_id: None,
                 address: "0xtradecontract".into(),
@@ -388,7 +387,6 @@ mod tests {
             explorer_url: None,
             rpc_url: "http://localhost".into(),
             factory_address: "0xfactory".into(),
-            permit2_address: "0xpermit2".into(),
             trade_contract: Some(TradeContract {
                 contract_id: None,
                 address: "0xtradecontract".into(),
