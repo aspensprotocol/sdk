@@ -160,6 +160,41 @@ pub struct SetTradeContractResponse {
     #[prost(message, optional, tag = "1")]
     pub trade_contract: ::core::option::Option<TradeContract>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SetOperatorFeeRequest {
+    /// The chain network whose instance to update. e.g. base-sepolia
+    #[prost(string, tag = "1")]
+    pub chain_network: ::prost::alloc::string::String,
+    /// Operator-fee recipient address (0x-hex for EVM, base58 for Solana).
+    #[prost(string, tag = "2")]
+    pub recipient: ::prost::alloc::string::String,
+    /// Operator fee in basis points. Combined with maintenance bps the contract
+    /// rejects a total above the bps denominator (10000).
+    #[prost(uint32, tag = "3")]
+    pub bps: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SetOperatorFeeResponse {
+    /// On-chain tx hash / signature for the setOperatorFee call (0x-hex EVM,
+    /// base58 Solana).
+    #[prost(string, tag = "1")]
+    pub tx_signature: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SetOperatorAdminRequest {
+    /// The chain network whose instance to update.
+    #[prost(string, tag = "1")]
+    pub chain_network: ::prost::alloc::string::String,
+    /// The new operator_admin key (0x-hex for EVM, base58 for Solana).
+    #[prost(string, tag = "2")]
+    pub new_admin: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SetOperatorAdminResponse {
+    /// On-chain tx hash / signature for the setOperatorAdmin call.
+    #[prost(string, tag = "1")]
+    pub tx_signature: ::prost::alloc::string::String,
+}
 /// Request message for the service
 ///
 /// Add optional filters in the future (e.g., chain or market name)
@@ -719,6 +754,69 @@ pub mod config_service_client {
                     GrpcMethod::new(
                         "xyz.aspens.arborter_config.v1.ConfigService",
                         "SetTradeContract",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// rpc service to set an instance's operator fee (recipient + bps). The
+        /// arborter submits the on-chain setOperatorFee/set_operator_fee as the
+        /// instance's operator_admin (the arborter signer, while unrotated).
+        pub async fn set_operator_fee(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetOperatorFeeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SetOperatorFeeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/SetOperatorFee",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "SetOperatorFee",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// rpc service to rotate an instance's operator_admin key. After rotation the
+        /// new admin (not the arborter) gates operator-fee changes.
+        pub async fn set_operator_admin(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetOperatorAdminRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SetOperatorAdminResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/SetOperatorAdmin",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "SetOperatorAdmin",
                     ),
                 );
             self.inner.unary(req, path, codec).await
