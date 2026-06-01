@@ -22,6 +22,13 @@ service ConfigService {
   rpc SetMarket(SetMarketRequest) returns (SetMarketResponse) {}
   // rpc service to set a new trading instance
   rpc SetTradeContract(SetTradeContractRequest) returns (SetTradeContractResponse) {}
+  // rpc service to set an instance's operator fee (recipient + bps). The
+  // arborter submits the on-chain setOperatorFee/set_operator_fee as the
+  // instance's operator_admin (the arborter signer, while unrotated).
+  rpc SetOperatorFee(SetOperatorFeeRequest) returns (SetOperatorFeeResponse) {}
+  // rpc service to rotate an instance's operator_admin key. After rotation the
+  // new admin (not the arborter) gates operator-fee changes.
+  rpc SetOperatorAdmin(SetOperatorAdminRequest) returns (SetOperatorAdminResponse) {}
   // rpc service to get the configuration
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse) {}
   // rpc service to get version information
@@ -164,6 +171,30 @@ message SetTradeContractRequest {
 message SetTradeContractResponse {
   // The created trading instance
   TradeContract trade_contract = 1;
+}
+message SetOperatorFeeRequest {
+  // The chain network whose instance to update. e.g. base-sepolia
+  string chain_network = 1;
+  // Operator-fee recipient address (0x-hex for EVM, base58 for Solana).
+  string recipient = 2;
+  // Operator fee in basis points. Combined with maintenance bps the contract
+  // rejects a total above the bps denominator (10000).
+  uint32 bps = 3;
+}
+message SetOperatorFeeResponse {
+  // On-chain tx hash / signature for the setOperatorFee call (0x-hex EVM,
+  // base58 Solana).
+  string tx_signature = 1;
+}
+message SetOperatorAdminRequest {
+  // The chain network whose instance to update.
+  string chain_network = 1;
+  // The new operator_admin key (0x-hex for EVM, base58 for Solana).
+  string new_admin = 2;
+}
+message SetOperatorAdminResponse {
+  // On-chain tx hash / signature for the setOperatorAdmin call.
+  string tx_signature = 1;
 }
 
 // Request message for the service
