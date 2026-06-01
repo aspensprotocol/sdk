@@ -251,6 +251,34 @@ enum Commands {
         chain_network: String,
     },
 
+    /// Set an instance's operator fee (recipient + bps). The arborter submits the
+    /// on-chain setOperatorFee as the instance's operator_admin.
+    SetOperatorFee {
+        /// Chain network whose instance to update (e.g., "base-sepolia")
+        #[arg(long)]
+        chain_network: String,
+
+        /// Operator-fee recipient address (0x-hex EVM / base58 Solana)
+        #[arg(long)]
+        recipient: String,
+
+        /// Operator fee in basis points
+        #[arg(long)]
+        bps: u32,
+    },
+
+    /// Rotate an instance's operator_admin key. After rotation the new admin
+    /// (not the arborter) gates operator-fee changes.
+    RotateOperatorAdmin {
+        /// Chain network whose instance to update
+        #[arg(long)]
+        chain_network: String,
+
+        /// The new operator_admin address (0x-hex EVM / base58 Solana)
+        #[arg(long)]
+        new_admin: String,
+    },
+
     /// Delete a trade contract from a chain
     DeleteTradeContract {
         /// Chain network to remove contract from (e.g., "base-sepolia")
@@ -833,6 +861,66 @@ async fn run() -> Result<()> {
                 println!("Trade contract set: {}", tc.address);
             } else {
                 println!("Trade contract set successfully");
+            }
+        }
+
+        Commands::SetOperatorFee {
+            chain_network,
+            recipient,
+            bps,
+        } => {
+            let jwt = get_jwt()?;
+            info!(
+                "Setting operator fee {} bps -> {} on chain {}",
+                bps, recipient, chain_network
+            );
+            let result = executor
+                .execute(admin::set_operator_fee(
+                    stack_url.clone(),
+                    jwt,
+                    chain_network.clone(),
+                    recipient.clone(),
+                    bps,
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("set operator fee on chain {}", chain_network)
+                    ))
+                })?;
+            if result.tx_signature.is_empty() {
+                println!("Operator fee set (no on-chain tx returned)");
+            } else {
+                println!("Operator fee set: tx {}", result.tx_signature);
+            }
+        }
+
+        Commands::RotateOperatorAdmin {
+            chain_network,
+            new_admin,
+        } => {
+            let jwt = get_jwt()?;
+            info!(
+                "Rotating operator admin -> {} on chain {}",
+                new_admin, chain_network
+            );
+            let result = executor
+                .execute(admin::set_operator_admin(
+                    stack_url.clone(),
+                    jwt,
+                    chain_network.clone(),
+                    new_admin.clone(),
+                ))
+                .map_err(|e| {
+                    eyre::eyre!(format_error(
+                        &e,
+                        &format!("rotate operator admin on chain {}", chain_network)
+                    ))
+                })?;
+            if result.tx_signature.is_empty() {
+                println!("Operator admin rotated (no on-chain tx returned)");
+            } else {
+                println!("Operator admin rotated: tx {}", result.tx_signature);
             }
         }
 

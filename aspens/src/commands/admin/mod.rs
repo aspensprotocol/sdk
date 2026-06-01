@@ -26,7 +26,8 @@ use config_pb::{
     DeleteTokenRequest, DeleteTokenResponse, DeleteTradeContractRequest,
     DeleteTradeContractResponse, DeployContractRequest, DeployContractResponse, Empty,
     GetDeployCalldataRequest, GetDeployCalldataResponse, SetChainRequest, SetChainResponse,
-    SetMarketRequest, SetMarketResponse, SetTokenRequest, SetTokenResponse,
+    SetMarketRequest, SetMarketResponse, SetOperatorAdminRequest, SetOperatorAdminResponse,
+    SetOperatorFeeRequest, SetOperatorFeeResponse, SetTokenRequest, SetTokenResponse,
     SetTradeContractRequest, SetTradeContractResponse, UpdateAdminRequest, UpdateAdminResponse,
     VersionInfo,
 };
@@ -290,6 +291,73 @@ pub async fn set_trade_contract(
         },
     );
     let response = client.set_trade_contract(request).await?;
+
+    Ok(response.into_inner())
+}
+
+/// Set an instance's operator fee — recipient + bps (requires auth, fees Phase 4).
+///
+/// The arborter submits the on-chain `setOperatorFee` as the instance's
+/// `operator_admin` (the arborter signer, while unrotated). Returns the on-chain
+/// tx hash/signature.
+///
+/// # Arguments
+/// * `url` - The Aspens stack gRPC URL
+/// * `jwt` - Valid JWT token
+/// * `chain_network` - Chain whose instance to update
+/// * `recipient` - Operator-fee recipient address (0x-hex EVM / base58 Solana)
+/// * `bps` - Operator fee in basis points
+pub async fn set_operator_fee(
+    url: String,
+    jwt: String,
+    chain_network: String,
+    recipient: String,
+    bps: u32,
+) -> Result<SetOperatorFeeResponse> {
+    let channel = create_channel(&url).await?;
+    let mut client = ConfigServiceClient::new(channel);
+
+    let request = authenticated_request(
+        &jwt,
+        SetOperatorFeeRequest {
+            chain_network,
+            recipient,
+            bps,
+        },
+    );
+    let response = client.set_operator_fee(request).await?;
+
+    Ok(response.into_inner())
+}
+
+/// Rotate an instance's `operator_admin` key (requires auth, fees Phase 4).
+///
+/// Signed by the current admin (the arborter, while unrotated). After this the
+/// new admin — not the arborter — gates operator-fee changes. Returns the
+/// on-chain tx hash/signature.
+///
+/// # Arguments
+/// * `url` - The Aspens stack gRPC URL
+/// * `jwt` - Valid JWT token
+/// * `chain_network` - Chain whose instance to update
+/// * `new_admin` - The new operator_admin address (0x-hex EVM / base58 Solana)
+pub async fn set_operator_admin(
+    url: String,
+    jwt: String,
+    chain_network: String,
+    new_admin: String,
+) -> Result<SetOperatorAdminResponse> {
+    let channel = create_channel(&url).await?;
+    let mut client = ConfigServiceClient::new(channel);
+
+    let request = authenticated_request(
+        &jwt,
+        SetOperatorAdminRequest {
+            chain_network,
+            new_admin,
+        },
+    );
+    let response = client.set_operator_admin(request).await?;
 
     Ok(response.into_inner())
 }
