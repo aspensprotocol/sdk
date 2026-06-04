@@ -9,6 +9,73 @@ change before 1.0.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-04
+
+The optimistic-ledger release. Trading moved fully off-chain into the
+TEE; the chain now sees only deposits, net settlement, and TEE-voucher
+withdrawals. This burned the legacy gasless on-chain lock-signing path
+and re-bound the SDK to the live **MidribV3** contract. Minor release
+because of the source-breaking removals below.
+
+### Breaking — optimistic-only migration
+
+- **Gasless on-chain lock signing removed.** Order entry is now
+  authenticated by the outer envelope signature only (`order_id` +
+  `amount_in`); there is no per-order on-chain lock. Removed from the
+  public surface:
+  - `aspens::evm`: `build_gasless_cross_chain_order`,
+    `gasless_lock_signing_hash`, and the `MidribV2` /
+    `IAllowanceTransfer` / `MidribDataTypes` `sol!` bindings.
+  - `aspens::solana`: `OpenOrderArgs`, `OpenForSignedPayload`,
+    `OpenForArgs`, `gasless_lock_signing_message`, `derive_order_pda`,
+    `derive_used_nonce_pda`, and the `ORDER_SEED` / `USED_NONCE_SEED`
+    constants.
+  - `aspens::orders`: `GaslessLockParams`.
+- **EVM EIP-712 domain version bumped `"2"` → `"3"` (MidribV3).**
+  `aspens::evm::MIDRIB_EIP712_VERSION` now reads `"3"`. This must stay
+  in lock-step with the contract and the arborter.
+- **`GaslessAuthorization` renamed to `OrderAuthorization`**
+  (`{ order_id, amount_in }`); `SendOrderRequest.gasless` →
+  `authorization`. `build_gasless_authorization` now returns
+  `OrderAuthorization` and is synchronous (no per-chain dispatch, no
+  Solana `getSlot` RPC).
+- **`evm::rpc` re-bound to MidribV3** (`artifacts/MidribV3.json`) for
+  `deposit` / `withdraw(voucher, sig)` / `tradeBalance`.
+  `get_locked_balance` now returns `0` — MidribV3 has no on-chain
+  locked balance under the optimistic ledger.
+
+### Added
+
+- **TEE-voucher withdrawal flow** (Track A §8) for both chains,
+  replacing the removed permissionless on-chain `withdraw`. The SDK now
+  authenticates the canonical request bytes, calls the gRPC `Withdraw`
+  RPC to receive the TEE-signed `WithdrawalVoucher`, and submits it
+  on-chain. `call_withdraw_from_config_with_wallet` (and the `_evm`
+  variant) gain a `url` param for the gRPC endpoint; CLI, REPL, and the
+  quickstart example are threaded through.
+  - Solana withdraw drives the same voucher flow with a bounded retry
+    on transient post-drain `InsufficientBalance`.
+  - A pre-flight balance check runs before requesting the voucher; a
+    rejected submission can resubmit the same voucher.
+- **`aspens-admin` operator-fee commands** (fees phase 4c):
+  `commands::admin::set_operator_fee(chain_network, recipient, bps)`
+  and `set_operator_admin(chain_network, new_admin)`, driving the
+  `SetOperatorFee` / `SetOperatorAdmin` RPCs. JWT-authenticated; the
+  arborter submits the on-chain call.
+
+### Changed / Removed
+
+- **`permit2_address` dropped** (proto field 9 of `ChainConfig`),
+  following the protos source-of-truth removal — it was the per-chain
+  Permit2 address for the dead on-chain gasless flow. The
+  `--permit2-address` set-chain CLI arg is gone.
+- Removed dead artifacts `MidribV2.json`, `IAllowanceTransfer.json`,
+  and `MidribDataTypes.sol`.
+- Synced proto bindings from `protos@24dac6b` and `protos@d73d1f3`.
+- `docs(readme)`: documented all CLI / REPL / admin commands.
+- Dropped stale "gasless / on-chain verifier" wording from the
+  market-order reject path.
+
 ## [0.5.0] — 2026-05-27
 
 A tech-debt sweep that retired legacy public API and tightened the
@@ -204,7 +271,8 @@ Pre-0.4.1 history is recorded in git only. The 0.4.x line introduced
 Solana support, the Wallet enum, and feature gates (`evm`, `solana`,
 `client`) for lean-signing consumers.
 
-[Unreleased]: https://github.com/aspensprotocol/sdk/compare/0.5.0...HEAD
+[Unreleased]: https://github.com/aspensprotocol/sdk/compare/0.6.0...HEAD
+[0.6.0]: https://github.com/aspensprotocol/sdk/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/aspensprotocol/sdk/compare/0.4.3...0.5.0
 [0.4.3]: https://github.com/aspensprotocol/sdk/releases/tag/0.4.3
 [0.4.2]: https://github.com/aspensprotocol/sdk/releases/tag/0.4.2
