@@ -18,16 +18,16 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Blockchain & Ethereum
-alloy = { version = "2.0.4", default-features = false, features = ["contract", "network", "providers", "reqwest", "reqwest-rustls-tls", "rpc-types", "signer-local", "signers", "sol-types"] }
+alloy = { version = "2.0.5", default-features = false, features = ["contract", "network", "providers", "reqwest", "reqwest-rustls-tls", "rpc-types", "signer-local", "signers", "sol-types"] }
 # Direct sub-crate deps for lean signing builds (no provider / transport /
 # rpc-client machinery). The `alloy` umbrella stays behind the `client`
 # feature for call sites that need RPC.
-alloy-primitives = "1.5.7"
-alloy-signer = "2.0.4"
+alloy-primitives = "1.6.0"
+alloy-signer = "2.0.5"
 alloy-signer-local = "2.0.4"
 alloy-chains = "0.2.34"
 alloy-contract = "2.0.4"
-alloy-sol-types = { version = "1.5.7", features = ["json"] }
+alloy-sol-types = { version = "1.6.0", features = ["json"] }
 
 # Solana
 solana-sdk = "3"
