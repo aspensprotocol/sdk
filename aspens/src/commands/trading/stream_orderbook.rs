@@ -74,6 +74,31 @@ pub async fn stream_orderbook<F>(
 where
     F: FnMut(OrderbookEntry),
 {
+    // Adapt the synchronous callback into the async-callback core by
+    // returning an already-ready future for each entry.
+    stream_orderbook_with(url, options, |entry| {
+        callback(entry);
+        std::future::ready(())
+    })
+    .await
+}
+
+/// Internal core: stream orderbook entries, invoking an **async** callback
+/// per entry.
+///
+/// Both the sync-callback [`stream_orderbook`] and the channel-based
+/// [`stream_orderbook_channel`] delegate here. The async callback is what
+/// lets the channel variant `await` a send rather than block the runtime
+/// thread (`tx.blocking_send` panics inside a multi-thread tokio runtime).
+async fn stream_orderbook_with<F, Fut>(
+    url: String,
+    options: StreamOrderbookOptions,
+    mut callback: F,
+) -> Result<()>
+where
+    F: FnMut(OrderbookEntry) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     // Create a channel to connect to the gRPC server
     let channel = create_channel(&url).await?;
 
@@ -101,7 +126,7 @@ where
     while let Some(entry_result) = stream.next().await {
         match entry_result {
             Ok(entry) => {
-                callback(entry);
+                callback(entry).await;
             }
             Err(e) => {
                 tracing::error!("Stream error: {}", e);
@@ -250,9 +275,16 @@ pub async fn stream_orderbook_channel(
     let (tx, rx) = mpsc::channel(100);
 
     let handle = tokio::spawn(async move {
-        stream_orderbook(url, options, |entry| {
-            // Try to send, ignore if receiver is dropped
-            let _ = tx.blocking_send(entry);
+        stream_orderbook_with(url, options, |entry| {
+            // Async send: `await`s backpressure instead of blocking the
+            // runtime thread. `blocking_send` panics inside a multi-thread
+            // tokio runtime. Clone the sender so the returned future owns
+            // it (the callback is `FnMut`, so the future can't borrow).
+            let tx = tx.clone();
+            async move {
+                // Ignore the error if the receiver has been dropped.
+                let _ = tx.send(entry).await;
+            }
         })
         .await
     });

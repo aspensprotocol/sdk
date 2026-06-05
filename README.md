@@ -112,7 +112,7 @@ cargo add aspens
 Or add it manually to your `Cargo.toml`:
 ```toml
 [dependencies]
-aspens = "0.4"
+aspens = "0.6"
 ```
 
 Full client (gRPC + trading commands + RPC submission):
@@ -138,7 +138,7 @@ cargo add aspens --no-default-features --features evm,solana
 ```
 ```toml
 [dependencies]
-aspens = { version = "0.4", default-features = false, features = ["evm", "solana"] }
+aspens = { version = "0.6", default-features = false, features = ["evm", "solana"] }
 ```
 ```rust
 use aspens::orders::{derive_order_id, GaslessLockParams};
@@ -254,10 +254,10 @@ default-on. Consumers can trim down to just what they need:
 | `client` | Full runtime: `AspensClient`, trading commands, gRPC (`tonic`/`prost`), async runtime (`tokio`), RPC submission (`solana-client`, `alloy-contract`, `alloy-provider`). | Keep for the CLI/REPL/admin experience or anything that talks to the Aspens stack. Drop it for browser / embedded / offline-signing. |
 
 Common configurations:
-- **Default** (everything): `aspens = "0.4"`
-- **Lean EVM signing**: `aspens = { version = "0.4", default-features = false, features = ["evm"] }`
-- **Lean Solana signing**: `aspens = { version = "0.4", default-features = false, features = ["solana"] }`
-- **Both chains, no client runtime**: `aspens = { version = "0.4", default-features = false, features = ["evm", "solana"] }`
+- **Default** (everything): `aspens = "0.6"`
+- **Lean EVM signing**: `aspens = { version = "0.6", default-features = false, features = ["evm"] }`
+- **Lean Solana signing**: `aspens = { version = "0.6", default-features = false, features = ["solana"] }`
+- **Both chains, no client runtime**: `aspens = { version = "0.6", default-features = false, features = ["evm", "solana"] }`
 
 The `aspens-cli`, `aspens-repl`, and `aspens-admin` binaries all depend
 on the default feature set.
