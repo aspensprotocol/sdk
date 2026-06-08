@@ -11,13 +11,13 @@ use aspens::{AspensClient, AsyncExecutor, DirectExecutor};
 use aspens_cliutil::BinaryContext;
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
-use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
+use comfy_table::{Table, presets::UTF8_BORDERS_ONLY};
 use eyre::Result;
 use std::collections::HashMap;
 use std::process::ExitCode;
 use tracing::info;
-use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::filter::LevelFilter;
 use url::Url;
 
 /// Format a Unix timestamp as a human-readable datetime string

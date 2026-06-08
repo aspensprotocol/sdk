@@ -7,7 +7,7 @@
 use alloy_primitives::B256;
 use alloy_signer::Signer;
 use alloy_signer_local::PrivateKeySigner;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 
 #[cfg(feature = "solana")]
 use solana_sdk::signature::{Keypair, Signer as SolanaSigner};

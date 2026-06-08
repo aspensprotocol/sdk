@@ -12,7 +12,7 @@ pub mod config_pb {
 }
 
 use config_pb::{Chain, GetConfigRequest, GetConfigResponse, Market, Token};
-use eyre::{bail, Result};
+use eyre::{Result, bail};
 use std::fs;
 use std::path::Path;
 use tracing::info;
@@ -161,8 +161,8 @@ pub async fn get_signer_public_key(
     url: String,
     chain_network: Option<String>,
 ) -> Result<GetSignerPublicKeyResponse> {
-    use config_pb::config_service_client::ConfigServiceClient;
     use config_pb::GetSignerPublicKeyRequest;
+    use config_pb::config_service_client::ConfigServiceClient;
 
     let channel = create_channel(&url).await?;
 

@@ -1,15 +1,15 @@
 use alloy::primitives::{Address, Uint};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy_chains::NamedChain;
-use comfy_table::{presets::UTF8_BORDERS_ONLY, Table};
+use comfy_table::{Table, presets::UTF8_BORDERS_ONLY};
 use eyre::Result;
 use std::collections::HashMap;
 use tracing::{info, warn};
 use url::Url;
 
-use crate::chain_client::{ChainClient, ARCH_SOLANA};
+use crate::chain_client::{ARCH_SOLANA, ChainClient};
 use crate::commands::config::config_pb::{Chain, Configuration, GetConfigResponse};
-use crate::evm::rpc::{MidribV3, IERC20};
+use crate::evm::rpc::{IERC20, MidribV3};
 #[cfg(test)]
 use crate::wallet::CurveType;
 use crate::wallet::Wallet;

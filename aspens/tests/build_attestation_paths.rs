@@ -11,7 +11,7 @@
 #[path = "../build_attestation_paths.rs"]
 mod build_attestation_paths;
 
-use build_attestation_paths::{rewrite_attestation_paths, ABSOLUTE_PREFIX, RELATIVE_PREFIX};
+use build_attestation_paths::{ABSOLUTE_PREFIX, RELATIVE_PREFIX, rewrite_attestation_paths};
 
 #[test]
 fn rewrites_single_occurrence() {

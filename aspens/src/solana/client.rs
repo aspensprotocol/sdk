@@ -4,7 +4,7 @@
 //! derivations live in the parent `solana` module and are available to any
 //! consumer that enables the `solana` feature alone.
 
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use solana_sdk::{
     instruction::Instruction, pubkey::Pubkey, signature::Keypair, signer::Signer,
     transaction::Transaction,

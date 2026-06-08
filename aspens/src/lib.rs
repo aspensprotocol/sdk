@@ -87,7 +87,7 @@ pub use chain_client::ChainClient;
 pub use client::{AspensClient, AspensClientBuilder, JwtToken};
 #[cfg(feature = "client")]
 pub use executor::{AsyncExecutor, BlockingExecutor, DirectExecutor};
-pub use wallet::{load_admin_wallet, load_trader_wallet, CurveType, Wallet};
+pub use wallet::{CurveType, Wallet, load_admin_wallet, load_trader_wallet};
 
 // Chain-aware wallet helpers depend on the proto-generated `Chain` /
 // `GetConfigResponse` types under `commands::config`, which only exist

@@ -17,7 +17,9 @@ impl fmt::Display for Order {
             "Order {{\n  side: {},\n  quantity: {},\n  price: {},\n  market_id: {},\n  base_account_address: {},\n  quote_account_address: {},\n  execution_type: {},\n  matching_order_ids: {:?}\n}}",
             self.side,
             self.quantity,
-            self.price.clone().map_or("None".to_string(), |p| p.to_string()),
+            self.price
+                .clone()
+                .map_or("None".to_string(), |p| p.to_string()),
             self.market_id,
             self.base_account_address,
             self.quote_account_address,

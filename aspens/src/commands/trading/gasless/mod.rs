@@ -28,7 +28,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 
 use crate::commands::config::config_pb::{Chain, GetConfigResponse, Market};
 use crate::orders::derive_order_id;
@@ -169,7 +169,7 @@ fn resolve_order<'a>(
         other => {
             return Err(eyre!(
                 "unsupported side {other} — expected 1 (Bid) or 2 (Ask)"
-            ))
+            ));
         }
     };
 

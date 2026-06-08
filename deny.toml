@@ -32,6 +32,10 @@ ignore = [
   # macro crates (sol! / Solana). Track but don't block. Mirrors the
   # arborter ignore.
   "RUSTSEC-2024-0436",
+  # proc-macro-error2 is unmaintained; pulled in transitively by
+  # alloy-sol-macro (sol! codegen). No published alloy-sol-macro release
+  # drops it yet, so this is upstream's call. Revisit when alloy migrates.
+  "RUSTSEC-2026-0173",
 ]
 
 # Source restriction: only crates.io is allowed today (no git deps in

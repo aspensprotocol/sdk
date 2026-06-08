@@ -2,8 +2,8 @@ use eyre::{Context, Result};
 use std::time::{Duration, Instant};
 use tonic::transport::{Channel, ClientTlsConfig};
 use tonic_reflection::pb::v1::{
-    server_reflection_client::ServerReflectionClient, server_reflection_request::MessageRequest,
-    server_reflection_response::MessageResponse, ServerReflectionRequest,
+    ServerReflectionRequest, server_reflection_client::ServerReflectionClient,
+    server_reflection_request::MessageRequest, server_reflection_response::MessageResponse,
 };
 use tracing::info;
 
@@ -56,7 +56,9 @@ pub async fn check_grpc_server(url: String) -> Result<Vec<String>> {
     }
 
     if services.is_empty() {
-        info!("⚠️  gRPC server is accessible but no services are listed (reflection may not be enabled)");
+        info!(
+            "⚠️  gRPC server is accessible but no services are listed (reflection may not be enabled)"
+        );
     } else {
         info!("✓ gRPC server is accessible");
         info!("Available services:");

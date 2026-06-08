@@ -5,7 +5,7 @@
 //! `parse_destination_token_bytes32` is the shared cross-chain-token decoder
 //! (parity-pinned against the arborter).
 
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use sha2::{Digest, Sha256};
 
 /// Derive the canonical 32-byte order id.
@@ -97,12 +97,12 @@ pub fn parse_destination_token_bytes32(token: &str) -> Result<[u8; 32]> {
     // is the only way to disambiguate inputs that are valid as both
     // (e.g. the 32-char all-`'1'` Solana System Program pubkey).
     #[cfg(feature = "solana")]
-    if let Ok(raw) = bs58::decode(trimmed).into_vec() {
-        if raw.len() == 32 {
-            let mut out = [0u8; 32];
-            out.copy_from_slice(&raw);
-            return Ok(out);
-        }
+    if let Ok(raw) = bs58::decode(trimmed).into_vec()
+        && raw.len() == 32
+    {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&raw);
+        return Ok(out);
     }
 
     // Not a 32-byte base58 (or `solana` feature off). Fall back to hex.

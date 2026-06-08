@@ -164,16 +164,13 @@ pub fn lookup_market<'a>(
     let market_id = market_id.trim_matches('"').trim_matches('\'');
 
     // Try shorthand format: base_network/symbol::quote_network/symbol
-    if let Some((base, quote)) = market_id.split_once("::") {
-        if let (Some((base_network, base_symbol)), Some((quote_network, quote_symbol))) =
+    if let Some((base, quote)) = market_id.split_once("::")
+        && let (Some((base_network, base_symbol)), Some((quote_network, quote_symbol))) =
             (base.split_once('/'), quote.split_once('/'))
-        {
-            if let Some(market) =
-                config.get_market_by_tokens(base_network, base_symbol, quote_network, quote_symbol)
-            {
-                return Ok(market);
-            }
-        }
+        && let Some(market) =
+            config.get_market_by_tokens(base_network, base_symbol, quote_network, quote_symbol)
+    {
+        return Ok(market);
     }
 
     // Try exact market_id match
@@ -231,7 +228,7 @@ pub fn origin_network_for_side<'a>(
         arborter_pb::Side::Bid => &market.quote_chain_network,
         arborter_pb::Side::Ask => &market.base_chain_network,
         arborter_pb::Side::Unspecified => {
-            return Err(eyre::eyre!("Side::Unspecified has no origin chain"))
+            return Err(eyre::eyre!("Side::Unspecified has no origin chain"));
         }
     })
 }
@@ -450,28 +447,26 @@ pub async fn send_order_with_wallets(
     // that's the one whose balance the helper actually queries on-chain.
     if let Err(ref e) = result {
         let err_str = e.to_string().to_lowercase();
-        if err_str.contains("insufficient") || err_str.contains("balance") {
-            if let Some(evm_wallet) = wallets
+        if (err_str.contains("insufficient") || err_str.contains("balance"))
+            && let Some(evm_wallet) = wallets
                 .iter()
                 .copied()
                 .find(|w| w.curve() == crate::wallet::CurveType::Secp256k1)
+        {
+            // Re-parse the EVM address for the balance enhancement helper.
+            if let Ok(user_address) = evm_wallet.address().parse::<Address>()
+                && let Some(enhanced) = enhance_balance_error(
+                    &config,
+                    market,
+                    side,
+                    &quantity_raw,
+                    price_raw.as_deref(),
+                    user_address,
+                    pair_decimals,
+                )
+                .await
             {
-                // Re-parse the EVM address for the balance enhancement helper.
-                if let Ok(user_address) = evm_wallet.address().parse::<Address>() {
-                    if let Some(enhanced) = enhance_balance_error(
-                        &config,
-                        market,
-                        side,
-                        &quantity_raw,
-                        price_raw.as_deref(),
-                        user_address,
-                        pair_decimals,
-                    )
-                    .await
-                    {
-                        return Err(enhanced);
-                    }
-                }
+                return Err(enhanced);
             }
         }
     }

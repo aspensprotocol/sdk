@@ -9,11 +9,11 @@ pub mod auth_pb {
     include!("../../../proto/generated/xyz.aspens.arborter_auth.v1.rs");
 }
 
-use alloy::primitives::{keccak256, Address, B256, U256};
-use alloy::signers::{local::PrivateKeySigner, Signer};
+use alloy::primitives::{Address, B256, U256, keccak256};
+use alloy::signers::{Signer, local::PrivateKeySigner};
 use auth_pb::auth_service_client::AuthServiceClient;
 use auth_pb::{AuthRequest, AuthResponse, InitializeAdminRequest, InitializeAdminResponse};
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::grpc::create_channel;

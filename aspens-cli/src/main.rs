@@ -7,14 +7,14 @@ use aspens::commands::trading::{
     balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
 };
 use aspens::{
-    load_trader_wallet, load_trader_wallet_for_network, AspensClient, AsyncExecutor, CurveType,
-    DirectExecutor, Wallet,
+    AspensClient, AsyncExecutor, CurveType, DirectExecutor, Wallet, load_trader_wallet,
+    load_trader_wallet_for_network,
 };
 use aspens_cliutil::BinaryContext;
 use clap::Parser;
 use eyre::Result;
 use std::process::ExitCode;
-use tracing::{info, Level};
+use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 use url::Url;
 
@@ -632,7 +632,9 @@ async fn run() -> Result<()> {
                 for formatted_hash in result.get_formatted_transaction_hashes() {
                     info!("  {}", formatted_hash);
                 }
-                info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
+                info!(
+                    "Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)"
+                );
             }
         }
         Commands::Balance => {
@@ -920,18 +922,18 @@ async fn run() -> Result<()> {
             };
 
             // Validate report_data length
-            if let Some(ref data) = report_data_bytes {
-                if data.len() > 64 {
-                    return Err(eyre::eyre!(
-                        "Report data too long: {} bytes (max 64 bytes)\n\n\
+            if let Some(ref data) = report_data_bytes
+                && data.len() > 64
+            {
+                return Err(eyre::eyre!(
+                    "Report data too long: {} bytes (max 64 bytes)\n\n\
                          Hints:\n\
                          - Maximum report data length is 64 bytes\n\
                          - Your data is {} hex characters, which is {} bytes",
-                        data.len(),
-                        data.len() * 2,
-                        data.len()
-                    ));
-                }
+                    data.len(),
+                    data.len() * 2,
+                    data.len()
+                ));
             }
 
             let response = executor

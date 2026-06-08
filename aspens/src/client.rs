@@ -292,7 +292,9 @@ fn load_env_file(path: &str) -> Result<HashMap<String, String>> {
 
                 env_vars.insert(key.clone(), value.clone());
                 // Also set in process environment for backwards compatibility
-                std::env::set_var(&key, &value);
+                unsafe {
+                    std::env::set_var(&key, &value);
+                }
             }
         }
     }
