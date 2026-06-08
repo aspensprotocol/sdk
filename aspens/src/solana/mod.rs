@@ -5,7 +5,7 @@
 //! Anchor instruction data layout: `sha256("global:<method>")[..8] || borsh(args)`.
 
 use borsh::BorshSerialize;
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 use sha2::{Digest, Sha256};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},

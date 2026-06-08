@@ -3,8 +3,8 @@ use std::str::FromStr;
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, Bytes, U256};
 use alloy::providers::{Provider, ProviderBuilder};
-use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::Signer;
+use alloy::signers::local::PrivateKeySigner;
 use alloy_chains::NamedChain;
 use eyre::Result;
 use url::Url;
@@ -20,8 +20,8 @@ use crate::wallet::{CurveType, Wallet};
 pub mod arborter_pb {
     include!("../../../proto/generated/xyz.aspens.arborter.v1.rs");
 }
-use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::WithdrawRequest;
+use arborter_pb::arborter_service_client::ArborterServiceClient;
 
 /// Minimum gas balance required for transactions (0.0001 ETH = 100000 gwei)
 const MIN_GAS_BALANCE: u128 = 100_000_000_000_000; // 0.0001 ETH in wei

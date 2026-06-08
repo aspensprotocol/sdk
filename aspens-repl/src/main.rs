@@ -5,10 +5,10 @@ use aspens::commands::trading::{
 use aspens::{AspensClient, AsyncExecutor, BlockingExecutor, Wallet};
 use aspens_cliutil::BinaryContext;
 use clap::Parser;
-use clap_repl::reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory};
 use clap_repl::ClapEditor;
+use clap_repl::reedline::{DefaultPrompt, DefaultPromptSegment, FileBackedHistory};
 use std::sync::{Arc, Mutex};
-use tracing::{info, Level};
+use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
 /// Local thin wrapper over [`aspens_cliutil::format_error`].

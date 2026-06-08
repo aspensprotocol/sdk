@@ -8,7 +8,7 @@ use url::Url;
 
 use crate::chain_client::ARCH_SOLANA;
 use crate::commands::config::config_pb::GetConfigResponse;
-use crate::evm::rpc::{MidribV3, IERC20};
+use crate::evm::rpc::{IERC20, MidribV3};
 use crate::wallet::{CurveType, Wallet};
 
 /// Minimum gas balance required for transactions (0.0001 ETH = 100000 gwei)

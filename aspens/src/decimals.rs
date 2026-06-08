@@ -7,7 +7,7 @@
 //! place that bridges the two so every CLI / REPL / lib call site
 //! produces identical scaled values.
 
-use eyre::{eyre, Result};
+use eyre::{Result, eyre};
 
 /// Parse a human-readable decimal amount into a `u128` of base units.
 ///
@@ -352,7 +352,7 @@ mod tests {
         // Construct an integer that fits but whose product + fractional
         // padding overflows u128.
         let near_max = "340282366920938463463374607431768211455"; // u128::MAX
-                                                                  // Multiplying by 10^1 overflows.
+        // Multiplying by 10^1 overflows.
         assert!(parse_decimal_amount(near_max, 1).is_err());
     }
 

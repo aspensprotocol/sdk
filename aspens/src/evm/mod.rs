@@ -16,7 +16,7 @@
 //! let envelope_sig = sign_send_order_envelope(&wallet, &encoded_order).await?;
 //! ```
 
-use alloy_primitives::{keccak256, B256};
+use alloy_primitives::{B256, keccak256};
 use eyre::Result;
 
 /// RPC-enabled (`#[sol(rpc)]`) bindings for MidribV3 + IERC20. Pulls

@@ -49,10 +49,10 @@
 
 use std::env;
 
-use aspens::commands::trading::send_order::send_order_with_wallet;
-use aspens::wallet::{load_trader_wallet, CurveType};
 use aspens::AspensClient;
-use eyre::{eyre, Result};
+use aspens::commands::trading::send_order::send_order_with_wallet;
+use aspens::wallet::{CurveType, load_trader_wallet};
+use eyre::{Result, eyre};
 
 const DEFAULT_QUANTITY: &str = "0.001";
 const DEFAULT_SIDE: &str = "ASK";
@@ -81,7 +81,7 @@ async fn send_order_roundtrip_against_live_stack() -> Result<()> {
         other => {
             return Err(eyre!(
                 "unknown SDK_LIVE_TEST_SIDE {other:?} — want BID or ASK"
-            ))
+            ));
         }
     };
 

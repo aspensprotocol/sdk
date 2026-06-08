@@ -32,8 +32,8 @@ use config_pb::{
     VersionInfo,
 };
 use eyre::Result;
-use tonic::metadata::MetadataValue;
 use tonic::Request;
+use tonic::metadata::MetadataValue;
 
 use crate::grpc::create_channel;
 
