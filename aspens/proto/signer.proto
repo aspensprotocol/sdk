@@ -56,9 +56,10 @@ message SignWithKeyRequest {
   // Key blob containing TPM private and public key data
   KeyBlob key_blob = 1;
 
-  // The message to sign
-  // - For RAW: arbitrary string (will be SHA256 hashed)
-  // - For EIP712/EIP191: hex-encoded 32-byte digest
+  // The message to sign, hex-encoded. Shape depends on signature_type (secp256k1):
+  // - RAW: a 32-byte digest signed DIRECTLY — blind, the signer cannot tell it from a transaction hash (audit HIGH-#3). Legacy; prefer EIP191/EIP712.
+  // - EIP712 (preferred): a 64-byte `domainSeparator || structHash`; the signer reconstructs keccak256(0x1901 || ds || hs) itself, so a raw tx hash cannot be substituted. A 32-byte digest is still accepted but is the legacy BLIND path (deprecated).
+  // - EIP191: a 32-byte digest, wrapped as keccak256("\x19Ethereum Signed Message:\n32" || digest) before signing.
   string message = 2;
 
   // Signature type (default: RAW for backward compatibility)
@@ -179,13 +180,17 @@ message KeyBlobBytes {
 
 // Signature type determines how the message is processed before signing
 enum SignatureType {
-  // Legacy behavior: SHA256 hash the message string
-  // Used for backward compatibility with existing clients
+  // Legacy / backward-compat. For secp256k1 (SignWithKey/SignTransaction) the
+  // 32-byte message digest is signed DIRECTLY — it is NOT hashed, and the signer
+  // cannot distinguish it from a transaction hash (a blind-signing path; audit
+  // HIGH-#3). Prefer EIP191, or EIP712 with the 64-byte form below.
+  // (SignEphemeral, which uses the TPM P-256 health-check path, does SHA256 the
+  // message string — that path is unaffected.)
   SIGNATURE_TYPE_RAW = 0;
 
-  // Pure EIP712: Sign the digest directly
-  // Used for Permit2 and other standard EIP712 signatures
-  // Message must be hex-encoded 32-byte EIP712 digest
+  // EIP-712. Two message forms for secp256k1:
+  // - PREFERRED (safe): a 64-byte `domainSeparator || structHash`; the signer computes keccak256(0x1901 || ds || hs) itself, so the signature provably cannot be over a substituted transaction hash.
+  // - LEGACY (blind, deprecated): a 32-byte pre-computed EIP-712 digest, signed directly. Used for Permit2 etc.; migrate to the 64-byte form.
   SIGNATURE_TYPE_EIP712 = 1;
 
   // EIP712 + EIP191 wrapper: Apply "Ethereum Signed Message" prefix
