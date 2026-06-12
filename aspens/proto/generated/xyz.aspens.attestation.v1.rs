@@ -59,6 +59,18 @@ pub struct AttestationReport {
     /// Report data (user-provided data bound to the report)
     #[prost(string, tag = "15")]
     pub report_data: ::prost::alloc::string::String,
+    /// Raw signed TD Quote (DCAP/QVL-verifiable): ECDSA chain to the Intel SGX Root
+    /// CA. Empty when the configfs-tsm quote path is unavailable.
+    #[prost(bytes = "vec", tag = "16")]
+    pub raw_quote: ::prost::alloc::vec::Vec<u8>,
+    /// Optional collateral the verifier couldn't otherwise obtain (PCK chain /
+    /// auxblob). Usually empty.
+    #[prost(bytes = "vec", tag = "17")]
+    pub cert_chain: ::prost::alloc::vec::Vec<u8>,
+    /// Self-reported running image digest(s), NON-AUTHORITATIVE debug echo. The
+    /// verifier trusts only the digests bound into the quote's REPORTDATA.
+    #[prost(bytes = "vec", tag = "18")]
+    pub image_digest: ::prost::alloc::vec::Vec<u8>,
 }
 /// Generated client implementations.
 pub mod attestation_service_client {

@@ -52,6 +52,9 @@ pub mod health;
 pub mod orders;
 #[cfg(feature = "solana")]
 pub mod solana;
+/// Relying-party TDX attestation verification (REPORTDATA/manifest reconstruction
+/// + the verify pipeline). Pure `sha2`; the DCAP backend is a separate phase.
+pub mod tdx_verify;
 pub mod wallet;
 
 /// Generated protobuf bindings for the attestation service.
