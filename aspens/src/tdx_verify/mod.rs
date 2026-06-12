@@ -28,6 +28,16 @@ pub mod reportdata;
 #[cfg(feature = "dcap")]
 pub mod dcap;
 
+/// DCAP collateral fetcher (TCB info / QE identity / PCK CRL) over HTTP from a
+/// PCCS or Intel PCS. Requires the `dcap-fetch` feature (pulls a rustls reqwest).
+#[cfg(feature = "dcap-fetch")]
+pub mod collateral;
+
+/// Live end-to-end verification against a running Aspens stack: fetch the
+/// attestation, fetch its collateral, and verify. Requires `client` + `dcap-fetch`.
+#[cfg(all(feature = "client", feature = "dcap-fetch"))]
+pub mod live;
+
 use reportdata::{CurveTag, expected_reportdata};
 use std::fmt;
 
@@ -162,6 +172,10 @@ pub enum VerifyError {
     /// The recomputed REPORTDATA did not equal the quote's — the quote does not
     /// bind the expected keys/images/report_data.
     ReportDataMismatch,
+    /// Fetching the DCAP collateral (TCB info / QE identity / PCK CRL) failed.
+    Collateral(String),
+    /// Transport error fetching the attestation from the stack (gRPC / connect).
+    Transport(String),
 }
 
 impl fmt::Display for VerifyError {
@@ -190,6 +204,15 @@ impl fmt::Display for VerifyError {
                 "attestation rejected: REPORTDATA mismatch — quote does not bind the expected \
                  pubkeys/images/report_data"
             ),
+            VerifyError::Collateral(e) => {
+                write!(
+                    f,
+                    "attestation rejected: could not fetch DCAP collateral: {e}"
+                )
+            }
+            VerifyError::Transport(e) => {
+                write!(f, "attestation rejected: could not fetch attestation: {e}")
+            }
         }
     }
 }
@@ -238,9 +261,11 @@ mod tests {
         let exp = expected();
         let rd = expected_reportdata(&exp.pubkeys, &exp.image_digests, &exp.report_data);
         let v = StubVerifier(quote_with_reportdata(rd));
-        let mut policy = MeasurementPolicy::default();
-        policy.mr_td = Some(meas(0x11));
-        policy.rt_mr[0] = Some(meas(0x20));
+        let policy = MeasurementPolicy {
+            mr_td: Some(meas(0x11)),
+            rt_mr: [Some(meas(0x20)), None, None, None],
+            ..Default::default()
+        };
         assert!(verify_attestation(b"raw", &v, &policy, &exp).is_ok());
     }
 
@@ -259,8 +284,10 @@ mod tests {
         let exp = expected();
         let rd = expected_reportdata(&exp.pubkeys, &exp.image_digests, &exp.report_data);
         let v = StubVerifier(quote_with_reportdata(rd));
-        let mut policy = MeasurementPolicy::default();
-        policy.mr_td = Some(meas(0xFF)); // wrong
+        let policy = MeasurementPolicy {
+            mr_td: Some(meas(0xFF)), // wrong
+            ..Default::default()
+        };
         let err = verify_attestation(b"raw", &v, &policy, &exp).unwrap_err();
         assert_eq!(err, VerifyError::MeasurementMismatch("mr_td"));
     }

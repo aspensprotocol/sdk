@@ -44,6 +44,16 @@ sha2 = "0.11"
 # `default-x509` for the PCK cert-chain parsing; NO `report`/`reqwest` — collateral
 # is supplied to the verifier, not fetched here. Behind the optional `dcap` feature.
 dcap-qvl = { version = "0.5.2", default-features = false, features = ["rustcrypto", "default-x509", "std"] }
+# Collateral fetching (the `dcap-fetch` feature). dcap-qvl's own fetcher is locked
+# behind its `report` feature, which forces reqwest 0.13 + `hickory-dns` (needs the
+# unresolvable prerelease `hickory-resolver 0.26`); so we drive the PCS/PCCS REST
+# API ourselves over the SDK's rustls reqwest 0.12 (unifies with alloy's) and
+# assemble `QuoteCollateralV3` directly. asn1_der mirrors dcap's FMSPC extension
+# walk; pem splits the PCK chain; urlencoding decodes issuer-chain headers.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+asn1_der = "0.7"
+pem = "3"
+urlencoding = "2"
 
 # gRPC & Protobuf
 tonic = { version = "0.14.6", default-features = false, features = ["codegen", "transport", "tls-native-roots", "tls-ring"] }
@@ -69,6 +79,9 @@ clap-verbosity = "2.1.0"
 # Utilities
 eyre = "0.6"
 hex = "0.4.3"
+# OS CSPRNG — the CLI uses it to mint a fresh anti-replay nonce for
+# verify-attestation when one isn't supplied.
+getrandom = "0.3"
 url = "2.5.8"
 comfy-table = "7.2.2"
 chrono = "0.4"
