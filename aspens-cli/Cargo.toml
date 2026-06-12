@@ -13,7 +13,9 @@ path = "src/main.rs"
 [dependencies]
 # Local dependencies — features declared explicitly so changes to the
 # aspens crate's default features don't silently affect this binary.
-aspens = { path = "../aspens", default-features = false, features = ["client", "trader", "evm", "solana", "formatting"] }
+# `dcap-fetch` adds the TDX attestation verifier + collateral fetcher
+# (the `verify-attestation` command).
+aspens = { path = "../aspens", default-features = false, features = ["client", "trader", "evm", "solana", "formatting", "dcap-fetch"] }
 aspens-cliutil = { path = "../aspens-cliutil" }
 
 # Workspace dependencies
@@ -22,6 +24,7 @@ alloy-chains.workspace = true
 eyre.workspace = true
 clap.workspace = true
 clap-verbosity.workspace = true
+getrandom.workspace = true
 hex.workspace = true
 log.workspace = true
 serde_json.workspace = true

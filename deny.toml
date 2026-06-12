@@ -36,6 +36,12 @@ ignore = [
   # alloy-sol-macro (sol! codegen). No published alloy-sol-macro release
   # drops it yet, so this is upstream's call. Revisit when alloy migrates.
   "RUSTSEC-2026-0173",
+  # NOTE: rsa / RUSTSEC-2023-0071 is deliberately NOT ignored here.
+  # cargo-deny resolves with feature activation, and the verifier uses
+  # dcap-qvl's `ring` backend, so rsa (an optional dep of dcap-qvl-webpki)
+  # is never in cargo-deny's graph — adding it would be an unused ignore.
+  # Bare `cargo audit` scans the raw Cargo.lock (which pins the inactive
+  # optional), so the suppression lives in ../.cargo/audit.toml instead.
 ]
 
 # Source restriction: only crates.io is allowed today (no git deps in

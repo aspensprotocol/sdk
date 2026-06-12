@@ -27,6 +27,18 @@ tracing.workspace = true
 # (derive_order_id is the single reference hash for both EVM and Solana).
 sha2 = { workspace = true }
 
+# Pure-Rust DCAP TD-Quote verification backend for `tdx_verify` (the `dcap`
+# feature). Optional so the lean signing build pulls none of it.
+dcap-qvl = { workspace = true, optional = true }
+# Collateral fetching (the `dcap-fetch` feature): the SDK's own rustls reqwest
+# (unifies with alloy's), plus the parsers needed to drive the PCS/PCCS REST API
+# ourselves — asn1_der (FMSPC extension walk), pem (PCK chain split), urlencoding
+# (issuer-chain header decode). See the `tdx_verify::collateral` module.
+reqwest = { workspace = true, optional = true }
+asn1_der = { workspace = true, optional = true }
+pem = { workspace = true, optional = true }
+urlencoding = { workspace = true, optional = true }
+
 # --- Chain signing helpers (stateless): pulled in only when the matching
 # chain feature is enabled.
 solana-sdk = { workspace = true, optional = true }
@@ -69,6 +81,16 @@ default = ["trader", "formatting", "client", "evm", "solana"]
 trader = []
 admin = []
 formatting = ["dep:comfy-table"]
+
+# Relying-party DCAP backend for `tdx_verify::dcap` — pulls the pure-Rust
+# `dcap-qvl` quote verifier. The rest of `tdx_verify` (reconstruction + pipeline)
+# is always available; only the `QuoteVerifier` impl needs this.
+dcap = ["dep:dcap-qvl"]
+
+# DCAP collateral fetching (`tdx_verify::collateral`) + live end-to-end
+# verification (`tdx_verify::live`, with `client`). Drives the PCS/PCCS REST API
+# over the SDK's own rustls reqwest (not dcap-qvl's `report`/reqwest-0.13 stack).
+dcap-fetch = ["dcap", "dep:reqwest", "dep:asn1_der", "dep:pem", "dep:urlencoding"]
 
 # EVM signing helpers: sol! bindings for MidribV2, IAllowanceTransfer,
 # MidribDataTypes; EIP-712 hasher; EIP-191 envelope signer. Stateless.

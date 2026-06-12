@@ -9,9 +9,14 @@ service AttestationService {
 }
 
 message GetAttestationRequest {
-  // Optional user-provided data to bind to the attestation report.
-  // Must be at most 64 bytes. If provided, it will be included in the
-  // REPORTDATA field of the TDX attestation report.
+  // Caller-supplied freshness nonce (anti-replay). At most 64 bytes.
+  //
+  // NOTE: semantics narrowed (see ATTESTATION_QUOTE_DESIGN.md §6). The signer no
+  // longer writes these bytes directly into REPORTDATA; it assembles REPORTDATA
+  // server-side as SHA-512(domain_tag || signer_pubkey || nonce || image_digest)
+  // so the quote binds the signing key it actually holds. This field now carries
+  // only the `nonce`. Kept wire-compatible (still <=64 opaque bytes); rename to
+  // `nonce` at the next proto cleanup.
   optional bytes report_data = 1;
 }
 
@@ -50,4 +55,22 @@ message AttestationReport {
   string rt_mr3 = 14;
   // Report data (user-provided data bound to the report)
   string report_data = 15;
+
+  // --- Remotely-verifiable attestation (ATTESTATION_QUOTE_DESIGN.md) ---
+  // The authoritative artifact going forward: the verifier reads measurements
+  // from the *verified* quote body, not the string fields above (which are
+  // deprecated and retained only for transition).
+
+  // Raw signed TD Quote (DCAP/QVL-verifiable): ECDSA chain to the Intel SGX
+  // Root CA over the TDREPORT. Empty on non-TDX / legacy builds.
+  bytes raw_quote = 16;
+
+  // Optional collateral the verifier couldn't otherwise obtain (PCK chain /
+  // auxblob). Usually empty -- DCAP fetches collateral from Intel PCS/PCCS and
+  // the PCK chain is embedded in the quote's certification data.
+  bytes cert_chain = 17;
+
+  // Self-reported running image digest(s) (see design §4.7). Trust rests on the
+  // MRTD/RTMR measurement policy, not on this self-report.
+  bytes image_digest = 18;
 }
