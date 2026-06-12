@@ -40,6 +40,10 @@ bs58 = "0.5"
 ed25519-dalek = "2"
 borsh = { version = "1.6.1", features = ["derive"] }
 sha2 = "0.11"
+# Pure-Rust DCAP quote verification (TDX). `rustcrypto` backend (no `ring`/native),
+# `default-x509` for the PCK cert-chain parsing; NO `report`/`reqwest` — collateral
+# is supplied to the verifier, not fetched here. Behind the optional `dcap` feature.
+dcap-qvl = { version = "0.5.2", default-features = false, features = ["rustcrypto", "default-x509", "std"] }
 
 # gRPC & Protobuf
 tonic = { version = "0.14.6", default-features = false, features = ["codegen", "transport", "tls-native-roots", "tls-ring"] }

@@ -14,13 +14,19 @@
 //!    `SHA-512(DOMAIN ‖ H(pubkey_manifest) ‖ H(images) ‖ H(report_data))` from the
 //!    *expected* values and require it to equal the verified quote's REPORTDATA.
 //!
-//! The DCAP step ([`QuoteVerifier`]) is pluggable — the concrete backend (a vetted
-//! Rust DCAP crate, FFI to Intel QVL, or an operator-run QVE) is a separate
-//! decision and is **not yet implemented here**. Everything else (the pipeline,
-//! the measurement policy, and the REPORTDATA reconstruction) is complete and
-//! host-tested.
+//! The DCAP step ([`QuoteVerifier`]) is pluggable. A pure-Rust backend
+//! ([`dcap::DcapQuoteVerifier`], `dcap-qvl`) ships behind the `dcap` feature; the
+//! reconstruction, measurement policy, and pipeline are always built and
+//! host-tested. The remaining integration step is end-to-end validation against a
+//! real quote + collateral (hardware), plus the operator's collateral source
+//! (Intel PCS / PCCS) and measurement-policy config.
 
 pub mod reportdata;
+
+/// DCAP quote-verification backend (`QuoteVerifier` impl). Requires the `dcap`
+/// feature; the rest of this module (reconstruction + pipeline) is always built.
+#[cfg(feature = "dcap")]
+pub mod dcap;
 
 use reportdata::{CurveTag, expected_reportdata};
 use std::fmt;
