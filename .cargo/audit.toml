@@ -1,0 +1,19 @@
+# cargo-audit config (read by `cargo audit` in .github/workflows/ci.yml).
+#
+# This is intentionally NOT mirrored in ../deny.toml. cargo-audit scans the
+# raw Cargo.lock, which pins *inactive optional* deps; cargo-deny resolves
+# with feature activation and doesn't see them — so the ignore below is
+# needed here but would be an unused (warned) ignore in deny.toml.
+# cargo-audit only fails on vulnerabilities, so unmaintained warnings (which
+# deny.toml does list) need no entry here.
+
+[advisories]
+ignore = [
+  # rsa — RUSTSEC-2023-0071 (Marvin timing attack, no fixed release).
+  # OPTIONAL, unactivated dep of dcap-qvl-webpki: the verifier uses the
+  # `ring` backend so rsa is never compiled (`cargo tree -i rsa` is empty);
+  # cargo only pins it in Cargo.lock as an inactive optional. Marvin targets
+  # RSA private-key timing — unreachable for a verifier that holds no RSA
+  # keys against Intel's all-ECDSA PKI.
+  "RUSTSEC-2023-0071",
+]
