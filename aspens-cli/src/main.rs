@@ -453,16 +453,16 @@ enum Commands {
         /// mandatory — a valid signature over *some* TD is not enough.
         #[arg(long)]
         mr_td: Option<String>,
-        /// Pinned RTMR[0] (48-byte hex).
+        /// Pinned RTMR0 (48-byte hex).
         #[arg(long)]
         rtmr0: Option<String>,
-        /// Pinned RTMR[1] (48-byte hex).
+        /// Pinned RTMR1 (48-byte hex).
         #[arg(long)]
         rtmr1: Option<String>,
-        /// Pinned RTMR[2] (48-byte hex).
+        /// Pinned RTMR2 (48-byte hex).
         #[arg(long)]
         rtmr2: Option<String>,
-        /// Pinned RTMR[3] (48-byte hex).
+        /// Pinned RTMR3 (48-byte hex).
         #[arg(long)]
         rtmr3: Option<String>,
         /// Pinned MRSEAM (48-byte hex).

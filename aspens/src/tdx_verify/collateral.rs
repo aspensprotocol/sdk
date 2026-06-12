@@ -5,11 +5,11 @@
 //! fetcher, but it's locked behind its `report` feature, which forces reqwest 0.13
 //! + `hickory-dns` (an unresolvable prerelease `hickory-resolver`). So we drive the
 //! PCS/PCCS v4 REST API ourselves over the SDK's own rustls reqwest 0.12 and
-//! assemble a [`QuoteCollateralV3`] directly — reusing dcap-qvl's *un*-gated cert
-//! parsing ([`ParsedCert`]) for the PCK extension + CA classification, and a small
+//! assemble a `QuoteCollateralV3` directly — reusing dcap-qvl's *un*-gated cert
+//! parsing (`ParsedCert`) for the PCK extension + CA classification, and a small
 //! FMSPC extension walk mirrored from dcap-qvl's `utils::find_extension`.
 //!
-//! For air-gapped / offline use, [`collateral_from_json`] loads operator-provided
+//! For air-gapped / offline use, `collateral_from_json` loads operator-provided
 //! collateral instead of fetching.
 //!
 //! ## Scope

@@ -1,10 +1,10 @@
-//! DCAP-backed [`QuoteVerifier`] using the pure-Rust `dcap-qvl` crate. Behind the
+//! DCAP-backed `QuoteVerifier` using the pure-Rust `dcap-qvl` crate. Behind the
 //! `dcap` feature so the lean signing build pulls none of it.
 //!
 //! This is the "claim 1" backend: it checks the TD Quote's ECDSA chain to the
 //! Intel SGX Root CA and its TCB status against operator-supplied collateral,
-//! then maps the verified TD report onto a [`VerifiedQuote`] for the rest of the
-//! [`super::verify_attestation`] pipeline (measurement policy + REPORTDATA).
+//! then maps the verified TD report onto a `VerifiedQuote` for the rest of the
+//! `verify_attestation` pipeline (measurement policy + REPORTDATA).
 
 use super::{QuoteVerifier, VerifiedQuote, VerifyError};
 use dcap_qvl::QuoteCollateralV3;

@@ -1,6 +1,6 @@
 //! Live end-to-end attestation verification against a running Aspens stack.
 //! Behind `client` + `dcap-fetch`: fetch the attestation over gRPC, fetch its
-//! DCAP collateral, and run the fail-closed [`verify_attestation`] pipeline.
+//! DCAP collateral, and run the fail-closed `verify_attestation` pipeline.
 
 use super::collateral::fetch_collateral;
 use super::dcap::DcapQuoteVerifier;

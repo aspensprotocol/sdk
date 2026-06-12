@@ -3,19 +3,19 @@
 //!
 //! The signer produces a single Intel-signed **TD Quote** whose REPORTDATA binds
 //! its tx-pubkey manifest, the running image digests, and caller-supplied data
-//! (see [`reportdata`]). A relying party verifies it in three steps, fail-closed:
+//! (see the `reportdata` module). A relying party verifies it in three steps, fail-closed:
 //!
 //! 1. **Genuine TEE (claim 1):** DCAP/QVL-verify the quote's ECDSA chain to the
-//!    Intel SGX Root CA and its TCB status — done by a [`QuoteVerifier`].
+//!    Intel SGX Root CA and its TCB status — done by a `QuoteVerifier`.
 //! 2. **Measurement policy (claim 2):** pin expected `MRTD`/`RTMR[..]`/seam
-//!    measurements against operator values ([`MeasurementPolicy`]). A valid
+//!    measurements against operator values (`MeasurementPolicy`). A valid
 //!    signature over *some* TD is not enough.
 //! 3. **REPORTDATA (claims 2+3 + freshness):** recompute
 //!    `SHA-512(DOMAIN ‖ H(pubkey_manifest) ‖ H(images) ‖ H(report_data))` from the
 //!    *expected* values and require it to equal the verified quote's REPORTDATA.
 //!
-//! The DCAP step ([`QuoteVerifier`]) is pluggable. A pure-Rust backend
-//! ([`dcap::DcapQuoteVerifier`], `dcap-qvl`) ships behind the `dcap` feature; the
+//! The DCAP step (`QuoteVerifier`) is pluggable. A pure-Rust backend
+//! (`dcap::DcapQuoteVerifier`, `dcap-qvl`) ships behind the `dcap` feature; the
 //! reconstruction, measurement policy, and pipeline are always built and
 //! host-tested. The remaining integration step is end-to-end validation against a
 //! real quote + collateral (hardware), plus the operator's collateral source
