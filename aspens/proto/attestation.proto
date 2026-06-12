@@ -11,12 +11,14 @@ service AttestationService {
 message GetAttestationRequest {
   // Caller-supplied freshness nonce (anti-replay). At most 64 bytes.
   //
-  // NOTE: semantics narrowed (see ATTESTATION_QUOTE_DESIGN.md §6). The signer no
+  // NOTE: semantics narrowed (see ATTESTATION_QUOTE_DESIGN.md §4.4). The signer no
   // longer writes these bytes directly into REPORTDATA; it assembles REPORTDATA
-  // server-side as SHA-512(domain_tag || signer_pubkey || nonce || image_digest)
-  // so the quote binds the signing key it actually holds. This field now carries
-  // only the `nonce`. Kept wire-compatible (still <=64 opaque bytes); rename to
-  // `nonce` at the next proto cleanup.
+  // server-side as SHA-512( DOMAIN || SHA256(pubkey_manifest) || SHA256(image_digests) || SHA256(report_data) ),
+  // where `pubkey_manifest` is the canonical manifest binding ALL of the signer's
+  // tx pubkeys and `report_data` is these bytes — so the quote binds the signing
+  // keys the signer actually holds, not a single caller-supplied key. This field
+  // now carries only the nonce. Kept wire-compatible (still <=64 opaque bytes);
+  // rename to `nonce` at the next proto cleanup.
   optional bytes report_data = 1;
 }
 
