@@ -168,6 +168,36 @@ pub fn derive_associated_token_account(owner: &Pubkey, mint: &Pubkey) -> Pubkey 
     ata
 }
 
+/// Build an idempotent "create associated token account" instruction (ATA
+/// program `CreateIdempotent`, discriminant `1`). A no-op if `ata` already
+/// exists, so it is safe to submit unconditionally — prepend it before a
+/// `withdraw_voucher` whose SPL transfer credits `ata`, which the program does
+/// NOT `init` (SOL-VOUCHER-ATA: a withdrawer's recipient ATA may not exist yet,
+/// e.g. the received leg of a cross-chain trade in a token they never held on
+/// this chain). `payer` funds the rent (~0.002 SOL when actually created) +
+/// signs the tx.
+pub fn create_idempotent_ata_ix(
+    payer: &Pubkey,
+    owner: &Pubkey,
+    mint: &Pubkey,
+    ata: &Pubkey,
+) -> Instruction {
+    // Account order is fixed by the ATA program. (Recent ATA-program versions
+    // no longer require the rent sysvar, so it is omitted.)
+    Instruction {
+        program_id: ata_program_id(),
+        accounts: vec![
+            AccountMeta::new(*payer, true),
+            AccountMeta::new(*ata, false),
+            AccountMeta::new_readonly(*owner, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+        ],
+        data: vec![1], // CreateIdempotent
+    }
+}
+
 #[derive(BorshSerialize)]
 struct AmountArgs {
     amount: u64,
@@ -438,6 +468,40 @@ mod tests {
         assert_eq!(ix.program_id, ed25519_program_id());
         // header(16) + sig(64) + pk(32) + message(2)
         assert_eq!(ix.data.len(), 16 + 64 + 32 + 2);
+    }
+
+    #[test]
+    fn create_idempotent_ata_ix_layout() {
+        let payer = Pubkey::new_from_array([1; 32]);
+        let owner = Pubkey::new_from_array([2; 32]);
+        let mint = Pubkey::new_from_array([3; 32]);
+        let ata = Pubkey::new_from_array([4; 32]);
+        let ix = create_idempotent_ata_ix(&payer, &owner, &mint, &ata);
+
+        assert_eq!(ix.program_id, ata_program_id());
+        assert_eq!(ix.data, vec![1], "CreateIdempotent discriminant");
+        // Account order is fixed by the ATA program; a wrong order fails silently
+        // on-chain, so pin it.
+        let a = &ix.accounts;
+        assert_eq!(a.len(), 6);
+        assert_eq!(a[0].pubkey, payer);
+        assert!(
+            a[0].is_signer && a[0].is_writable,
+            "payer signs + funds rent"
+        );
+        assert_eq!(a[1].pubkey, ata);
+        assert!(
+            a[1].is_writable && !a[1].is_signer,
+            "ata is created (writable)"
+        );
+        assert_eq!(a[2].pubkey, owner);
+        assert_eq!(a[3].pubkey, mint);
+        assert_eq!(a[4].pubkey, SYSTEM_PROGRAM_ID);
+        assert_eq!(a[5].pubkey, SPL_TOKEN_PROGRAM_ID);
+        assert!(
+            a[2..].iter().all(|m| !m.is_signer && !m.is_writable),
+            "owner/mint/programs are readonly"
+        );
     }
 
     #[test]
