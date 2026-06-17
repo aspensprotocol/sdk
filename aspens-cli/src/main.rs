@@ -249,7 +249,7 @@ fn resolve_token_amount(
     network: &str,
     token_symbol: &str,
     amount: &str,
-) -> Result<u64> {
+) -> Result<u128> {
     aspens_cliutil::resolve_token_amount(config, network, token_symbol, amount)
 }
 

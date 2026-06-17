@@ -64,7 +64,7 @@ fn resolve_token_amount(
     network: &str,
     token_symbol: &str,
     amount: &str,
-) -> eyre::Result<u64> {
+) -> eyre::Result<u128> {
     aspens_cliutil::resolve_token_amount(config, network, token_symbol, amount)
 }
 

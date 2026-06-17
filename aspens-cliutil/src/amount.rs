@@ -1,7 +1,7 @@
 //! Token-amount resolution shared by aspens-cli and aspens-repl.
 
 use aspens::commands::config::config_pb::GetConfigResponse;
-use aspens::decimals::parse_decimal_amount_u64;
+use aspens::decimals::parse_decimal_amount;
 use eyre::Result;
 
 /// Look up `token_symbol` on `network` in the server config and parse
@@ -16,7 +16,7 @@ pub fn resolve_token_amount(
     network: &str,
     token_symbol: &str,
     amount: &str,
-) -> Result<u64> {
+) -> Result<u128> {
     let token = config.get_token(network, token_symbol).ok_or_else(|| {
         eyre::eyre!(
             "Token '{}' not found on chain '{}'. \
@@ -25,7 +25,11 @@ pub fn resolve_token_amount(
             network
         )
     })?;
-    parse_decimal_amount_u64(amount, token.decimals)
+    // u128 base units: the EVM path carries this through to a U256 on-chain
+    // amount, lifting the old ~18-token cap on 18-decimal tokens (DEC-1). The
+    // Solana path downcasts to u64 at the SPL boundary (its native width), with
+    // a checked error, in `call_{deposit,withdraw}_from_config_with_wallet`.
+    parse_decimal_amount(amount, token.decimals)
         .map_err(|e| eyre::eyre!("Invalid amount '{}' for {}: {}", amount, token_symbol, e))
 }
 
