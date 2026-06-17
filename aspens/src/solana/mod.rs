@@ -485,9 +485,15 @@ mod tests {
         let a = &ix.accounts;
         assert_eq!(a.len(), 6);
         assert_eq!(a[0].pubkey, payer);
-        assert!(a[0].is_signer && a[0].is_writable, "payer signs + funds rent");
+        assert!(
+            a[0].is_signer && a[0].is_writable,
+            "payer signs + funds rent"
+        );
         assert_eq!(a[1].pubkey, ata);
-        assert!(a[1].is_writable && !a[1].is_signer, "ata is created (writable)");
+        assert!(
+            a[1].is_writable && !a[1].is_signer,
+            "ata is created (writable)"
+        );
         assert_eq!(a[2].pubkey, owner);
         assert_eq!(a[3].pubkey, mint);
         assert_eq!(a[4].pubkey, SYSTEM_PROGRAM_ID);
