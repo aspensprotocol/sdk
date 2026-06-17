@@ -189,7 +189,11 @@ async fn solana_withdraw(
         deadline,
     )?;
 
-    // 5) Submit [Ed25519 verify ix, withdraw_voucher ix] — the user pays + signs.
+    // 5) Submit [create-ATA (idempotent), Ed25519 verify ix, withdraw_voucher ix]
+    //    — the user pays + signs. The ATA-create ensures the recipient SPL
+    //    account exists (the program won't `init` it); it goes FIRST so the
+    //    verify+withdraw pair stay adjacent (the program checks that the ix
+    //    immediately before `withdraw_voucher` is the Ed25519 verify).
     let verify_ix = crate::solana::ed25519_verify_ix(&signer_pk.to_bytes(), &voucher_sig, &msg);
     let args = crate::solana::WithdrawVoucherArgs {
         amount: voucher_amount,
@@ -214,7 +218,11 @@ async fn solana_withdraw(
     // `deposited >= amount` check, so the first submit can fail preflight. A
     // failed-at-simulation tx never executes (no `used_nonce` tombstone is
     // created), so resubmitting the SAME voucher is safe once the settle lands.
-    let ixs = [verify_ix, wd_ix];
+    // Ensure the withdrawer's destination ATA exists before the SPL transfer
+    // (SOL-VOUCHER-ATA). Idempotent — harmless if already present — and ordered
+    // FIRST so `verify_ix` stays immediately before `wd_ix`.
+    let ata_ix = crate::solana::create_idempotent_ata_ix(&user, &user, &mint, &user_ata);
+    let ixs = [ata_ix, verify_ix, wd_ix];
     let mut last_err = None;
     let mut sig = None;
     for attempt in 0..VOUCHER_SUBMIT_MAX_ATTEMPTS {
@@ -248,9 +256,11 @@ async fn solana_withdraw(
 }
 
 /// Minimum SOL (lamports) the fee-payer needs before we request a Solana
-/// voucher. ~0.001 SOL — a couple of tx fees of headroom.
+/// voucher. ~0.003 SOL — covers the worst case where the withdrawer's
+/// destination ATA doesn't exist yet and the idempotent create must pay rent
+/// (~0.00204 SOL) plus a couple of tx fees of headroom (SOL-VOUCHER-ATA).
 #[cfg(feature = "solana")]
-const MIN_SOL_LAMPORTS: u64 = 1_000_000;
+const MIN_SOL_LAMPORTS: u64 = 3_000_000;
 
 /// Max attempts for the Solana voucher submit (retries a transient post-drain
 /// `InsufficientBalance` while the force-settle propagates).
