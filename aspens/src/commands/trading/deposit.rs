@@ -23,7 +23,7 @@ const MIN_GAS_BALANCE: u128 = 100_000_000_000_000; // 0.0001 ETH in wei
 pub async fn call_deposit_from_config_with_wallet(
     network: String,
     token_symbol: String,
-    amount: u64,
+    amount: u128,
     wallet: &Wallet,
     config: GetConfigResponse,
 ) -> Result<()> {
@@ -36,7 +36,12 @@ pub async fn call_deposit_from_config_with_wallet(
         .architecture
         .eq_ignore_ascii_case(ARCH_SOLANA)
     {
-        return solana_deposit(chain_for_arch, &token_symbol, amount, wallet).await;
+        // Solana SPL token amounts are natively u64 — downcast (checked) at the
+        // boundary, since `deposit_ix` takes a u64 (DEC-1: u128 upstream, u64 on Solana).
+        let spl_amount: u64 = amount.try_into().map_err(|_| {
+            eyre::eyre!("amount {amount} exceeds the SPL token u64 max on Solana chain '{network}'")
+        })?;
+        return solana_deposit(chain_for_arch, &token_symbol, spl_amount, wallet).await;
     }
 
     // EVM path requires an EVM wallet
@@ -122,7 +127,7 @@ async fn solana_deposit(
 async fn call_deposit_from_config_evm(
     network: String,
     token_symbol: String,
-    amount: u64,
+    amount: u128,
     signer: PrivateKeySigner,
     config: GetConfigResponse,
 ) -> Result<()> {

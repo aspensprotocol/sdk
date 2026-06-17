@@ -39,7 +39,7 @@ pub async fn call_withdraw_from_config_with_wallet(
     url: String,
     network: String,
     token_symbol: String,
-    amount: u64,
+    amount: u128,
     wallet: &Wallet,
     config: GetConfigResponse,
 ) -> Result<()> {
@@ -51,7 +51,12 @@ pub async fn call_withdraw_from_config_with_wallet(
         .architecture
         .eq_ignore_ascii_case(ARCH_SOLANA)
     {
-        return solana_withdraw(url, chain_for_arch, &token_symbol, amount, wallet).await;
+        // Solana SPL token amounts are natively u64 — downcast (checked) at the
+        // boundary (DEC-1: u128 upstream, u64 on Solana).
+        let spl_amount: u64 = amount.try_into().map_err(|_| {
+            eyre::eyre!("amount {amount} exceeds the SPL token u64 max on Solana chain '{network}'")
+        })?;
+        return solana_withdraw(url, chain_for_arch, &token_symbol, spl_amount, wallet).await;
     }
 
     if wallet.curve() != CurveType::Secp256k1 {
@@ -275,7 +280,7 @@ async fn call_withdraw_from_config_evm(
     url: String,
     network: String,
     token_symbol: String,
-    amount: u64,
+    amount: u128,
     signer: PrivateKeySigner,
     config: GetConfigResponse,
 ) -> Result<()> {
