@@ -131,6 +131,113 @@ impl ChainClient {
     }
 }
 
+/// The env-var key a client sets to supply its own RPC endpoint for `network`:
+/// `ASPENS_RPC_URL_<NETWORK>`, with `network` upper-cased and every
+/// non-alphanumeric byte replaced by `_` (e.g. `base-sepolia` →
+/// `ASPENS_RPC_URL_BASE_SEPOLIA`, `anvil-1` → `ASPENS_RPC_URL_ANVIL_1`).
+pub fn rpc_override_env_key(network: &str) -> String {
+    let suffix: String = network
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("ASPENS_RPC_URL_{suffix}")
+}
+
+/// Resolve the RPC endpoint to use for `network`.
+///
+/// The arborter masks `rpc_url` in its `GetConfig` response (it can embed an API
+/// key), so the server value is usually unusable. Resolution order:
+/// 1. the per-network override env var ([`rpc_override_env_key`]), if set; else
+/// 2. `server_rpc_url`, when it is a real URL (an unmasked server / local
+///    fixture); else
+/// 3. an actionable error naming the env var to set.
+pub fn resolve_rpc_url(network: &str, server_rpc_url: &str) -> Result<String> {
+    let override_val = std::env::var(rpc_override_env_key(network)).ok();
+    resolve_rpc_url_with(network, override_val.as_deref(), server_rpc_url)
+}
+
+/// Core of [`resolve_rpc_url`] with the override value injected, so the
+/// precedence logic is testable without mutating the process environment.
+fn resolve_rpc_url_with(
+    network: &str,
+    override_val: Option<&str>,
+    server_rpc_url: &str,
+) -> Result<String> {
+    if let Some(v) = override_val {
+        let v = v.trim();
+        if !v.is_empty() {
+            return Ok(v.to_string());
+        }
+    }
+    let server = server_rpc_url.trim();
+    if !server.is_empty() && Url::parse(server).is_ok() {
+        return Ok(server.to_string());
+    }
+    Err(eyre::eyre!(
+        "no usable RPC endpoint for chain '{network}': the server masks rpc_url in its config \
+         (it can embed an API key). Set {} to your own RPC URL for '{network}'.",
+        rpc_override_env_key(network)
+    ))
+}
+
+#[cfg(test)]
+mod rpc_resolve_tests {
+    use super::*;
+
+    #[test]
+    fn env_key_uppercases_and_sanitizes() {
+        assert_eq!(
+            rpc_override_env_key("base-sepolia"),
+            "ASPENS_RPC_URL_BASE_SEPOLIA"
+        );
+        assert_eq!(rpc_override_env_key("anvil-1"), "ASPENS_RPC_URL_ANVIL_1");
+        assert_eq!(
+            rpc_override_env_key("solana-devnet"),
+            "ASPENS_RPC_URL_SOLANA_DEVNET"
+        );
+    }
+
+    #[test]
+    fn override_wins_over_masked_server_value() {
+        let got = resolve_rpc_url_with("net", Some("https://my.rpc/v2/key"), "********").unwrap();
+        assert_eq!(got, "https://my.rpc/v2/key");
+    }
+
+    #[test]
+    fn blank_override_falls_through_to_usable_server_value() {
+        let got = resolve_rpc_url_with("net", Some("   "), "https://server.example").unwrap();
+        assert_eq!(got, "https://server.example");
+    }
+
+    #[test]
+    fn no_override_uses_unmasked_server_value() {
+        let got = resolve_rpc_url_with("net", None, "http://localhost:8545").unwrap();
+        assert_eq!(got, "http://localhost:8545");
+    }
+
+    #[test]
+    fn masked_value_without_override_errors_with_env_key() {
+        let err = resolve_rpc_url_with("base-sepolia", None, "********")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("ASPENS_RPC_URL_BASE_SEPOLIA"),
+            "actionable: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_server_without_override_errors() {
+        assert!(resolve_rpc_url_with("net", None, "").is_err());
+    }
+}
+
 #[cfg(all(test, feature = "solana"))]
 mod tests {
     use super::*;

@@ -19,8 +19,10 @@ use tracing::info;
 
 use crate::grpc::create_channel;
 
-/// Fetch configuration from the trading server
-pub async fn get_config(url: String) -> Result<GetConfigResponse> {
+/// Raw config fetch from the trading server — NO local RPC overrides applied.
+/// Used by the `download_*` helpers, which should snapshot exactly what the
+/// server returned (a masked `rpc_url`), not bake in a client's local override.
+async fn fetch_config(url: String) -> Result<GetConfigResponse> {
     use config_pb::config_service_client::ConfigServiceClient;
 
     let channel = create_channel(&url).await?;
@@ -31,9 +33,21 @@ pub async fn get_config(url: String) -> Result<GetConfigResponse> {
     Ok(response.into_inner())
 }
 
+/// Fetch configuration from the trading server, with local RPC overrides
+/// applied. The server masks `rpc_url` in its response (it can embed an API
+/// key), so a client supplies its own endpoint via `ASPENS_RPC_URL_<NETWORK>`
+/// — see [`GetConfigResponse::apply_rpc_overrides`].
+pub async fn get_config(url: String) -> Result<GetConfigResponse> {
+    let mut config = fetch_config(url).await?;
+    config.apply_rpc_overrides();
+    Ok(config)
+}
+
 /// Download configuration from server and save to file
 pub async fn download_config(url: String, path: String) -> Result<()> {
-    let config = get_config(url).await?;
+    // Raw fetch: snapshot the server's config (masked rpc_url) verbatim, rather
+    // than bake the caller's local RPC override into the saved file.
+    let config = fetch_config(url).await?;
 
     // Determine format based on file extension
     let contents = match Path::new(&path).extension().and_then(|ext| ext.to_str()) {
@@ -56,14 +70,40 @@ impl GetConfigResponse {
         let contents = fs::read_to_string(path)?;
 
         // Determine file type based on extension
-        let config = match path.extension().and_then(|ext| ext.to_str()) {
+        let mut config: Self = match path.extension().and_then(|ext| ext.to_str()) {
             Some("json") => serde_json::from_str(&contents)?,
             Some("toml") => toml::from_str(&contents)?,
             Some(ext) => bail!("Unsupported file extension: {}", ext),
             None => bail!("No file extension found"),
         };
 
+        // A file may carry a masked rpc_url (e.g. a download snapshot); apply
+        // the same local override resolution used for a live fetch.
+        config.apply_rpc_overrides();
         Ok(config)
+    }
+
+    /// Rewrite each chain's `rpc_url` to the client's local override
+    /// (`ASPENS_RPC_URL_<NETWORK>`) when set; otherwise keep the server value
+    /// (an unmasked URL stays usable). The arborter masks `rpc_url` in its
+    /// response (it can embed an API key), so this is where a client supplies
+    /// its own endpoint. A chain left masked (no override) is logged at WARN —
+    /// on-chain operations for it will fail until the env var is set.
+    fn apply_rpc_overrides(&mut self) {
+        let Some(config) = self.config.as_mut() else {
+            return;
+        };
+        for chain in &mut config.chains {
+            match crate::chain_client::resolve_rpc_url(&chain.network, &chain.rpc_url) {
+                Ok(url) => chain.rpc_url = url,
+                Err(_) => tracing::warn!(
+                    network = %chain.network,
+                    env = %crate::chain_client::rpc_override_env_key(&chain.network),
+                    "chain rpc_url is masked/unset and no local RPC override is set; \
+                     on-chain operations for this chain will fail until you set this env var"
+                ),
+            }
+        }
     }
 
     /// Look up a chain by its `network` name (e.g. `"base-sepolia"`).
@@ -134,7 +174,8 @@ impl GetConfigResponse {
 pub async fn download_config_to_file<P: AsRef<Path>>(url: String, path: P) -> Result<()> {
     info!("Downloading configuration to {}", path.as_ref().display());
 
-    let config = get_config(url).await?;
+    // Raw fetch (see download_config): keep the saved snapshot's rpc_url masked.
+    let config = fetch_config(url).await?;
 
     // Create parent directories if they don't exist
     if let Some(parent) = path.as_ref().parent() {
