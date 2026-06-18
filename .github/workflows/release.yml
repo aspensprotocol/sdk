@@ -8,7 +8,11 @@ name: Release
 on:
   push:
     tags:
+      # Accept both bare-semver (the repo convention: 0.6.1) and v-prefixed
+      # (v0.6.1) tags, including pre-releases (…-rc.1).
       - 'v*'
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch:
     inputs:
       tag:
@@ -82,8 +86,9 @@ jobs:
         shell: bash
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
-          ver="v$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
-          if [ "$tag" != "$ver" ]; then
+          ver="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          # Accept either a bare (0.6.1) or v-prefixed (v0.6.1) tag.
+          if [ "${tag#v}" != "$ver" ]; then
             echo "::error::tag $tag != workspace version $ver — bump [workspace.package] version in Cargo.toml"
             exit 1
           fi
