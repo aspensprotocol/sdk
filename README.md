@@ -7,7 +7,27 @@ A comprehensive SDK and CLI tools for interacting with an [Aspens Markets Stack]
 
 The core library is published on crates.io as [`aspens`](https://crates.io/crates/aspens).
 The `aspens-cli`, `aspens-repl`, and `aspens-admin` binaries live in this
-workspace and are built from source.
+workspace; `aspens-cli` and `aspens-repl` ship as prebuilt release binaries
+(see below), and all three can be built from source.
+
+## Install
+
+Install the latest `aspens-cli` and `aspens-repl` (Linux / macOS, x86_64 / aarch64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/aspensprotocol/sdk/main/install.sh | sh
+```
+
+Overrides: `INSTALL_DIR=<dir>` picks the location (default `/usr/local/bin` on
+Linux, `~/.local/bin` on macOS); `ASPENS_VERSION=vX.Y.Z` pins a specific release.
+Binaries are attached to each [GitHub release](https://github.com/aspensprotocol/sdk/releases)
+alongside a `SHA256SUMS` file.
+
+Or build from source (also the path for `aspens-admin`):
+
+```sh
+cargo install --locked --git https://github.com/aspensprotocol/sdk aspens-cli aspens-repl
+```
 
 ## Available Commands
 
