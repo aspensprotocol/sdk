@@ -9,6 +9,20 @@ change before 1.0.
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-06-18
+
+Release-tooling patch — **no library changes** (the `aspens` crate is identical
+to 0.6.1). Cut so the binary release actually builds: the 0.6.1 tag predated the
+bare-tag workflow fix below, so its `aspens-cli` / `aspens-repl` binaries were
+never produced.
+
+### Fixed
+
+- The binary-release workflow now triggers on bare-semver tags (e.g. `0.6.2`,
+  the repo's tag convention) as well as `v*`, and the tag↔version guard tolerates
+  an optional leading `v`. Tagging `0.6.2` builds and publishes the
+  `aspens-cli` / `aspens-repl` binaries.
+
 ## [0.6.1] — 2026-06-18
 
 Patch release: a TEE attestation verifier, amount-width and Solana-withdraw
@@ -324,7 +338,8 @@ Pre-0.4.1 history is recorded in git only. The 0.4.x line introduced
 Solana support, the Wallet enum, and feature gates (`evm`, `solana`,
 `client`) for lean-signing consumers.
 
-[Unreleased]: https://github.com/aspensprotocol/sdk/compare/0.6.1...HEAD
+[Unreleased]: https://github.com/aspensprotocol/sdk/compare/0.6.2...HEAD
+[0.6.2]: https://github.com/aspensprotocol/sdk/compare/0.6.1...0.6.2
 [0.6.1]: https://github.com/aspensprotocol/sdk/compare/0.6.0...0.6.1
 [0.6.0]: https://github.com/aspensprotocol/sdk/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/aspensprotocol/sdk/compare/0.4.3...0.5.0
