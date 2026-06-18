@@ -11,16 +11,41 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=proto/arborter_config.proto");
     println!("cargo:rerun-if-changed=proto/attestation.proto");
     println!("cargo:rerun-if-env-changed=DOCS_RS");
+    println!("cargo:rerun-if-env-changed=ASPENS_REGEN_PROTOS");
 
-    // docs.rs mounts the source tree read-only; the generated files are
-    // already committed under proto/generated/ and ship with the crate, so
-    // skip codegen there.
-    if std::env::var_os("DOCS_RS").is_some() {
+    // The generated bindings under proto/generated/ are committed and ship with
+    // the crate, so by default we DO NOT regenerate them. tonic_prost_build's
+    // out_dir below is the source tree (`proto/generated`), not `OUT_DIR`, so
+    // regenerating on every build dirties the tree — which breaks `cargo publish`
+    // verification ("source directory was modified by build.rs"), produces
+    // spurious diffs, and would force every downstream consumer (and docs.rs) to
+    // have `protoc`. Shipping the committed files lets them build with none.
+    //
+    // After editing a *.proto, regenerate explicitly and commit the result:
+    //   ASPENS_REGEN_PROTOS=1 cargo build -p aspens
+    let force = std::env::var_os("ASPENS_REGEN_PROTOS").is_some();
+    if (!force && generated_present()) || std::env::var_os("DOCS_RS").is_some() {
         return Ok(());
     }
 
     build_protos()?;
     Ok(())
+}
+
+/// True when every generated binding is already present under
+/// `proto/generated/` (the committed, shipped set). Codegen is skipped in that
+/// case unless `ASPENS_REGEN_PROTOS` forces it.
+fn generated_present() -> bool {
+    use std::path::Path;
+    const GENERATED: [&str; 4] = [
+        "xyz.aspens.arborter.v1.rs",
+        "xyz.aspens.arborter_auth.v1.rs",
+        "xyz.aspens.arborter_config.v1.rs",
+        "xyz.aspens.attestation.v1.rs",
+    ];
+    GENERATED
+        .iter()
+        .all(|f| Path::new("proto/generated").join(f).exists())
 }
 
 fn build_protos() -> Result<()> {
