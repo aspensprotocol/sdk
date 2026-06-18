@@ -1,0 +1,133 @@
+name: Release
+
+# On a pushed `v*` tag, build release binaries of aspens-cli + aspens-repl for
+# linux/macos × x86_64/aarch64 and publish them as a GitHub Release. The
+# install.sh one-liner downloads these assets.
+#
+# Manual re-run: workflow_dispatch with the tag to build (e.g. v0.6.0).
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and release (e.g. v0.6.0)'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native runners per target — avoids cross-compiling the C deps
+          # (ring / secp256k1 / solana-client) and links each platform's own
+          # toolchain. ubuntu-22.04 = older glibc = broader Linux compatibility.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            asset: linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+            asset: linux-aarch64
+          - target: x86_64-apple-darwin
+            os: macos-13
+            asset: macos-x86_64
+          - target: aarch64-apple-darwin
+            os: macos-14
+            asset: macos-aarch64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # On a tag push this is the tag; on workflow_dispatch, the input tag.
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # Reads channel + components from rust-toolchain.toml (pins the compiler);
+      # `target` adds the (native) target triple via rustup.
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+
+      # The aspens build script runs tonic_prost_build at compile time, so
+      # protoc must be present (mirrors ci.yml).
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      # Fail fast if the tag and the workspace version disagree (run once).
+      - name: Verify tag matches workspace version
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          ver="v$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::tag $tag != workspace version $ver — bump [workspace.package] version in Cargo.toml"
+            exit 1
+          fi
+
+      - name: Build release binaries
+        run: cargo build --release --locked --target ${{ matrix.target }} -p aspens-cli -p aspens-repl
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          bindir="target/${{ matrix.target }}/release"
+          for bin in aspens-cli aspens-repl; do
+            tar -czf "dist/${bin}-${{ matrix.asset }}.tar.gz" -C "$bindir" "$bin"
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: sha256sum *.tar.gz > SHA256SUMS
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true
+          fail_on_unmatched_files: true
