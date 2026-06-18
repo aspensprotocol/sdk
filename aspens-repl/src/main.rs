@@ -298,11 +298,27 @@ fn main() {
         builder = builder.with_env_file(env_file);
     }
     if let Some(ref url) = cli.stack_url {
-        builder = builder
-            .with_url(url.to_string())
-            .expect("Invalid stack URL");
+        builder = match builder.with_url(url.to_string()) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("error: invalid stack URL: {e}");
+                std::process::exit(1);
+            }
+        };
     }
-    let client = builder.build().expect("Failed to build AspensClient");
+    // A missing/invalid stack URL is a normal misconfiguration, not a bug —
+    // print the (actionable) error and exit non-zero instead of panicking with
+    // a backtrace. (aspens-cli does this via run() -> Result + ExitCode.)
+    let client = match builder.build() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            eprintln!(
+                "hint: pass --stack <URL>, or set ASPENS_MARKET_STACK_URL (e.g. in a .env file)."
+            );
+            std::process::exit(1);
+        }
+    };
 
     let app_state = AppState::new(client);
     let executor = BlockingExecutor::new();
