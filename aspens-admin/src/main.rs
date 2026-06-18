@@ -332,7 +332,9 @@ async fn run() -> Result<()> {
     };
 
     let subscriber = FmtSubscriber::builder().with_max_level(log_level).finish();
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
+    // Best-effort: failing here only means logs aren't captured (e.g. a
+    // subscriber is already set in-process) — don't abort the command over it.
+    let _ = tracing::subscriber::set_global_default(subscriber);
 
     // Build the client
     let mut builder = AspensClient::builder();
@@ -1085,10 +1087,13 @@ async fn run() -> Result<()> {
                 .execute(config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
-            let configuration = config_response
-                .config
-                .as_ref()
-                .ok_or_else(|| eyre::eyre!("No configuration found"))?;
+            let configuration = config_response.config.as_ref().ok_or_else(|| {
+                eyre::eyre!(
+                    "the server returned no configuration.\n\nHints:\n  \
+                     - the stack may be uninitialized — register a chain with `aspens-admin set-chain`\n  \
+                     - or your session may have expired — run `aspens-admin login` again"
+                )
+            })?;
 
             let signer_response = executor
                 .execute(config::get_signer_public_key(stack_url.clone(), None))
@@ -1107,6 +1112,8 @@ async fn run() -> Result<()> {
             println!("                            ADMIN BALANCES");
             println!("═══════════════════════════════════════════════════════════════════════════");
             println!();
+
+            let mut fetch_warnings: Vec<String> = Vec::new();
 
             for chain in &configuration.chains {
                 let signer_key = signer_response.chain_keys.get(&chain.network);
@@ -1161,10 +1168,17 @@ async fn run() -> Result<()> {
                 .collect();
 
                 for (addr, role) in &addresses {
-                    let gas = balance::call_get_native_balance_for_address(&chain.rpc_url, *addr)
-                        .await
-                        .map(|v| balance::format_balance(v, 18))
-                        .unwrap_or_else(|_| "error".into());
+                    let gas =
+                        match balance::call_get_native_balance_for_address(&chain.rpc_url, *addr)
+                            .await
+                        {
+                            Ok(v) => balance::format_balance(v, 18),
+                            Err(e) => {
+                                fetch_warnings
+                                    .push(format!("{role} gas on {}: {e}", chain.network));
+                                "error".into()
+                            }
+                        };
 
                     let mut row = vec![
                         role.to_string(),
@@ -1174,14 +1188,20 @@ async fn run() -> Result<()> {
 
                     for sym in &token_symbols {
                         if let Some(token) = chain.tokens.get(sym) {
-                            let bal = balance::call_get_erc20_balance_for_address(
+                            let bal = match balance::call_get_erc20_balance_for_address(
                                 &chain.rpc_url,
                                 &token.address,
                                 *addr,
                             )
                             .await
-                            .map(|v| balance::format_balance(v, token.decimals))
-                            .unwrap_or_else(|_| "error".into());
+                            {
+                                Ok(v) => balance::format_balance(v, token.decimals),
+                                Err(e) => {
+                                    fetch_warnings
+                                        .push(format!("{role} {sym} on {}: {e}", chain.network));
+                                    "error".into()
+                                }
+                            };
                             row.push(bal);
                         } else {
                             row.push("-".into());
@@ -1192,6 +1212,16 @@ async fn run() -> Result<()> {
 
                 println!("{}", table);
                 println!();
+            }
+
+            if !fetch_warnings.is_empty() {
+                eprintln!("Warnings — some balances could not be fetched (shown as \"error\"):");
+                for w in &fetch_warnings {
+                    eprintln!("  - {w}");
+                }
+                eprintln!(
+                    "  hint: check the chain's rpc_url / that the RPC endpoint is reachable."
+                );
             }
         }
     }

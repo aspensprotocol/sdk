@@ -194,7 +194,7 @@ fn resolve_marketable_price(
         .execute(aspens::commands::config::get_config(stack_url.clone()))
         .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
     let market = send_order::lookup_market(&config, market_id)
-        .map_err(|e| eyre::eyre!("lookup market {market_id}: {e}"))?;
+        .map_err(|e| eyre::eyre!(format_error(&e, &format!("look up market {market_id}"))))?;
     let pair_decimals = market.pair_decimals as u32;
 
     let collection_window = std::time::Duration::from_millis(1_500);
@@ -534,7 +534,9 @@ async fn run() -> Result<()> {
     };
 
     let subscriber = FmtSubscriber::builder().with_max_level(log_level).finish();
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
+    // Best-effort: failing here only means logs aren't captured (e.g. a
+    // subscriber is already set in-process) — don't abort the command over it.
+    let _ = tracing::subscriber::set_global_default(subscriber);
 
     // Build the client
     let mut builder = AspensClient::builder();
@@ -562,9 +564,11 @@ async fn run() -> Result<()> {
             let config = executor
                 .execute(aspens::commands::config::get_config(stack_url))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
-            let amount_base = resolve_token_amount(&config, &network, &token, &amount)?;
-            let wallet = load_trader_wallet_for_network(&config, &network)?;
             let context = format!("deposit {} {} on {}", amount, token, network);
+            let amount_base = resolve_token_amount(&config, &network, &token, &amount)
+                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+            let wallet = load_trader_wallet_for_network(&config, &network)
+                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
             executor
                 .execute(async move {
                     deposit::call_deposit_from_config_with_wallet(
@@ -591,9 +595,11 @@ async fn run() -> Result<()> {
             let config = executor
                 .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
-            let amount_base = resolve_token_amount(&config, &network, &token, &amount)?;
-            let wallet = load_trader_wallet_for_network(&config, &network)?;
             let context = format!("withdraw {} {} from {}", amount, token, network);
+            let amount_base = resolve_token_amount(&config, &network, &token, &amount)
+                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+            let wallet = load_trader_wallet_for_network(&config, &network)
+                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
             executor
                 .execute(async move {
                     withdraw::call_withdraw_from_config_with_wallet(
@@ -745,9 +751,11 @@ async fn run() -> Result<()> {
             let config = executor
                 .execute(aspens::commands::config::get_config(stack_url.clone()))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
-            let origin = origin_network_for_side(&config, &market, parse_side(&side)?)?;
-            let wallet = load_trader_wallet_for_network(&config, origin)?;
             let context = format!("cancel order {} on {}", order_id, market);
+            let origin = origin_network_for_side(&config, &market, parse_side(&side)?)
+                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+            let wallet = load_trader_wallet_for_network(&config, origin)
+                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
             let result = executor
                 .execute(async move {
                     cancel_order::call_cancel_order_from_config_with_wallet(
@@ -919,7 +927,8 @@ async fn run() -> Result<()> {
                 info!("Configuration saved to: {}", path);
             } else {
                 // Display config as JSON
-                let json = serde_json::to_string_pretty(&config)?;
+                let json = serde_json::to_string_pretty(&config)
+                    .map_err(|e| eyre::eyre!("failed to format configuration as JSON: {e}"))?;
                 println!("{}", json);
             }
         }
@@ -1098,7 +1107,12 @@ async fn run() -> Result<()> {
                             "rt_mr3": report.rt_mr3,
                             "report_data": report.report_data,
                         });
-                        println!("{}", serde_json::to_string_pretty(&json)?);
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json).map_err(|e| eyre::eyre!(
+                                "failed to format attestation report as JSON: {e}"
+                            ))?
+                        );
                     } else {
                         println!("null");
                     }
@@ -1278,7 +1292,12 @@ async fn run() -> Result<()> {
                         "xfam": hex::encode(verified.xfam),
                         "report_data": hex::encode(verified.report_data),
                     });
-                    println!("{}", serde_json::to_string_pretty(&json)?);
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json).map_err(|e| eyre::eyre!(
+                            "failed to format attestation report as JSON: {e}"
+                        ))?
+                    );
                 }
                 _ => {
                     println!(

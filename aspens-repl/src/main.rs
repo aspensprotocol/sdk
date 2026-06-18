@@ -124,24 +124,25 @@ impl AppState {
     }
 
     fn stack_url(&self) -> String {
-        let guard = self.client.lock().unwrap();
+        let guard = self.client.lock().unwrap_or_else(|p| p.into_inner());
         guard.stack_url().to_string()
     }
 
     fn get_env(&self, key: &str) -> Option<String> {
-        let guard = self.client.lock().unwrap();
+        let guard = self.client.lock().unwrap_or_else(|p| p.into_inner());
         guard.get_env(key).cloned()
     }
 
     fn get_config_sync(
         &self,
     ) -> eyre::Result<aspens::commands::config::config_pb::GetConfigResponse> {
-        let guard = self.client.lock().unwrap();
+        let guard = self.client.lock().unwrap_or_else(|p| p.into_inner());
         let url = guard.stack_url().to_string();
         drop(guard); // Release lock before async call
 
-        // Use tokio runtime to block on async operation
-        tokio::runtime::Runtime::new()?
+        // Block on the async fetch via a tokio runtime.
+        tokio::runtime::Runtime::new()
+            .map_err(|e| eyre::eyre!("could not start the async runtime: {e}"))?
             .block_on(async { aspens::commands::config::get_config(url).await })
     }
 }
@@ -290,7 +291,9 @@ fn main() {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set global subscriber");
+    // Best-effort: failing here only means logs aren't captured (e.g. a
+    // subscriber is already set in-process) — don't abort the REPL over it.
+    let _ = tracing::subscriber::set_global_default(subscriber);
 
     // Build the client
     let mut builder = AspensClient::builder();
@@ -298,11 +301,27 @@ fn main() {
         builder = builder.with_env_file(env_file);
     }
     if let Some(ref url) = cli.stack_url {
-        builder = builder
-            .with_url(url.to_string())
-            .expect("Invalid stack URL");
+        builder = match builder.with_url(url.to_string()) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("error: invalid stack URL: {e}");
+                std::process::exit(1);
+            }
+        };
     }
-    let client = builder.build().expect("Failed to build AspensClient");
+    // A missing/invalid stack URL is a normal misconfiguration, not a bug —
+    // print the (actionable) error and exit non-zero instead of panicking with
+    // a backtrace. (aspens-cli does this via run() -> Result + ExitCode.)
+    let client = match builder.build() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            eprintln!(
+                "hint: pass --stack <URL>, or set ASPENS_MARKET_STACK_URL (e.g. in a .env file)."
+            );
+            std::process::exit(1);
+        }
+    };
 
     let app_state = AppState::new(client);
     let executor = BlockingExecutor::new();
@@ -318,9 +337,18 @@ fn main() {
         .with_editor_hook({
             let history_path = history_path.clone();
             move |reed| {
-                reed.with_history(Box::new(
-                    FileBackedHistory::with_file(10000, history_path.as_ref().clone()).unwrap(),
-                ))
+                // Fall back to in-memory (session-only) history if the history
+                // file can't be opened (e.g. a read-only or full temp dir),
+                // instead of panicking at startup.
+                match FileBackedHistory::with_file(10000, history_path.as_ref().clone()) {
+                    Ok(h) => reed.with_history(Box::new(h)),
+                    Err(e) => {
+                        eprintln!(
+                            "warning: could not open REPL history file ({e}); using in-memory history."
+                        );
+                        reed
+                    }
+                }
             }
         })
         .build();
