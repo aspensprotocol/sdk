@@ -36,7 +36,7 @@ async fn fetch_config(url: String) -> Result<GetConfigResponse> {
 /// Fetch configuration from the trading server, with local RPC overrides
 /// applied. The server masks `rpc_url` in its response (it can embed an API
 /// key), so a client supplies its own endpoint via `ASPENS_RPC_URL_<NETWORK>`
-/// — see [`GetConfigResponse::apply_rpc_overrides`].
+/// — see [`crate::chain_client::resolve_rpc_url`].
 pub async fn get_config(url: String) -> Result<GetConfigResponse> {
     let mut config = fetch_config(url).await?;
     config.apply_rpc_overrides();
