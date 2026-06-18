@@ -9,6 +9,59 @@ change before 1.0.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-06-18
+
+Patch release: a TEE attestation verifier, amount-width and Solana-withdraw
+fixes, a per-network RPC override, and prebuilt release binaries. Also raises
+the toolchain to Rust **1.96.0** / edition **2024** (MSRV bump).
+
+### Added
+
+- **TEE attestation verifier.** `aspens::tdx_verify` and the
+  `verify-attestation` CLI command verify a signer's Intel TDX quote
+  (DCAP → policy → REPORTDATA). DCAP backend via `dcap-qvl` (the `ring`
+  backend, behind the `dcap` feature), plus a PCCS collateral fetcher and an
+  offline collateral loader (CRIT-2 relying-party verifier).
+- **Per-network RPC override.** Set `ASPENS_RPC_URL_<NETWORK>` (network name
+  upper-cased, non-alphanumerics → `_`) to supply your own RPC endpoint. The
+  stack masks `rpc_url` in its `GetConfig` response (it can embed an API key),
+  so on-chain ops (deposit / withdraw / balance) now resolve the endpoint from
+  this var, falling back to an unmasked server value. Resolution is applied at
+  config load (`get_config` + `from_file`) and exposed via
+  `chain_client::resolve_rpc_url`; `.env.sample` documents the key (with Flare
+  Coston2 / mainnet examples).
+- **Prebuilt release binaries + installer.** Tagged releases now ship
+  `aspens-cli` and `aspens-repl` for Linux/macOS × x86_64/aarch64 plus a
+  `SHA256SUMS`. One-line install:
+  `curl -fsSL https://raw.githubusercontent.com/aspensprotocol/sdk/main/install.sh | sh`.
+
+### Changed
+
+- **MSRV / toolchain raised to Rust 1.96.0, edition 2024.**
+- Deposit/withdraw amounts widened to **u128** on the EVM path (DEC-1),
+  lifting the old ~18-token cap on 18-decimal tokens; the Solana path
+  downcasts to u64 (its native SPL width) at the dispatch boundary with a
+  checked over-max error.
+- Bumped `alloy` dependencies.
+
+### Fixed
+
+- **Solana voucher withdraw** no longer reverts `AccountNotInitialized` when
+  the withdrawer's SPL associated-token-account doesn't exist yet (e.g. the
+  received leg of a cross-chain trade): the withdraw tx prepends an idempotent
+  create-ATA, and `MIN_SOL_LAMPORTS` was raised to cover ATA rent
+  (SOL-VOUCHER-ATA).
+- `stream_orderbook` no longer panics inside a nested Tokio runtime.
+
+### Security
+
+- The attestation verifier's `dcap-qvl` `ring` backend drops `rsa` from the
+  build (avoids RUSTSEC-2023-0071).
+
+### Internal
+
+- Synced proto bindings from `protos`; removed the stale vendored `signer.proto`.
+
 ## [0.6.0] — 2026-06-04
 
 The optimistic-ledger release. Trading moved fully off-chain into the
@@ -271,7 +324,8 @@ Pre-0.4.1 history is recorded in git only. The 0.4.x line introduced
 Solana support, the Wallet enum, and feature gates (`evm`, `solana`,
 `client`) for lean-signing consumers.
 
-[Unreleased]: https://github.com/aspensprotocol/sdk/compare/0.6.0...HEAD
+[Unreleased]: https://github.com/aspensprotocol/sdk/compare/0.6.1...HEAD
+[0.6.1]: https://github.com/aspensprotocol/sdk/compare/0.6.0...0.6.1
 [0.6.0]: https://github.com/aspensprotocol/sdk/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/aspensprotocol/sdk/compare/0.4.3...0.5.0
 [0.4.3]: https://github.com/aspensprotocol/sdk/releases/tag/0.4.3
