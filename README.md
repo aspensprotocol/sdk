@@ -12,7 +12,7 @@ workspace; `aspens-cli` and `aspens-repl` ship as prebuilt release binaries
 
 ## Install
 
-Install the latest `aspens-cli` and `aspens-repl` (Linux / macOS, x86_64 / aarch64):
+Install the latest `aspens-cli` and `aspens-repl` (Linux x86_64 / aarch64, macOS Apple Silicon):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/aspensprotocol/sdk/main/install.sh | sh
