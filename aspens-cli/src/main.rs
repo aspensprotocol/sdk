@@ -97,7 +97,19 @@ fn read_quote_file(path: &std::path::Path) -> Result<Vec<u8>> {
 /// need *both* a Secp256k1 wallet (for the EVM leg's address) and an
 /// Ed25519 wallet (for the Solana leg). The CLI loads each opportunistically
 /// and the lib selects the right one per chain.
-#[allow(clippy::too_many_arguments)]
+/// Order-flag pair threaded from the command arms into the library call.
+/// Named-field construction at each arm keeps the two same-typed bools
+/// from ever being transposed positionally, and a future flag is one new
+/// field here instead of another positional bool at every call site.
+#[derive(Clone, Copy)]
+struct OrderFlags {
+    /// Reject the order if it would cross at submission (limit only).
+    post_only: bool,
+    /// Invisible order: excluded from public book exposure; fills print
+    /// with this side redacted.
+    hidden: bool,
+}
+
 fn dispatch_send_order(
     executor: &DirectExecutor,
     client: &AspensClient,
@@ -105,8 +117,7 @@ fn dispatch_send_order(
     side: Side,
     amount: String,
     price: Option<String>,
-    post_only: bool,
-    hidden: bool,
+    flags: OrderFlags,
 ) -> Result<SendOrderResponse> {
     let stack_url = client.stack_url().to_string();
     let config = executor
@@ -150,8 +161,8 @@ fn dispatch_send_order(
                 price,
                 &wallets,
                 config,
-                post_only,
-                hidden,
+                flags.post_only,
+                flags.hidden,
             )
             .await
         })
@@ -657,8 +668,10 @@ async fn run() -> Result<()> {
                 Side::Bid,
                 amount,
                 None,
-                false, // post_only meaningless for market orders
-                hidden,
+                OrderFlags {
+                    post_only: false, // meaningless for market orders
+                    hidden,
+                },
             )?;
             info!(
                 "Market buy order sent successfully (order_id: {})",
@@ -684,8 +697,7 @@ async fn run() -> Result<()> {
                 Side::Bid,
                 amount,
                 Some(price),
-                post_only,
-                hidden,
+                OrderFlags { post_only, hidden },
             )?;
             info!(
                 "Limit buy order sent successfully (order_id: {})",
@@ -706,8 +718,10 @@ async fn run() -> Result<()> {
                 Side::Ask,
                 amount,
                 None,
-                false, // post_only meaningless for market orders
-                hidden,
+                OrderFlags {
+                    post_only: false, // meaningless for market orders
+                    hidden,
+                },
             )?;
             info!(
                 "Market sell order sent successfully (order_id: {})",
@@ -733,8 +747,7 @@ async fn run() -> Result<()> {
                 Side::Ask,
                 amount,
                 Some(price),
-                post_only,
-                hidden,
+                OrderFlags { post_only, hidden },
             )?;
             info!(
                 "Limit sell order sent successfully (order_id: {})",
@@ -763,8 +776,10 @@ async fn run() -> Result<()> {
                 Side::Bid,
                 amount,
                 Some(price),
-                false,
-                hidden,
+                OrderFlags {
+                    post_only: false,
+                    hidden,
+                },
             )?;
             info!(
                 "Marketable buy order sent successfully (order_id: {})",
@@ -791,8 +806,10 @@ async fn run() -> Result<()> {
                 Side::Ask,
                 amount,
                 Some(price),
-                false, // post_only would defeat the purpose of a marketable order
-                hidden,
+                OrderFlags {
+                    post_only: false,
+                    hidden,
+                },
             )?;
             info!(
                 "Marketable sell order sent successfully (order_id: {})",

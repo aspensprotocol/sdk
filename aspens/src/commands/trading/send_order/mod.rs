@@ -707,28 +707,32 @@ mod tests {
 }
 
 #[cfg(test)]
-mod post_only_proto_tests {
-    //! Wire-encoding pinning tests for the `post_only` Order field.
+mod order_flag_wire_pinning_tests {
+    //! Wire-encoding pinning tests for the boolean `Order` flags
+    //! (`post_only` = field 9, `hidden` = field 10).
     //!
     //! The envelope signature in `call_send_order` is computed over the
-    //! prost-encoded Order proto. Two invariants must hold or every
-    //! signed order silently fails arborter's verifier:
+    //! prost-encoded Order proto, so two invariants must hold for every
+    //! flag or signed orders silently fail arborter's verifier:
     //!
-    //!   1. **`post_only=false` is wire-identical** to a pre-feature
-    //!      encoding (proto3 default scalars are wire-skipped). So
-    //!      existing SDK users get byte-for-byte the same envelope
-    //!      digest they always did.
-    //!   2. **`post_only=true` produces a different encoded payload**
-    //!      from `post_only=false` — confirming the field is actually
-    //!      reaching the wire. If a build-script regression dropped
-    //!      the field we'd silently send `false` always with no error.
+    //!   1. **flag = false is wire-skipped** (proto3 default scalars are
+    //!      omitted), so pre-feature SDK users keep byte-for-byte the
+    //!      same envelope digest they always had.
+    //!   2. **flag = true actually reaches the wire** — if a build-script
+    //!      regression dropped the field we'd silently send `false`
+    //!      always, with no error.
     //!
-    //! These are cheap regression tests: just prost-encode and compare.
+    //! `assert_bool_flag_wire_pinned` proves both at once with a single
+    //! exact-bytes comparison; add one call per future flag.
 
     use super::*;
     use prost::Message;
 
-    fn sample_order(post_only: bool) -> Order {
+    /// All scalar/enum fields default; both flags false. A flag under
+    /// test must be the highest-numbered non-default field so that its
+    /// varint appends at the end of the encoding (prost emits fields in
+    /// tag order).
+    fn sample_order() -> Order {
         Order {
             side: 1,
             quantity: "1000".to_string(),
@@ -738,85 +742,49 @@ mod post_only_proto_tests {
             quote_account_address: "0xq".to_string(),
             execution_type: 0,
             matching_order_ids: vec![],
-            post_only,
+            post_only: false,
             hidden: false,
         }
     }
 
-    #[test]
-    fn hidden_false_is_wire_skipped() {
-        // hidden=false is the proto3 default; prost must omit it so every
-        // pre-feature signed envelope stays byte-identical.
-        let order = sample_order(false);
-        let mut buf = Vec::new();
-        order.encode(&mut buf).unwrap();
-        let decoded = Order::decode(&*buf).unwrap();
-        assert!(!decoded.hidden);
-        assert_eq!(decoded, order);
+    /// Pin a bool flag's wire behavior: encoding with the flag set must
+    /// equal the plain encoding plus an appended `[tag, 1]` varint.
+    /// That single equality proves both invariants — the tag byte cannot
+    /// occur in the plain encoding (a `flag=false` field on the wire
+    /// would make the buffers differ in place, not by a 2-byte append),
+    /// and the flag genuinely reaches the wire when true.
+    fn assert_bool_flag_wire_pinned(field_number: u32, set: impl Fn(&mut Order, bool)) {
+        let mut plain = sample_order();
+        set(&mut plain, false);
+        let mut flagged = sample_order();
+        set(&mut flagged, true);
 
-        // Self-contained pin: field 10's bool wire tag is
-        // (10 << 3) | 0 = 0x50. No string field in sample_order contains
-        // 0x50 ('P'), so a byte scan proves the tag itself never reaches
-        // the wire when hidden=false — independent of the length
-        // comparison in hidden_true_changes_wire_encoding.
-        assert!(
-            !buf.contains(&0x50),
-            "hidden=false must not emit the field-10 tag byte (0x50)"
-        );
-    }
-
-    #[test]
-    fn hidden_true_changes_wire_encoding() {
-        let mut order_hidden = sample_order(false);
-        order_hidden.hidden = true;
         let mut buf_plain = Vec::new();
-        let mut buf_hidden = Vec::new();
-        sample_order(false).encode(&mut buf_plain).unwrap();
-        order_hidden.encode(&mut buf_hidden).unwrap();
-        assert_ne!(buf_plain, buf_hidden, "hidden=true must reach the wire");
-        assert!(buf_hidden.len() > buf_plain.len());
-        assert!(Order::decode(&*buf_hidden).unwrap().hidden);
+        plain.encode(&mut buf_plain).unwrap();
+        let mut buf_flagged = Vec::new();
+        flagged.encode(&mut buf_flagged).unwrap();
+
+        // Varint wire type = 0, so the tag byte is (field_number << 3).
+        let tag = u8::try_from(field_number << 3).expect("tag must fit one byte");
+        let mut expected = buf_plain.clone();
+        expected.extend_from_slice(&[tag, 1]);
+        assert_eq!(
+            buf_flagged, expected,
+            "flag=true must encode as the plain bytes + appended [0x{tag:02x}, 0x01]"
+        );
+
+        // Round-trips preserve the flag in both states.
+        assert_eq!(Order::decode(&*buf_plain).unwrap(), plain);
+        assert_eq!(Order::decode(&*buf_flagged).unwrap(), flagged);
     }
 
     #[test]
-    fn post_only_false_is_wire_skipped() {
-        // `post_only: false` is the proto3 default; prost must omit it.
-        // Concretely: encoding with `post_only=false` produces the same
-        // bytes a pre-feature SDK build would have. We can't import an
-        // old `Order` to compare against, but the encode-and-decode
-        // round-trip below proves the field doesn't appear on wire when
-        // false: decoding into a struct that defaults the unknown field
-        // to false would round-trip cleanly.
-        let order_false = sample_order(false);
-        let mut buf = Vec::new();
-        order_false.encode(&mut buf).unwrap();
-
-        let decoded = Order::decode(&*buf).unwrap();
-        assert!(!decoded.post_only);
-        assert_eq!(decoded, order_false);
+    fn post_only_wire_pinned() {
+        assert_bool_flag_wire_pinned(9, |o, v| o.post_only = v);
     }
 
     #[test]
-    fn post_only_true_changes_wire_encoding() {
-        // Sanity: the field is actually reaching the wire when true.
-        // If we ever drop the field from the proto build script, this
-        // test catches it (both encodings would be identical).
-        let mut buf_false = Vec::new();
-        let mut buf_true = Vec::new();
-        sample_order(false).encode(&mut buf_false).unwrap();
-        sample_order(true).encode(&mut buf_true).unwrap();
-
-        assert_ne!(
-            buf_false, buf_true,
-            "post_only=true must produce a different encoded payload than false"
-        );
-        assert!(
-            buf_true.len() > buf_false.len(),
-            "post_only=true should add bytes to the wire encoding (tag + bool)"
-        );
-
-        // And roundtripping post_only=true preserves the field.
-        let decoded = Order::decode(&*buf_true).unwrap();
-        assert!(decoded.post_only);
+    fn hidden_wire_pinned() {
+        assert_bool_flag_wire_pinned(10, |o, v| o.hidden = v);
     }
 }
