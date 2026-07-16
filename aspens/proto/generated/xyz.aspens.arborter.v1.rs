@@ -160,6 +160,18 @@ pub struct Order {
     /// preserves legacy take-or-rest behavior.
     #[prost(bool, tag = "9")]
     pub post_only: bool,
+    /// Hidden ("invisible") order: matched, settled, and canceled exactly
+    /// like a visible order (normal price-time priority), but never exposed
+    /// publicly — excluded from the Orderbook stream (live + historical),
+    /// from the current_orderbook embedded in Send/CancelOrderResponse,
+    /// and therefore from all client-derived depth. Appears in NO stream,
+    /// not even to its owner: track via SendOrderResponse.order_id. When a
+    /// hidden order fills, the trade prints publicly with the hidden side's
+    /// identity fields (ids + addresses) redacted to empty/zero.
+    /// Defaults to false (wire-skipped), so pre-feature signed envelopes
+    /// are byte-identical.
+    #[prost(bool, tag = "10")]
+    pub hidden: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Trade {

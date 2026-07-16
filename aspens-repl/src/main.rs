@@ -209,6 +209,11 @@ enum ReplCommand {
         /// FAILED_PRECONDITION (no on-chain lock) if it would cross.
         #[arg(long)]
         post_only: bool,
+        /// Invisible order: excluded from the public orderbook stream and
+        /// depth; fills print with your side redacted. Track it via the
+        /// returned order id.
+        #[arg(long, default_value_t = false)]
+        hidden: bool,
     },
     /// Send a market SELL order (executes at best available price)
     SellMarket {
@@ -228,6 +233,9 @@ enum ReplCommand {
         /// Post-only: see `buy-limit --post-only`.
         #[arg(long)]
         post_only: bool,
+        /// Invisible order: see `buy-limit --hidden`.
+        #[arg(long, default_value_t = false)]
+        hidden: bool,
     },
     /// Cancel an existing order by its ID
     CancelOrder {
@@ -518,6 +526,7 @@ fn main() {
                     url, mkt, 1, // Buy side
                     amt, None, // No limit price (market order)
                     &wallet, config, false, // post_only meaningless for market orders
+                    false, // hidden — BuyMarket has no --hidden flag
                 )
                 .await
             });
@@ -546,10 +555,11 @@ fn main() {
             amount,
             price,
             post_only,
+            hidden,
         } => {
             info!(
                 "Sending limit BUY order for {amount} at price {price} on market {market} \
-                 (post_only={post_only})"
+                 (post_only={post_only}, hidden={hidden})"
             );
 
             // Fetch configuration from server
@@ -580,6 +590,7 @@ fn main() {
                     &wallet,
                     config,
                     post_only,
+                    hidden,
                 )
                 .await
             });
@@ -631,6 +642,7 @@ fn main() {
                     url, mkt, 2, // Sell side
                     amt, None, // No limit price (market order)
                     &wallet, config, false, // post_only meaningless for market orders
+                    false, // hidden — SellMarket has no --hidden flag
                 )
                 .await
             });
@@ -659,10 +671,11 @@ fn main() {
             amount,
             price,
             post_only,
+            hidden,
         } => {
             info!(
                 "Sending limit SELL order for {amount} at price {price} on market {market} \
-                 (post_only={post_only})"
+                 (post_only={post_only}, hidden={hidden})"
             );
 
             // Fetch configuration from server
@@ -693,6 +706,7 @@ fn main() {
                     &wallet,
                     config,
                     post_only,
+                    hidden,
                 )
                 .await
             });
