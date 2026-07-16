@@ -325,6 +325,12 @@ enum Commands {
         market: String,
         /// Amount to buy
         amount: String,
+        /// Invisible order: your fills print in the public trade stream
+        /// with your side's identity redacted. A market order never
+        /// rests, so orderbook suppression doesn't apply — the flag's
+        /// effect here is anonymous taking.
+        #[arg(long, default_value_t = false)]
+        hidden: bool,
     },
     /// Send a limit BUY order (executes at specified price or better)
     BuyLimit {
@@ -352,6 +358,9 @@ enum Commands {
         market: String,
         /// Amount to sell
         amount: String,
+        /// Invisible order: see `buy-market --hidden`.
+        #[arg(long, default_value_t = false)]
+        hidden: bool,
     },
     /// Send a limit SELL order (executes at specified price or better)
     SellLimit {
@@ -382,6 +391,11 @@ enum Commands {
         /// (10_000 = 100%). Default 50 = 0.5%.
         #[arg(long, default_value_t = 50)]
         slippage_bps: u32,
+        /// Invisible order: the synthesized limit order is hidden — fills
+        /// print with your side redacted, and any unfilled remainder
+        /// rests invisibly (track it via the returned order id).
+        #[arg(long, default_value_t = false)]
+        hidden: bool,
     },
     /// Marketable SELL: snapshot the resting book, cap slippage off
     /// the best bid, submit as a sell-limit. See `buy-marketable` for
@@ -395,6 +409,9 @@ enum Commands {
         /// (10_000 = 100%). Default 50 = 0.5%.
         #[arg(long, default_value_t = 50)]
         slippage_bps: u32,
+        /// Invisible order: see `buy-marketable --hidden`.
+        #[arg(long, default_value_t = false)]
+        hidden: bool,
     },
     /// Cancel an existing order by its ID
     CancelOrder {
@@ -627,8 +644,12 @@ async fn run() -> Result<()> {
 
             info!("Withdraw was successful");
         }
-        Commands::BuyMarket { market, amount } => {
-            info!("Sending market BUY order for {amount} on market {market}");
+        Commands::BuyMarket {
+            market,
+            amount,
+            hidden,
+        } => {
+            info!("Sending market BUY order for {amount} on market {market} (hidden={hidden})");
             let result = dispatch_send_order(
                 &executor,
                 &client,
@@ -637,7 +658,7 @@ async fn run() -> Result<()> {
                 amount,
                 None,
                 false, // post_only meaningless for market orders
-                false, // hidden — BuyMarket has no --hidden flag
+                hidden,
             )?;
             info!(
                 "Market buy order sent successfully (order_id: {})",
@@ -672,8 +693,12 @@ async fn run() -> Result<()> {
             );
             log_tx_hashes(&result.get_formatted_transaction_hashes());
         }
-        Commands::SellMarket { market, amount } => {
-            info!("Sending market SELL order for {amount} on market {market}");
+        Commands::SellMarket {
+            market,
+            amount,
+            hidden,
+        } => {
+            info!("Sending market SELL order for {amount} on market {market} (hidden={hidden})");
             let result = dispatch_send_order(
                 &executor,
                 &client,
@@ -682,7 +707,7 @@ async fn run() -> Result<()> {
                 amount,
                 None,
                 false, // post_only meaningless for market orders
-                false, // hidden — SellMarket has no --hidden flag
+                hidden,
             )?;
             info!(
                 "Market sell order sent successfully (order_id: {})",
@@ -721,12 +746,13 @@ async fn run() -> Result<()> {
             market,
             amount,
             slippage_bps,
+            hidden,
         } => {
             let price =
                 resolve_marketable_price(&executor, &client, &market, Side::Bid, slippage_bps)?;
             info!(
-                "Sending marketable BUY for {amount} on {market} (slippage cap {} bps -> price {})",
-                slippage_bps, price
+                "Sending marketable BUY for {amount} on {market} (slippage cap {} bps -> price {}, hidden={})",
+                slippage_bps, price, hidden
             );
             // Marketable orders are explicitly designed to cross — post-only
             // would defeat the purpose, so we hard-code false.
@@ -737,8 +763,8 @@ async fn run() -> Result<()> {
                 Side::Bid,
                 amount,
                 Some(price),
-                false, // post_only would defeat the purpose of a marketable order
-                false, // hidden — BuyMarketable has no --hidden flag
+                false,
+                hidden,
             )?;
             info!(
                 "Marketable buy order sent successfully (order_id: {})",
@@ -750,12 +776,13 @@ async fn run() -> Result<()> {
             market,
             amount,
             slippage_bps,
+            hidden,
         } => {
             let price =
                 resolve_marketable_price(&executor, &client, &market, Side::Ask, slippage_bps)?;
             info!(
-                "Sending marketable SELL for {amount} on {market} (slippage cap {} bps -> price {})",
-                slippage_bps, price
+                "Sending marketable SELL for {amount} on {market} (slippage cap {} bps -> price {}, hidden={})",
+                slippage_bps, price, hidden
             );
             let result = dispatch_send_order(
                 &executor,
@@ -765,7 +792,7 @@ async fn run() -> Result<()> {
                 amount,
                 Some(price),
                 false, // post_only would defeat the purpose of a marketable order
-                false, // hidden — SellMarketable has no --hidden flag
+                hidden,
             )?;
             info!(
                 "Marketable sell order sent successfully (order_id: {})",

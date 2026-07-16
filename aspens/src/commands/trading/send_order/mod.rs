@@ -753,6 +753,16 @@ mod post_only_proto_tests {
         let decoded = Order::decode(&*buf).unwrap();
         assert!(!decoded.hidden);
         assert_eq!(decoded, order);
+
+        // Self-contained pin: field 10's bool wire tag is
+        // (10 << 3) | 0 = 0x50. No string field in sample_order contains
+        // 0x50 ('P'), so a byte scan proves the tag itself never reaches
+        // the wire when hidden=false — independent of the length
+        // comparison in hidden_true_changes_wire_encoding.
+        assert!(
+            !buf.contains(&0x50),
+            "hidden=false must not emit the field-10 tag byte (0x50)"
+        );
     }
 
     #[test]
