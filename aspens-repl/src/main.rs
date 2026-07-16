@@ -195,6 +195,12 @@ enum ReplCommand {
         market: String,
         /// Amount to buy
         amount: String,
+        /// Invisible order: your fills print in the public trade stream
+        /// with your side's identity redacted. A market order never
+        /// rests, so orderbook suppression doesn't apply — the flag's
+        /// effect here is anonymous taking.
+        #[arg(long, default_value_t = false)]
+        hidden: bool,
     },
     /// Send a limit BUY order (executes at specified price or better)
     BuyLimit {
@@ -221,6 +227,9 @@ enum ReplCommand {
         market: String,
         /// Amount to sell
         amount: String,
+        /// Invisible order: see `buy-market --hidden`.
+        #[arg(long, default_value_t = false)]
+        hidden: bool,
     },
     /// Send a limit SELL order (executes at specified price or better)
     SellLimit {
@@ -501,8 +510,12 @@ fn main() {
                 )),
             }
         }
-        ReplCommand::BuyMarket { market, amount } => {
-            info!("Sending market BUY order for {amount} on market {market}");
+        ReplCommand::BuyMarket {
+            market,
+            amount,
+            hidden,
+        } => {
+            info!("Sending market BUY order for {amount} on market {market} (hidden={hidden})");
 
             // Fetch configuration from server
             let config = match app_state.get_config_sync() {
@@ -526,7 +539,7 @@ fn main() {
                     url, mkt, 1, // Buy side
                     amt, None, // No limit price (market order)
                     &wallet, config, false, // post_only meaningless for market orders
-                    false, // hidden — BuyMarket has no --hidden flag
+                    hidden,
                 )
                 .await
             });
@@ -617,8 +630,12 @@ fn main() {
                 )),
             }
         }
-        ReplCommand::SellMarket { market, amount } => {
-            info!("Sending market SELL order for {amount} on market {market}");
+        ReplCommand::SellMarket {
+            market,
+            amount,
+            hidden,
+        } => {
+            info!("Sending market SELL order for {amount} on market {market} (hidden={hidden})");
 
             // Fetch configuration from server
             let config = match app_state.get_config_sync() {
@@ -642,7 +659,7 @@ fn main() {
                     url, mkt, 2, // Sell side
                     amt, None, // No limit price (market order)
                     &wallet, config, false, // post_only meaningless for market orders
-                    false, // hidden — SellMarket has no --hidden flag
+                    hidden,
                 )
                 .await
             });
