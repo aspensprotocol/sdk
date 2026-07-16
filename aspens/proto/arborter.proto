@@ -138,6 +138,17 @@ message Order {
   // and with DISCRETIONARY execution_type. Defaults to false, which
   // preserves legacy take-or-rest behavior.
   bool post_only = 9;
+  // Hidden ("invisible") order: matched, settled, and canceled exactly
+  // like a visible order (normal price-time priority), but never exposed
+  // publicly — excluded from the Orderbook stream (live + historical),
+  // from the current_orderbook embedded in Send/CancelOrderResponse,
+  // and therefore from all client-derived depth. Appears in NO stream,
+  // not even to its owner: track via SendOrderResponse.order_id. When a
+  // hidden order fills, the trade prints publicly with the hidden side's
+  // identity fields (ids + addresses) redacted to empty/zero.
+  // Defaults to false (wire-skipped), so pre-feature signed envelopes
+  // are byte-identical.
+  bool hidden = 10;
 }
 
 enum Side {
