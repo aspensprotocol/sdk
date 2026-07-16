@@ -97,6 +97,7 @@ fn read_quote_file(path: &std::path::Path) -> Result<Vec<u8>> {
 /// need *both* a Secp256k1 wallet (for the EVM leg's address) and an
 /// Ed25519 wallet (for the Solana leg). The CLI loads each opportunistically
 /// and the lib selects the right one per chain.
+#[allow(clippy::too_many_arguments)]
 fn dispatch_send_order(
     executor: &DirectExecutor,
     client: &AspensClient,
@@ -105,6 +106,7 @@ fn dispatch_send_order(
     amount: String,
     price: Option<String>,
     post_only: bool,
+    hidden: bool,
 ) -> Result<SendOrderResponse> {
     let stack_url = client.stack_url().to_string();
     let config = executor
@@ -149,6 +151,7 @@ fn dispatch_send_order(
                 &wallets,
                 config,
                 post_only,
+                hidden,
             )
             .await
         })
@@ -337,6 +340,11 @@ enum Commands {
         /// (no on-chain lock, no gas spent) if the price would cross.
         #[arg(long)]
         post_only: bool,
+        /// Invisible order: excluded from the public orderbook stream and
+        /// depth; fills print with your side redacted. Track it via the
+        /// returned order id.
+        #[arg(long, default_value_t = false)]
+        hidden: bool,
     },
     /// Send a market SELL order (executes at best available price)
     SellMarket {
@@ -356,6 +364,9 @@ enum Commands {
         /// Post-only: see `buy-limit --post-only`.
         #[arg(long)]
         post_only: bool,
+        /// Invisible order: see `buy-limit --hidden`.
+        #[arg(long, default_value_t = false)]
+        hidden: bool,
     },
     /// Marketable BUY: snapshot the resting book, cap slippage off the
     /// best ask, submit as a buy-limit. The gasless cross-chain
@@ -618,8 +629,16 @@ async fn run() -> Result<()> {
         }
         Commands::BuyMarket { market, amount } => {
             info!("Sending market BUY order for {amount} on market {market}");
-            let result =
-                dispatch_send_order(&executor, &client, market, Side::Bid, amount, None, false)?;
+            let result = dispatch_send_order(
+                &executor,
+                &client,
+                market,
+                Side::Bid,
+                amount,
+                None,
+                false, // post_only meaningless for market orders
+                false, // hidden — BuyMarket has no --hidden flag
+            )?;
             info!(
                 "Market buy order sent successfully (order_id: {})",
                 result.order_id
@@ -631,10 +650,11 @@ async fn run() -> Result<()> {
             amount,
             price,
             post_only,
+            hidden,
         } => {
             info!(
                 "Sending limit BUY order for {amount} at price {price} on market {market} \
-                 (post_only={post_only})"
+                 (post_only={post_only}, hidden={hidden})"
             );
             let result = dispatch_send_order(
                 &executor,
@@ -644,6 +664,7 @@ async fn run() -> Result<()> {
                 amount,
                 Some(price),
                 post_only,
+                hidden,
             )?;
             info!(
                 "Limit buy order sent successfully (order_id: {})",
@@ -653,8 +674,16 @@ async fn run() -> Result<()> {
         }
         Commands::SellMarket { market, amount } => {
             info!("Sending market SELL order for {amount} on market {market}");
-            let result =
-                dispatch_send_order(&executor, &client, market, Side::Ask, amount, None, false)?;
+            let result = dispatch_send_order(
+                &executor,
+                &client,
+                market,
+                Side::Ask,
+                amount,
+                None,
+                false, // post_only meaningless for market orders
+                false, // hidden — SellMarket has no --hidden flag
+            )?;
             info!(
                 "Market sell order sent successfully (order_id: {})",
                 result.order_id
@@ -666,10 +695,11 @@ async fn run() -> Result<()> {
             amount,
             price,
             post_only,
+            hidden,
         } => {
             info!(
                 "Sending limit SELL order for {amount} at price {price} on market {market} \
-                 (post_only={post_only})"
+                 (post_only={post_only}, hidden={hidden})"
             );
             let result = dispatch_send_order(
                 &executor,
@@ -679,6 +709,7 @@ async fn run() -> Result<()> {
                 amount,
                 Some(price),
                 post_only,
+                hidden,
             )?;
             info!(
                 "Limit sell order sent successfully (order_id: {})",
@@ -706,7 +737,8 @@ async fn run() -> Result<()> {
                 Side::Bid,
                 amount,
                 Some(price),
-                false,
+                false, // post_only would defeat the purpose of a marketable order
+                false, // hidden — BuyMarketable has no --hidden flag
             )?;
             info!(
                 "Marketable buy order sent successfully (order_id: {})",
@@ -732,7 +764,8 @@ async fn run() -> Result<()> {
                 Side::Ask,
                 amount,
                 Some(price),
-                false,
+                false, // post_only would defeat the purpose of a marketable order
+                false, // hidden — SellMarketable has no --hidden flag
             )?;
             info!(
                 "Marketable sell order sent successfully (order_id: {})",

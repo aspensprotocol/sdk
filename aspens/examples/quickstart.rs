@@ -83,6 +83,7 @@ fn main() -> Result<()> {
             &wallet,
             cfg_clone,
             false, // post_only
+            false, // hidden
         )
         .await
     })?;

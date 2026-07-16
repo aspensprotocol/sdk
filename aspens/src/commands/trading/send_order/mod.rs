@@ -40,6 +40,7 @@ async fn call_send_order(
     wallet: &Wallet,
     authorization: Option<arborter_pb::OrderAuthorization>,
     post_only: bool,
+    hidden: bool,
 ) -> Result<SendOrderResponse> {
     // Create a channel to connect to the gRPC server (with TLS support for HTTPS)
     let channel = create_channel(&url).await?;
@@ -63,6 +64,7 @@ async fn call_send_order(
         execution_type: 0,
         matching_order_ids: vec![],
         post_only,
+        hidden,
     };
 
     // Serialize the order to a byte vector for signing
@@ -274,6 +276,11 @@ pub fn derive_address(privkey: &str) -> Result<(Address, String)> {
 /// * `post_only` - Reject if the order would cross at submission. Limit
 ///   orders only; ignored semantics-wise for market orders (arborter
 ///   rejects post-only without a price).
+/// * `hidden` - Invisible order: matched normally (normal price-time
+///   priority) but excluded from the public orderbook stream and
+///   response-embedded books; appears in NO stream, not even your own —
+///   track it via `SendOrderResponse.order_id`. Fills print publicly
+///   with your side's identity redacted.
 // Public top-level API — the argument list is the documented entry
 // point; introducing a builder/struct here would break every caller
 // (CLI, REPL, examples) for no behavioural gain.
@@ -287,6 +294,7 @@ pub async fn send_order_with_wallet(
     wallet: &Wallet,
     config: GetConfigResponse,
     post_only: bool,
+    hidden: bool,
 ) -> Result<SendOrderResponse> {
     send_order_with_wallets(
         url,
@@ -297,6 +305,7 @@ pub async fn send_order_with_wallet(
         &[wallet],
         config,
         post_only,
+        hidden,
     )
     .await
 }
@@ -314,6 +323,8 @@ pub async fn send_order_with_wallet(
 /// Errors if a wallet of the right curve is missing for either chain.
 ///
 /// `post_only`: see [`send_order_with_wallet`].
+/// `hidden`: see [`send_order_with_wallet`]. No client-side validation —
+/// hidden combines legally with market, limit, and post_only orders.
 // Public top-level API — same rationale as `send_order_with_wallet`
 // for keeping the argument list flat.
 #[allow(clippy::too_many_arguments)]
@@ -326,6 +337,7 @@ pub async fn send_order_with_wallets(
     wallets: &[&Wallet],
     config: GetConfigResponse,
     post_only: bool,
+    hidden: bool,
 ) -> Result<SendOrderResponse> {
     if wallets.is_empty() {
         return Err(eyre::eyre!(
@@ -439,6 +451,7 @@ pub async fn send_order_with_wallets(
         signing_wallet,
         Some(authorization),
         post_only,
+        hidden,
     )
     .await;
 
@@ -633,6 +646,7 @@ mod tests {
             execution_type: 0,
             matching_order_ids: vec![],
             post_only: false,
+            hidden: false,
         };
 
         let response = SendOrderResponse {
@@ -725,7 +739,33 @@ mod post_only_proto_tests {
             execution_type: 0,
             matching_order_ids: vec![],
             post_only,
+            hidden: false,
         }
+    }
+
+    #[test]
+    fn hidden_false_is_wire_skipped() {
+        // hidden=false is the proto3 default; prost must omit it so every
+        // pre-feature signed envelope stays byte-identical.
+        let order = sample_order(false);
+        let mut buf = Vec::new();
+        order.encode(&mut buf).unwrap();
+        let decoded = Order::decode(&*buf).unwrap();
+        assert!(!decoded.hidden);
+        assert_eq!(decoded, order);
+    }
+
+    #[test]
+    fn hidden_true_changes_wire_encoding() {
+        let mut order_hidden = sample_order(false);
+        order_hidden.hidden = true;
+        let mut buf_plain = Vec::new();
+        let mut buf_hidden = Vec::new();
+        sample_order(false).encode(&mut buf_plain).unwrap();
+        order_hidden.encode(&mut buf_hidden).unwrap();
+        assert_ne!(buf_plain, buf_hidden, "hidden=true must reach the wire");
+        assert!(buf_hidden.len() > buf_plain.len());
+        assert!(Order::decode(&*buf_hidden).unwrap().hidden);
     }
 
     #[test]
