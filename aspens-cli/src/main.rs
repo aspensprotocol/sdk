@@ -329,6 +329,11 @@ enum Commands {
         /// Amount in human-readable units (e.g., "10", "10.5"). Scaled
         /// by the token's `decimals` from the chain config.
         amount: String,
+        /// Solana WSOL (native SOL) only: keep the withdrawn funds as WSOL
+        /// instead of unwrapping. By default the WSOL ATA is closed after the
+        /// withdraw, converting its ENTIRE wrapped balance + rent back to SOL.
+        #[arg(long, default_value_t = false)]
+        no_unwrap: bool,
     },
     /// Send a market BUY order (executes at best available price)
     BuyMarket {
@@ -627,6 +632,7 @@ async fn run() -> Result<()> {
             network,
             token,
             amount,
+            no_unwrap,
         } => {
             info!("Withdrawing {amount} {token} from {network}");
 
@@ -641,13 +647,16 @@ async fn run() -> Result<()> {
                 .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
             executor
                 .execute(async move {
-                    withdraw::call_withdraw_from_config_with_wallet(
+                    withdraw::call_withdraw_from_config_with_wallet_opts(
                         stack_url,
                         network,
                         token,
                         amount_base,
                         &wallet,
                         config,
+                        withdraw::WithdrawOpts {
+                            unwrap_native: !no_unwrap,
+                        },
                     )
                     .await
                 })

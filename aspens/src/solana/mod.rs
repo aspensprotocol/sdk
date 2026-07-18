@@ -24,6 +24,61 @@ pub const SPL_TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x1c, 0xb4, 0x85, 0xed, 0x5f, 0x5b, 0x37, 0x91, 0x3a, 0x8c, 0xf5, 0x85, 0x7e, 0xff, 0x00, 0xa9,
 ]);
 
+/// The WSOL (wrapped native SOL) mint — native SOL's on-venue identity. A
+/// deposit/withdraw against this mint is a native-SOL flow: clients wrap
+/// (system-transfer + `SyncNative`) before depositing and unwrap
+/// (`CloseAccount`) after withdrawing; the on-chain midrib program treats it
+/// as an ordinary SPL mint throughout.
+pub const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
+
+/// `true` if `mint` is the WSOL mint (base58 is case-sensitive; exact match).
+pub fn is_wsol_mint(mint: &str) -> bool {
+    mint == WSOL_MINT
+}
+
+/// System-program `Transfer` (instruction discriminant 2): move `lamports`
+/// from `from` to `to`. Hand-encoded (u32-LE discriminant || u64-LE lamports —
+/// the System program's stable bincode wire format) so the lean signing build
+/// needs no extra system-interface crate. Used to fund a WSOL ATA during a
+/// native-SOL wrap.
+pub fn system_transfer_ix(from: &Pubkey, to: &Pubkey, lamports: u64) -> Instruction {
+    let mut data = Vec::with_capacity(12);
+    data.extend_from_slice(&2u32.to_le_bytes());
+    data.extend_from_slice(&lamports.to_le_bytes());
+    Instruction {
+        program_id: SYSTEM_PROGRAM_ID,
+        accounts: vec![AccountMeta::new(*from, true), AccountMeta::new(*to, false)],
+        data,
+    }
+}
+
+/// SPL Token `SyncNative` (instruction discriminant 17): syncs a WSOL token
+/// account's recorded amount up to its lamport balance. Submit after a
+/// system-transfer of lamports into the ATA to complete a wrap.
+pub fn sync_native_ix(ata: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: SPL_TOKEN_PROGRAM_ID,
+        accounts: vec![AccountMeta::new(*ata, false)],
+        data: vec![17],
+    }
+}
+
+/// SPL Token `CloseAccount` (instruction discriminant 9): closes `ata` and
+/// sends its ENTIRE lamport balance — wrapped SOL plus rent — to `dest`.
+/// This is the WSOL unwrap; note it unwraps the account's whole balance, not
+/// just a withdrawn amount (standard wallet behavior).
+pub fn close_token_account_ix(ata: &Pubkey, dest: &Pubkey, owner: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: SPL_TOKEN_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(*ata, false),
+            AccountMeta::new(*dest, false),
+            AccountMeta::new_readonly(*owner, true),
+        ],
+        data: vec![9],
+    }
+}
+
 /// PDA seeds — must match the on-chain `midrib` program.
 pub mod seeds {
     /// Seed for the singleton factory PDA.
@@ -502,6 +557,56 @@ mod tests {
             a[2..].iter().all(|m| !m.is_signer && !m.is_writable),
             "owner/mint/programs are readonly"
         );
+    }
+
+    #[test]
+    fn system_transfer_ix_matches_wire_format() {
+        // Pin the hand-encoded System `Transfer` layout: u32-LE discriminant 2
+        // followed by u64-LE lamports, [from signer+writable, to writable].
+        let from = Pubkey::new_from_array([1; 32]);
+        let to = Pubkey::new_from_array([2; 32]);
+        let ix = system_transfer_ix(&from, &to, 1_234_567);
+        assert_eq!(ix.program_id, SYSTEM_PROGRAM_ID);
+        let mut expected = 2u32.to_le_bytes().to_vec();
+        expected.extend_from_slice(&1_234_567u64.to_le_bytes());
+        assert_eq!(ix.data, expected);
+        assert_eq!(ix.accounts.len(), 2);
+        assert!(ix.accounts[0].is_signer && ix.accounts[0].is_writable);
+        assert!(!ix.accounts[1].is_signer && ix.accounts[1].is_writable);
+    }
+
+    #[test]
+    fn wsol_wrap_unwrap_ixs_are_exact() {
+        // WSOL mint decodes to the well-known pubkey (a valid 32-byte base58).
+        let wsol = Pubkey::from_str(WSOL_MINT).expect("WSOL mint parses");
+        assert!(is_wsol_mint(WSOL_MINT));
+        assert!(!is_wsol_mint("So11111111111111111111111111111111111111111")); // the "native mint" lookalike
+
+        let ata = Pubkey::new_from_array([3; 32]);
+        let dest = Pubkey::new_from_array([4; 32]);
+        let owner = Pubkey::new_from_array([5; 32]);
+
+        // SyncNative: token program, single writable non-signer account, data [17].
+        let sync = sync_native_ix(&ata);
+        assert_eq!(sync.program_id, SPL_TOKEN_PROGRAM_ID);
+        assert_eq!(sync.data, vec![17]);
+        assert_eq!(sync.accounts.len(), 1);
+        assert_eq!(sync.accounts[0].pubkey, ata);
+        assert!(sync.accounts[0].is_writable && !sync.accounts[0].is_signer);
+
+        // CloseAccount: [ata w, dest w, owner signer], data [9].
+        let close = close_token_account_ix(&ata, &dest, &owner);
+        assert_eq!(close.program_id, SPL_TOKEN_PROGRAM_ID);
+        assert_eq!(close.data, vec![9]);
+        assert_eq!(close.accounts.len(), 3);
+        assert_eq!(close.accounts[0].pubkey, ata);
+        assert!(close.accounts[0].is_writable && !close.accounts[0].is_signer);
+        assert_eq!(close.accounts[1].pubkey, dest);
+        assert!(close.accounts[1].is_writable && !close.accounts[1].is_signer);
+        assert_eq!(close.accounts[2].pubkey, owner);
+        assert!(!close.accounts[2].is_writable && close.accounts[2].is_signer);
+
+        let _ = wsol; // parsed above; the mint constant is the assertion
     }
 
     #[test]
