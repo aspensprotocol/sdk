@@ -104,6 +104,37 @@ async fn solana_deposit(
     );
 
     let ix = crate::solana::deposit_ix(&program_id, &instance, &user, &mint, &user_ata, amount)?;
+
+    // Native-SOL deposit (WSOL mint): wrap in the SAME transaction —
+    // create the WSOL ATA (idempotent), move `amount` lamports into it,
+    // `SyncNative` so the token balance reflects them, then deposit.
+    if crate::solana::is_wsol_mint(&token.address) {
+        use solana_client::nonblocking::rpc_client::RpcClient;
+
+        // The wrap spends `amount` lamports from the fee-payer itself; fail
+        // fast with a clear error instead of an opaque simulation failure.
+        // Headroom: tx fee + possible ATA rent (~0.002 SOL).
+        const WRAP_FEE_HEADROOM: u64 = 3_000_000;
+        let rpc = RpcClient::new(chain.rpc_url.clone());
+        let lamports = rpc.get_balance(&user).await.unwrap_or(0);
+        let required = amount.saturating_add(WRAP_FEE_HEADROOM);
+        if lamports < required {
+            return Err(eyre::eyre!(
+                "insufficient SOL: wallet {user} has {lamports} lamports, needs \
+                 {required} (deposit amount + ~0.003 SOL fee/rent headroom)"
+            ));
+        }
+
+        let ata_ix = crate::solana::create_idempotent_ata_ix(&user, &user, &mint, &user_ata);
+        let wrap_ix = crate::solana::system_transfer_ix(&user, &user_ata, amount);
+        let sync_ix = crate::solana::sync_native_ix(&user_ata);
+        let ixs = [ata_ix, wrap_ix, sync_ix, ix];
+        let sig =
+            crate::solana::client::submit_user_signed_multi(&chain.rpc_url, keypair, &ixs).await?;
+        tracing::info!("Solana native (wrapped-SOL) deposit confirmed: {}", sig);
+        return Ok(());
+    }
+
     let sig = crate::solana::client::submit_user_signed(&chain.rpc_url, keypair, ix).await?;
     tracing::info!("Solana deposit confirmed: {}", sig);
     Ok(())
@@ -210,6 +241,7 @@ async fn call_deposit_from_config_evm(
     );
 
     // Perform the deposit
+    let native = crate::evm::is_native_token(&token.address);
     let allowance_amount = U256::from(amount.saturating_add(1000));
     let deposit_amount = U160::from(amount);
     let contract_addr: Address = contract_address.parse()?;
@@ -224,16 +256,29 @@ async fn call_deposit_from_config_evm(
         .wallet(wallet)
         .connect_http(rpc_url);
 
-    // Check gas balance before attempting any transactions
+    // Check the wallet balance before attempting any transactions. A native
+    // deposit spends the deposit amount ITSELF from the gas balance, so it
+    // must cover amount + gas headroom, not just gas.
     let gas_balance = provider.get_balance(signer_address).await?;
     tracing::info!("Gas balance: {} wei", gas_balance);
 
-    if gas_balance < U256::from(MIN_GAS_BALANCE) {
+    let required = if native {
+        U256::from(amount).saturating_add(U256::from(MIN_GAS_BALANCE))
+    } else {
+        U256::from(MIN_GAS_BALANCE)
+    };
+    if gas_balance < required {
         let balance_eth = gas_balance.to::<u128>() as f64 / 1e18;
         return Err(eyre::eyre!(
-            "insufficient gas: wallet has {:.6} native tokens, need at least 0.0001 for gas. \
-            Fund your wallet ({}) with native tokens on {} to pay for transaction fees.",
+            "insufficient native balance: wallet has {:.6}, needs {} wei \
+            ({}). Fund your wallet ({}) on {}.",
             balance_eth,
+            required,
+            if native {
+                "deposit amount + 0.0001 gas headroom"
+            } else {
+                "0.0001 gas headroom"
+            },
             signer_address,
             network
         ));
@@ -241,6 +286,26 @@ async fn call_deposit_from_config_evm(
 
     // Get an instance of the contract
     let contract = MidribV3::new(contract_addr, &provider);
+
+    // Native-asset deposit: no ERC-20 approve — the value rides the call.
+    if native {
+        tracing::info!("Attempting NATIVE deposit of {amount} wei to contract {contract_addr}");
+        let deposit_tx = contract.depositNative().value(U256::from(amount));
+        match deposit_tx.estimate_gas().await {
+            Ok(gas_estimate) => {
+                tracing::info!("Gas estimate for depositNative: {gas_estimate:?}");
+            }
+            Err(e) => {
+                tracing::error!("Failed to estimate gas for depositNative: {e:?}");
+                return Err(e.into());
+            }
+        }
+        let result = deposit_tx.send().await?;
+        tracing::info!("Native deposit transaction sent: {result:?}");
+        let receipt = result.with_required_confirmations(1).watch().await?;
+        tracing::info!("Native deposit transaction hash: {receipt:?}");
+        return Ok(());
+    }
 
     let erc20 = IERC20::new(token_addr, &provider);
     // Get the allowance

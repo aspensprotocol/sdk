@@ -32,6 +32,19 @@ pub const MIDRIB_EIP712_NAME: &str = "Midrib";
 /// EIP-712 domain version used by MidribV3 (bumped from "2" with the rename).
 pub const MIDRIB_EIP712_VERSION: &str = "3";
 
+// -- Native-asset sentinel -------------------------------------------------
+
+/// The sentinel "token address" keying the chain's native asset (ETH/FLR) in
+/// MidribV3 (`MidribV3.NATIVE`). A token configured with this address is the
+/// native asset: deposit via the payable `depositNative` (no ERC-20 approve),
+/// withdraw via the same voucher flow (paid as raw value).
+pub const NATIVE_TOKEN_SENTINEL: &str = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
+
+/// `true` if `addr` is the native-asset sentinel (hex is case-insensitive).
+pub fn is_native_token(addr: &str) -> bool {
+    addr.eq_ignore_ascii_case(NATIVE_TOKEN_SENTINEL)
+}
+
 // -- Outer envelope signature --------------------------------------------
 
 /// Produce the EIP-191 personal-sign digest for an encoded order payload.
@@ -77,6 +90,23 @@ mod tests {
         // domain version to "3".
         assert_eq!(MIDRIB_EIP712_NAME, "Midrib");
         assert_eq!(MIDRIB_EIP712_VERSION, "3");
+    }
+
+    #[test]
+    fn native_sentinel_matches_contract_constant() {
+        // Locked to MidribV3.NATIVE. All-`e` nibbles, so the lowercase form is
+        // exactly 40 `e`s — pin both the value and the case-insensitive match.
+        assert_eq!(
+            NATIVE_TOKEN_SENTINEL.to_ascii_lowercase(),
+            format!("0x{}", "e".repeat(40))
+        );
+        assert!(is_native_token(NATIVE_TOKEN_SENTINEL));
+        assert!(is_native_token(
+            "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ));
+        assert!(!is_native_token(
+            "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEe0"
+        ));
     }
 
     #[test]

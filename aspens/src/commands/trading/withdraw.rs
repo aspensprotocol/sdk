@@ -43,6 +43,47 @@ pub async fn call_withdraw_from_config_with_wallet(
     wallet: &Wallet,
     config: GetConfigResponse,
 ) -> Result<()> {
+    call_withdraw_from_config_with_wallet_opts(
+        url,
+        network,
+        token_symbol,
+        amount,
+        wallet,
+        config,
+        WithdrawOpts::default(),
+    )
+    .await
+}
+
+/// Behavior options for [`call_withdraw_from_config_with_wallet_opts`].
+#[derive(Debug, Clone)]
+pub struct WithdrawOpts {
+    /// Solana WSOL (native SOL) withdrawals only: after the voucher withdraw
+    /// lands, close the WSOL ATA in the same transaction, unwrapping its
+    /// ENTIRE wrapped balance (withdrawn amount + any pre-existing WSOL) plus
+    /// rent back to SOL — standard wallet behavior. Set `false` to keep the
+    /// withdrawn funds as WSOL (e.g. when deliberately holding wrapped SOL).
+    pub unwrap_native: bool,
+}
+
+impl Default for WithdrawOpts {
+    fn default() -> Self {
+        Self {
+            unwrap_native: true,
+        }
+    }
+}
+
+/// [`call_withdraw_from_config_with_wallet`] with explicit [`WithdrawOpts`].
+pub async fn call_withdraw_from_config_with_wallet_opts(
+    url: String,
+    network: String,
+    token_symbol: String,
+    amount: u128,
+    wallet: &Wallet,
+    config: GetConfigResponse,
+    opts: WithdrawOpts,
+) -> Result<()> {
     let chain_for_arch = config
         .get_chain(&network)
         .ok_or_else(|| eyre::eyre!("Chain '{}' not found in configuration", network))?;
@@ -56,7 +97,15 @@ pub async fn call_withdraw_from_config_with_wallet(
         let spl_amount: u64 = amount.try_into().map_err(|_| {
             eyre::eyre!("amount {amount} exceeds the SPL token u64 max on Solana chain '{network}'")
         })?;
-        return solana_withdraw(url, chain_for_arch, &token_symbol, spl_amount, wallet).await;
+        return solana_withdraw(
+            url,
+            chain_for_arch,
+            &token_symbol,
+            spl_amount,
+            wallet,
+            opts.unwrap_native,
+        )
+        .await;
     }
 
     if wallet.curve() != CurveType::Secp256k1 {
@@ -83,6 +132,7 @@ async fn solana_withdraw(
     token_symbol: &str,
     amount: u64,
     wallet: &Wallet,
+    unwrap_native: bool,
 ) -> Result<()> {
     use solana_sdk::pubkey::Pubkey;
     use std::str::FromStr;
@@ -222,7 +272,17 @@ async fn solana_withdraw(
     // (SOL-VOUCHER-ATA). Idempotent — harmless if already present — and ordered
     // FIRST so `verify_ix` stays immediately before `wd_ix`.
     let ata_ix = crate::solana::create_idempotent_ata_ix(&user, &user, &mint, &user_ata);
-    let ixs = [ata_ix, verify_ix, wd_ix];
+    let mut ixs = vec![ata_ix, verify_ix, wd_ix];
+    // Native SOL (WSOL) withdrawal: unwrap in the same tx by closing the WSOL
+    // ATA AFTER the voucher transfer credits it — the close sends the account's
+    // ENTIRE wrapped balance + rent back to the user as SOL. Appending keeps
+    // verify_ix immediately before wd_ix (the program introspects that pair).
+    if unwrap_native && crate::solana::is_wsol_mint(&token.address) {
+        tracing::info!("WSOL withdrawal: appending unwrap (CloseAccount) to the voucher tx");
+        ixs.push(crate::solana::close_token_account_ix(
+            &user_ata, &user, &user,
+        ));
+    }
     let mut last_err = None;
     let mut sig = None;
     for attempt in 0..VOUCHER_SUBMIT_MAX_ATTEMPTS {
@@ -277,6 +337,7 @@ async fn solana_withdraw(
     _token_symbol: &str,
     _amount: u64,
     _wallet: &Wallet,
+    _unwrap_native: bool,
 ) -> Result<()> {
     Err(eyre::eyre!(
         "chain '{}' is Solana but the `solana` feature is disabled",
