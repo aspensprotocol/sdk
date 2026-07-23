@@ -18,3 +18,22 @@ pub mod stream_orderbook;
 pub mod stream_trades;
 /// Withdraw tokens from the trading contract back to the user's wallet.
 pub mod withdraw;
+
+/// FCE direct-action routing: builds the same signed envelopes as the gRPC
+/// commands and submits them through the ext-proxy transport. Only compiled
+/// when both `client` and `fce` are on.
+#[cfg(feature = "fce")]
+pub mod fce_actions;
+
+/// Encode a prost message and sign the bytes with `wallet` — the outer
+/// envelope signature the arborter authenticates. Shared by the gRPC and FCE
+/// paths so the signed bytes are byte-identical (the cross-repo parity
+/// invariant; see CLAUDE.md). Order entry / cancel both authenticate this way.
+pub(crate) async fn sign_encoded<M: prost::Message>(
+    msg: &M,
+    wallet: &crate::Wallet,
+) -> eyre::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    msg.encode(&mut buf)?;
+    wallet.sign_message(&buf).await
+}

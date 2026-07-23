@@ -92,6 +92,11 @@ dcap = ["dep:dcap-qvl"]
 # over the SDK's own rustls reqwest (not dcap-qvl's `report`/reqwest-0.13 stack).
 dcap-fetch = ["dcap", "dep:reqwest", "dep:asn1_der", "dep:pem", "dep:urlencoding"]
 
+# FCE direct-action transport (`fce` module): POST /direct + poll the ext-proxy.
+# Reuses the SDK's rustls reqwest; tokio/time for the poll backoff. No gRPC deps.
+# See sdk/docs/fce-transport-design.md.
+fce = ["dep:reqwest", "dep:tokio", "tokio/time"]
+
 # EVM signing helpers: sol! bindings for MidribV2, IAllowanceTransfer,
 # MidribDataTypes; EIP-712 hasher; EIP-191 envelope signer. Stateless.
 evm = []
