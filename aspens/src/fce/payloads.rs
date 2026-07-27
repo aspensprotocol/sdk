@@ -117,9 +117,20 @@ pub struct GetMyStateRequest {
     pub trader: String,
 }
 
+/// Go marshals nil slices as JSON `null`; tolerate that as an empty vec
+/// (first-live-run conformance fix, 2026-07-27).
+fn null_as_empty<'de, D, T>(de: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let opt = Option::<Vec<T>>::deserialize(de)?;
+    Ok(opt.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMyStateResponse {
-    #[serde(rename = "openOrders")]
+    #[serde(rename = "openOrders", default, deserialize_with = "null_as_empty")]
     pub open_orders: Vec<OpenOrder>,
 }
 
@@ -147,7 +158,9 @@ pub struct GetBookStateRequest {
 pub struct GetBookStateResponse {
     #[serde(rename = "marketId")]
     pub market_id: String,
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub bids: Vec<BookLevel>,
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub asks: Vec<BookLevel>,
 }
 
@@ -166,6 +179,7 @@ pub struct ExportHistoryRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportHistoryResponse {
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub trades: Vec<TradeRecord>,
 }
 
