@@ -14,6 +14,27 @@ pub struct JwtToken {
     pub expires_at: u64,
 }
 
+/// Transport for trading actions. Config discovery always uses gRPC; actions
+/// (orders/cancels/withdraws/reads) route through the selected transport.
+#[cfg(feature = "fce")]
+#[derive(Clone)]
+pub enum Transport {
+    /// Direct arborter gRPC (the default).
+    Grpc,
+    /// The Flare Confidential Extension proxy (`POST /direct` + poll).
+    Fce(crate::fce::FceClient),
+}
+
+#[cfg(feature = "fce")]
+impl std::fmt::Debug for Transport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Transport::Grpc => write!(f, "Transport::Grpc"),
+            Transport::Fce(_) => write!(f, "Transport::Fce"),
+        }
+    }
+}
+
 /// Main client for interacting with Aspens trading platform
 pub struct AspensClient {
     /// URL of the Aspens Market Stack
@@ -24,6 +45,9 @@ pub struct AspensClient {
     pub(crate) config: Arc<RwLock<Option<GetConfigResponse>>>,
     /// JWT token for admin operations (when authenticated)
     pub(crate) jwt_token: Arc<RwLock<Option<JwtToken>>>,
+    /// Trading-action transport (gRPC unless an FCE proxy is configured).
+    #[cfg(feature = "fce")]
+    pub(crate) transport: Transport,
 }
 
 impl AspensClient {
@@ -150,6 +174,27 @@ impl AspensClient {
         *guard = Some(JwtToken { token, expires_at });
     }
 
+    /// The configured trading-action transport.
+    #[cfg(feature = "fce")]
+    pub fn transport(&self) -> &Transport {
+        &self.transport
+    }
+
+    /// True when trading actions route through the FCE proxy.
+    #[cfg(feature = "fce")]
+    pub fn uses_fce(&self) -> bool {
+        matches!(self.transport, Transport::Fce(_))
+    }
+
+    /// The FCE proxy client, when an FCE transport is configured.
+    #[cfg(feature = "fce")]
+    pub fn fce(&self) -> Option<&crate::fce::FceClient> {
+        match &self.transport {
+            Transport::Fce(c) => Some(c),
+            Transport::Grpc => None,
+        }
+    }
+
     /// Get the current JWT token if valid
     pub fn get_jwt_token(&self) -> Option<String> {
         let guard = self
@@ -212,6 +257,9 @@ impl AspensClient {
 pub struct AspensClientBuilder {
     stack_url: Option<Url>,
     env_file_path: Option<String>,
+    /// (proxy_url, api_key) for the FCE transport, if set explicitly.
+    #[cfg(feature = "fce")]
+    fce: Option<(String, Option<String>)>,
 }
 
 impl AspensClientBuilder {
@@ -225,6 +273,15 @@ impl AspensClientBuilder {
     /// Set custom environment file path (defaults to .env)
     pub fn with_env_file(mut self, path: impl Into<String>) -> Self {
         self.env_file_path = Some(path.into());
+        self
+    }
+
+    /// Route trading actions through the FCE proxy at `proxy_url`, authenticating
+    /// with `api_key` (the proxy's `DIRECT_API_KEY`, sent as `X-API-Key`).
+    /// Config discovery still uses gRPC against the stack URL.
+    #[cfg(feature = "fce")]
+    pub fn with_fce(mut self, proxy_url: impl Into<String>, api_key: Option<String>) -> Self {
+        self.fce = Some((proxy_url.into(), api_key));
         self
     }
 
@@ -250,11 +307,30 @@ impl AspensClientBuilder {
                 )
             })?;
 
+        // FCE transport: explicit `.with_fce(...)` wins; otherwise auto-detect
+        // from `EXT_PROXY_URL` (+ optional `DIRECT_API_KEY`) in the env file /
+        // process env. Absent both, actions use gRPC.
+        #[cfg(feature = "fce")]
+        let transport = {
+            let cfg = self.fce.or_else(|| {
+                env_vars
+                    .get("EXT_PROXY_URL")
+                    .filter(|u| !u.is_empty())
+                    .map(|u| (u.clone(), env_vars.get("DIRECT_API_KEY").cloned()))
+            });
+            match cfg {
+                Some((url, key)) => Transport::Fce(crate::fce::FceClient::new(url, key)?),
+                None => Transport::Grpc,
+            }
+        };
+
         Ok(AspensClient {
             stack_url,
             env_vars,
             config: Arc::new(RwLock::new(None)),
             jwt_token: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "fce")]
+            transport,
         })
     }
 }

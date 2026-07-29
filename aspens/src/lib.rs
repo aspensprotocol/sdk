@@ -38,9 +38,14 @@ pub mod commands;
 pub mod decimals;
 #[cfg(feature = "evm")]
 pub mod evm;
+
 /// Async/sync execution strategies used by binaries to drive the client.
 #[cfg(feature = "client")]
 pub mod executor;
+/// FCE direct-action transport (Flare Confidential Extension proxy). Behind the
+/// `fce` feature; see `sdk/docs/fce-transport-design.md`.
+#[cfg(feature = "fce")]
+pub mod fce;
 // Internal — gRPC channel construction helpers shared by the commands
 // modules. Not part of the stable public API; may change without notice.
 #[cfg(feature = "client")]

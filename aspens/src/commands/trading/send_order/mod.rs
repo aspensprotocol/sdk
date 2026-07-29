@@ -17,7 +17,6 @@ use alloy_chains::NamedChain;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{Order, SendOrderRequest, SendOrderResponse};
 use eyre::Result;
-use prost::Message;
 use url::Url;
 
 use crate::commands::config::config_pb::GetConfigResponse;
@@ -67,15 +66,12 @@ async fn call_send_order(
         hidden,
     };
 
-    // Serialize the order to a byte vector for signing
-    let mut buffer = Vec::new();
-    order_for_sending.encode(&mut buffer)?;
-
-    // Sign the order. EVM signatures are 65 bytes (r||s||v); Solana Ed25519 are 64
-    // bytes. Send the full curve-native length — the arborter's curve-aware
-    // verifier (`onchain::verify::is_signature_valid_with_curve`) requires
-    // exactly 65 for Secp256k1 and 64 for Ed25519, with no length tolerance.
-    let signature_bytes = wallet.sign_message(&buffer).await?;
+    // Encode + sign the order via the shared helper (the single sign site so
+    // the gRPC and FCE paths produce byte-identical envelopes). EVM signatures
+    // are 65 bytes (r||s||v); Solana Ed25519 are 64 — the arborter's curve-aware
+    // verifier requires exactly those lengths, so send the full curve-native
+    // length with no truncation.
+    let signature_bytes = super::sign_encoded(&order_for_sending, wallet).await?;
 
     // Create the request with the original order and signature
     let request = SendOrderRequest {
@@ -145,7 +141,7 @@ fn format_balance_for_display(balance: U256, decimals: u32) -> String {
 /// Thin wrapper over [`crate::decimals::parse_decimal_amount`]; kept as
 /// a private alias so the existing `String`-returning order-encoding path
 /// stays untouched.
-fn convert_to_pair_decimals(amount: &str, decimals: u32) -> Result<String> {
+pub(crate) fn convert_to_pair_decimals(amount: &str, decimals: u32) -> Result<String> {
     Ok(crate::decimals::parse_decimal_amount(amount, decimals)?.to_string())
 }
 
