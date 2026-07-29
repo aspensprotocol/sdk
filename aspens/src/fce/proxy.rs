@@ -203,7 +203,7 @@ impl FceClient {
 pub struct Outcome<T> {
     /// 1 = ok, 0 = error.
     pub status: u8,
-    /// "ok" or "error: <msg>".
+    /// `"ok"` or `"error: <msg>"`.
     pub log: String,
     pub data: Option<T>,
 }

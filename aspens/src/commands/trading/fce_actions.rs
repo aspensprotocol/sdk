@@ -2,7 +2,7 @@
 //!
 //! Builds the **same signed envelopes** as the gRPC commands — reusing
 //! `lookup_market`, `convert_to_pair_decimals`, `build_gasless_authorization`,
-//! and the shared [`super::sign_encoded`] — then submits them through the
+//! and the shared `sign_encoded` — then submits them through the
 //! ext-proxy ([`crate::fce::FceClient`]) instead of arborter gRPC. Signing is
 //! byte-identical to the gRPC path (the cross-repo parity invariant, CLAUDE.md):
 //! the adapter reconstructs the arborter `Order`/`OrderToCancel` from these
