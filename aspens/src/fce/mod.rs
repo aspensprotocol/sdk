@@ -11,8 +11,8 @@
 //!
 //! Reads (`get_book_state` / `get_my_state` / `export_history`) are **one-shot
 //! snapshots**, not live streams — the adapter drains the arborter stream into a
-//! point-in-time result. Config discovery still uses gRPC (no `GET_CONFIG`
-//! command), so an FCE-enabled client is hybrid.
+//! point-in-time result. Config discovery goes over FCE too (`GET_CONFIG`), so a
+//! client with an FCE transport needs no arborter gRPC reachability at all.
 //!
 //! ```no_run
 //! # async fn demo() -> eyre::Result<()> {
@@ -32,13 +32,13 @@ pub mod wire;
 
 pub use payloads::{
     BookLevel, CancelOrderRequest, CancelOrderResponse, ExportHistoryRequest,
-    ExportHistoryResponse, GetBookStateRequest, GetBookStateResponse, GetMyStateRequest,
-    GetMyStateResponse, OpenOrder, PlaceOrderRequest, PlaceOrderResponse, TradeRecord,
-    WithdrawRequest, WithdrawVoucher,
+    ExportHistoryResponse, GetBookStateRequest, GetBookStateResponse, GetConfigEnvelope,
+    GetConfigRequest, GetMyStateRequest, GetMyStateResponse, OpenOrder, PlaceOrderRequest,
+    PlaceOrderResponse, TradeRecord, WithdrawRequest, WithdrawVoucher,
 };
 pub use proxy::{FceClient, Outcome};
 pub use result::{ActionResponse, ActionResult};
 pub use wire::{
-    DirectInstruction, OP_CANCEL_ORDER, OP_EXPORT_HISTORY, OP_GET_BOOK_STATE, OP_GET_MY_STATE,
-    OP_PLACE_ORDER, OP_TYPE_ASPENS, OP_WITHDRAW, to_bytes32,
+    DirectInstruction, OP_CANCEL_ORDER, OP_EXPORT_HISTORY, OP_GET_BOOK_STATE, OP_GET_CONFIG,
+    OP_GET_MY_STATE, OP_PLACE_ORDER, OP_TYPE_ASPENS, OP_WITHDRAW, to_bytes32,
 };

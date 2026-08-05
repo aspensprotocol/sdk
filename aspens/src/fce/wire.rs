@@ -20,6 +20,10 @@ pub const OP_CANCEL_ORDER: &str = "CANCEL_ORDER";
 pub const OP_GET_MY_STATE: &str = "GET_MY_STATE";
 pub const OP_GET_BOOK_STATE: &str = "GET_BOOK_STATE";
 pub const OP_EXPORT_HISTORY: &str = "EXPORT_HISTORY";
+/// Config discovery over FCE. Without it an FCE-only client can read but not
+/// WRITE: building a signed order needs the market's pair decimals and the
+/// base/quote chains' curves, which live only in the arborter config.
+pub const OP_GET_CONFIG: &str = "GET_CONFIG";
 
 /// `bytes32(s)` — copy the UTF-8 bytes of `s` into a 32-byte array, truncating
 /// past 32 bytes and zero-padding the tail. Mirrors `teeutils.ToHash` /
@@ -78,7 +82,7 @@ pub(crate) mod hex32 {
 /// `0x`-prefixed hex for a variable-length byte slice (go-ethereum
 /// `hexutil.Bytes`). Empty bytes serialize as `"0x"`; `"0x"` deserializes to
 /// empty (matches go-ethereum).
-pub(crate) mod hexbytes {
+pub mod hexbytes {
     use super::*;
 
     pub fn serialize<S: Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
