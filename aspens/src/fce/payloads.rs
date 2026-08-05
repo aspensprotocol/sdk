@@ -252,3 +252,76 @@ mod tests {
         assert!(v.get("price").is_none());
     }
 }
+
+/// GET_CONFIG takes no arguments — the arborter's `GetConfigRequest` is empty.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GetConfigRequest {}
+
+/// The arborter's `GetConfigResponse` as its canonical PROTOBUF encoding, hex
+/// on the wire — not a JSON mirror of the config schema.
+///
+/// The adapter relays these bytes without reading them, so it needs no bindings
+/// for the config proto and no rebuild when a field is added — which matters
+/// because it ships inside the measured image, where any change costs a Flare
+/// re-registration. Decoding happens here, against the same generated type the
+/// gRPC path returns, so both transports yield an identical `GetConfigResponse`.
+///
+/// Hex rather than base64: every other value on this wire is `0x`-hex, and it
+/// reuses the tested [`hexbytes`](super::wire) helper instead of adding a
+/// dependency for one field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetConfigEnvelope {
+    #[serde(rename = "configProto", with = "crate::fce::wire::hexbytes")]
+    pub config_proto: Vec<u8>,
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+    use crate::commands::config::config_pb::GetConfigResponse;
+    use prost::Message as _;
+
+    /// The envelope must decode to the same generated type the gRPC path
+    /// returns. That is the whole point of the passthrough: one schema, decoded
+    /// once, identical on both transports.
+    #[test]
+    fn envelope_round_trips_into_the_generated_config_type() {
+        let original = GetConfigResponse::default();
+        let hex_body = hex::encode(original.encode_to_vec());
+        let json = format!(r#"{{"configProto":"0x{hex_body}"}}"#);
+
+        let env: GetConfigEnvelope = serde_json::from_str(&json).expect("decode envelope");
+        let decoded =
+            GetConfigResponse::decode(env.config_proto.as_slice()).expect("decode protobuf");
+        assert_eq!(decoded, original);
+    }
+
+    /// Arbitrary binary must survive intact — protobuf is full of non-UTF-8
+    /// bytes, and anything that stringified them would corrupt the config.
+    #[test]
+    fn non_utf8_protobuf_bytes_survive_the_round_trip() {
+        let raw = vec![0x0a, 0x03, 0xff, 0xfe, 0xfd, 0x12, 0x00];
+        let json = format!(r#"{{"configProto":"0x{}"}}"#, hex::encode(&raw));
+        let env: GetConfigEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(env.config_proto, raw);
+    }
+
+    /// The field is `configProto` on the wire — the adapter's Go struct tag. A
+    /// rename on either side must fail here, not at runtime against a proxy.
+    #[test]
+    fn envelope_field_is_camel_case_config_proto() {
+        let env = GetConfigEnvelope {
+            config_proto: vec![0x00],
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(json.contains(r#""configProto""#), "got {json}");
+    }
+
+    /// Malformed hex must be an error, never silently an empty config — an
+    /// empty config makes `lookup_market` fail far from the actual cause.
+    #[test]
+    fn a_malformed_payload_is_an_error_not_an_empty_config() {
+        let r: Result<GetConfigEnvelope, _> = serde_json::from_str(r#"{"configProto":"0xnothex"}"#);
+        assert!(r.is_err(), "malformed hex must not decode");
+    }
+}

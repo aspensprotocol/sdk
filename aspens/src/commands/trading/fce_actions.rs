@@ -14,8 +14,11 @@
 
 use eyre::{Result, eyre};
 
+use prost::Message as _;
+
 use crate::Wallet;
 use crate::client::AspensClient;
+use crate::commands::config::config_pb::GetConfigResponse;
 use crate::fce::{
     self, CancelOrderResponse, ExportHistoryResponse, GetBookStateResponse, GetMyStateResponse,
     Outcome, PlaceOrderResponse, WithdrawVoucher,
@@ -233,4 +236,26 @@ pub async fn export_history(
             trader: trader.to_string(),
         })
         .await
+}
+
+/// Fetch the arborter config over FCE and decode it into the SAME generated
+/// type the gRPC path returns.
+///
+/// This is what makes an FCE-only client possible. `place_order` below needs the
+/// market's pair decimals and the base/quote chains' curves to build and sign an
+/// order; before this existed those came only from arborter gRPC, so a client
+/// could read over `/direct` but had to reach the arborter directly to write.
+pub async fn get_config(client: &AspensClient) -> Result<GetConfigResponse> {
+    let outcome = fce_client(client)?.get_config().await?;
+    if !outcome.ok() {
+        return Err(eyre!("get-config failed: {}", outcome.log));
+    }
+    let envelope = outcome
+        .data
+        .ok_or_else(|| eyre!("get-config returned no data (log: {})", outcome.log))?;
+    // Fail loudly rather than yielding a default config: an empty config makes
+    // `lookup_market` fail with "market not found", pointing at the caller's
+    // market id instead of at the transport.
+    GetConfigResponse::decode(envelope.config_proto.as_slice())
+        .map_err(|e| eyre!("decoding GetConfigResponse protobuf from the FCE adapter: {e}"))
 }

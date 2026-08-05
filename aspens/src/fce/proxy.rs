@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use super::payloads::*;
 use super::result::{ActionResponse, ActionResult};
 use super::wire::{
-    self, DirectInstruction, OP_CANCEL_ORDER, OP_EXPORT_HISTORY, OP_GET_BOOK_STATE,
+    self, DirectInstruction, OP_CANCEL_ORDER, OP_EXPORT_HISTORY, OP_GET_BOOK_STATE, OP_GET_CONFIG,
     OP_GET_MY_STATE, OP_PLACE_ORDER, OP_WITHDRAW,
 };
 
@@ -91,6 +91,13 @@ impl FceClient {
         req: &GetBookStateRequest,
     ) -> Result<Outcome<GetBookStateResponse>> {
         self.action(OP_GET_BOOK_STATE, req).await
+    }
+
+    /// Config discovery over FCE — the arborter's `GetConfigResponse` as opaque
+    /// protobuf bytes. Lets a client with this transport build signed orders
+    /// without any arborter gRPC reachability.
+    pub async fn get_config(&self) -> Result<Outcome<GetConfigEnvelope>> {
+        self.action(OP_GET_CONFIG, &GetConfigRequest {}).await
     }
 
     /// Point-in-time snapshot (not a live stream).

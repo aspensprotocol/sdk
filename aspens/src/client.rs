@@ -68,6 +68,20 @@ impl AspensClient {
 
     /// Fetch configuration from the server and cache it
     pub async fn fetch_config(&self) -> Result<()> {
+        // With an FCE transport, discover config over `/direct` too. Otherwise a
+        // client that routes every ACTION through the proxy would still need
+        // arborter gRPC reachability just to learn market decimals — which is
+        // exactly the dependency the FCE transport exists to remove.
+        #[cfg(feature = "fce")]
+        if self.uses_fce() {
+            let config = crate::commands::trading::fce_actions::get_config(self).await?;
+            let mut guard = self
+                .config
+                .write()
+                .expect("AspensClient config lock poisoned");
+            *guard = Some(config);
+            return Ok(());
+        }
         let config = crate::commands::config::get_config(self.stack_url.to_string()).await?;
         let mut guard = self
             .config
