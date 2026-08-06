@@ -86,17 +86,20 @@ async fn main() -> Result<()> {
 
                 // The venue instance for this chain. Absent => nothing deployed
                 // here, so there is no custody to read.
-                let deposited = match (&chain.trade_contract, chain.chain_id.try_into()) {
-                    (Some(tc), Ok(id)) => {
-                        call_get_balance_for_address(id, &rpc, &token.address, &tc.address, addr)
-                            .await
-                            .map_or_else(
-                                |e| format!("error: {e}"),
-                                |v| format_balance(v, token.decimals),
-                            )
-                    }
-                    (None, _) => "no instance".to_string(),
-                    (_, Err(_)) => "unsupported chain id".to_string(),
+                let deposited = match &chain.trade_contract {
+                    Some(tc) => call_get_balance_for_address(
+                        chain.chain_id as u64,
+                        &rpc,
+                        &token.address,
+                        &tc.address,
+                        addr,
+                    )
+                    .await
+                    .map_or_else(
+                        |e| format!("error: {e}"),
+                        |v| format_balance(v, token.decimals),
+                    ),
+                    None => "no instance".to_string(),
                 };
 
                 println!("    {symbol:<8} wallet {wallet_bal:>22}  deposited {deposited:>22}");

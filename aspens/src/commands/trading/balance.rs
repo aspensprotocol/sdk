@@ -1,12 +1,12 @@
 use alloy::primitives::{Address, Uint};
 use alloy::providers::{Provider, ProviderBuilder};
-use alloy_chains::NamedChain;
 use comfy_table::{Table, presets::UTF8_BORDERS_ONLY};
 use eyre::Result;
 use std::collections::HashMap;
 use tracing::{info, warn};
 use url::Url;
 
+use crate::chain_client::named_chain_for;
 use crate::chain_client::{ARCH_SOLANA, ChainClient};
 use crate::commands::config::config_pb::{Chain, Configuration, GetConfigResponse};
 use crate::evm::rpc::{IERC20, MidribV3};
@@ -292,8 +292,6 @@ async fn query_token_balance_via_client(
             if contract_address.is_empty() {
                 ("not deployed".to_string(), "not deployed".to_string())
             } else {
-                let named_chain =
-                    NamedChain::try_from(chain.chain_id as u64).unwrap_or(NamedChain::BaseSepolia);
                 // Reuse existing EVM helpers — they need a privkey to derive the address,
                 // but we already have the address. Use *_for_address variants.
                 let owner: Address = match owner_address.parse() {
@@ -308,7 +306,7 @@ async fn query_token_balance_via_client(
                     }
                 };
                 let available = call_get_balance_for_address(
-                    named_chain,
+                    chain.chain_id as u64,
                     &chain.rpc_url,
                     &token.address,
                     &contract_address,
@@ -476,8 +474,12 @@ pub async fn balance_from_config_with_wallets(
 
 /// Read the trader's available trade balance from MidribV3's
 /// `tradeBalance(owner, token)` accessor.
+/// `chain_id` rather than a `NamedChain`: alloy's registry has no variant for
+/// every EVM chain the venue can list (HyperEVM testnet 998 is one), and
+/// demanding one made venue custody unqueryable there. `tradeBalance` is a
+/// plain `eth_call`, so the metadata is optional — see [`named_chain_for`].
 pub async fn call_get_balance_for_address(
-    chain: NamedChain,
+    chain_id: u64,
     rpc_url: &str,
     token_address: &str,
     contract_address: &str,
@@ -486,9 +488,13 @@ pub async fn call_get_balance_for_address(
     let contract_addr: Address = contract_address.parse()?;
     let token_addr: Address = token_address.parse()?;
     let rpc_url = Url::parse(rpc_url)?;
-    let provider = ProviderBuilder::new()
-        .with_chain(chain)
-        .connect_http(rpc_url);
+    let provider = match named_chain_for(chain_id) {
+        Some(named) => ProviderBuilder::new()
+            .with_chain(named)
+            .connect_http(rpc_url)
+            .erased(),
+        None => ProviderBuilder::new().connect_http(rpc_url).erased(),
+    };
     let contract = MidribV3::new(contract_addr, &provider);
     let result = contract
         .tradeBalance(depositer_address, token_addr)

@@ -99,11 +99,18 @@ impl ChainClient {
             ChainClient::Evm { rpc_url, chain_id } => {
                 use crate::evm::rpc::IERC20;
                 let url = Url::parse(rpc_url)?;
-                let named_chain =
-                    NamedChain::try_from(*chain_id as u64).unwrap_or(NamedChain::BaseSepolia);
-                let provider = ProviderBuilder::new()
-                    .with_chain(named_chain)
-                    .connect_http(url);
+                // Apply alloy's chain metadata only when the id is one it
+                // knows. This used to `unwrap_or(BaseSepolia)`, which meant an
+                // unknown id (HyperEVM testnet 998, anvil, any new rollup) read
+                // balances through a DIFFERENT chain's provider config.
+                // `balanceOf` is a plain eth_call, so no metadata is needed.
+                let provider = match named_chain_for(*chain_id as u64) {
+                    Some(named) => ProviderBuilder::new()
+                        .with_chain(named)
+                        .connect_http(url)
+                        .erased(),
+                    None => ProviderBuilder::new().connect_http(url).erased(),
+                };
                 let token_addr: Address = token.address.parse()?;
                 let owner_addr: Address = owner.parse()?;
                 let contract = IERC20::new(token_addr, &provider);
@@ -129,6 +136,23 @@ impl ChainClient {
             }
         }
     }
+}
+
+/// alloy's [`NamedChain`] for `chain_id`, or `None` when alloy does not know it.
+///
+/// `None` is a normal, working outcome — not a failure. A chain outside alloy's
+/// registry (HyperEVM testnet 998, local anvil, a fresh rollup) is still a
+/// standard EVM chain: the RPC reports its own id, transactions are signed
+/// externally, and the only thing lost is alloy's chain-specific metadata.
+/// Callers should build the provider WITHOUT `.with_chain(..)` in that case,
+/// which is what the arborter does (`chain-evm/src/market.rs`).
+///
+/// What callers must NOT do is substitute some other chain. An earlier version
+/// of `ChainClient::token_balance` fell back to `NamedChain::BaseSepolia`, so
+/// every provider built for an unknown id silently carried a different chain's
+/// metadata. Wrong-chain is strictly worse than no-chain.
+pub fn named_chain_for(chain_id: u64) -> Option<NamedChain> {
+    NamedChain::try_from(chain_id).ok()
 }
 
 /// The env-var key a client sets to supply its own RPC endpoint for `network`:
@@ -184,6 +208,46 @@ fn resolve_rpc_url_with(
          (it can embed an API key). Set {} to your own RPC URL for '{network}'.",
         rpc_override_env_key(network)
     ))
+}
+
+#[cfg(test)]
+mod named_chain_tests {
+    use super::*;
+
+    /// alloy's registry is the source of truth for ids it KNOWS. These two are
+    /// pinned because the stack trades on both and they behave differently.
+    #[test]
+    fn known_ids_resolve_to_their_named_chain() {
+        assert_eq!(named_chain_for(114), Some(NamedChain::FlareCoston2));
+        // Hyperliquid MAINNET is in the registry...
+        assert_eq!(named_chain_for(999), Some(NamedChain::Hyperliquid));
+    }
+
+    /// ...its TESTNET (998) is not, and that must be `None` rather than an
+    /// error or a substitute. A generic EVM chain is perfectly usable — the RPC
+    /// supplies the chain id — it just gets no alloy metadata.
+    #[test]
+    fn hyperevm_testnet_is_unnamed_not_an_error() {
+        assert_eq!(named_chain_for(998), None);
+    }
+
+    /// The bug this replaces: an unknown id silently became BaseSepolia, so
+    /// every provider built for HyperEVM testnet carried another chain's
+    /// metadata. Wrong-chain is worse than no-chain — assert we never return a
+    /// chain that is not the one asked for.
+    #[test]
+    fn an_unknown_id_never_substitutes_a_different_chain() {
+        for id in [998u64, 31337, 1337, 424242] {
+            match named_chain_for(id) {
+                None => {}
+                Some(c) => assert_eq!(
+                    u64::from(c),
+                    id,
+                    "id {id} resolved to a DIFFERENT chain ({c:?}) — a silent substitution"
+                ),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
