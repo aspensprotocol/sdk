@@ -1,11 +1,11 @@
 use std::str::FromStr;
 
+use crate::chain_client::named_chain_for;
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, Bytes, U256};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::Signer;
 use alloy::signers::local::PrivateKeySigner;
-use alloy_chains::NamedChain;
 use eyre::Result;
 use url::Url;
 
@@ -404,25 +404,13 @@ async fn call_withdraw_from_config_evm(
         .address
         .clone();
 
-    // Derive NamedChain from chain_id
-    let chain_type = match chain.chain_id {
-        1 => NamedChain::Mainnet,
-        5 => NamedChain::Goerli,
-        11155111 => NamedChain::Sepolia,
-        8453 => NamedChain::Base,
-        84531 => NamedChain::BaseGoerli,
-        84532 => NamedChain::BaseSepolia,
-        10 => NamedChain::Optimism,
-        420 => NamedChain::OptimismGoerli,
-        11155420 => NamedChain::OptimismSepolia,
-        _ => {
-            tracing::warn!(
-                "Unknown chain ID {}, using chain ID directly",
-                chain.chain_id
-            );
-            NamedChain::try_from(chain.chain_id as u64)?
-        }
-    };
+    // alloy's chain metadata, when alloy knows the id. The hand-written match
+    // this replaces listed nine chains and then ERRORED on anything else, so a
+    // chain the venue happily lists but alloy has no variant for -- HyperEVM
+    // testnet 998 -- could not deposit or withdraw at all. See
+    // [`named_chain_for`]: an unnamed chain is a normal EVM chain, it just gets
+    // no metadata. The RPC reports its own id and the tx is signed here.
+    let named_chain = named_chain_for(chain.chain_id as u64);
 
     tracing::info!(
         "Withdrawing {} {} from {} (chain_id: {}, rpc: {})",
@@ -441,10 +429,17 @@ async fn call_withdraw_from_config_evm(
     // submit share it.
     let wallet = EthereumWallet::new(signer.clone());
     let rpc_url = Url::parse(&chain.rpc_url)?;
-    let provider = ProviderBuilder::new()
-        .with_chain(chain_type)
-        .wallet(wallet)
-        .connect_http(rpc_url);
+    let provider = match named_chain {
+        Some(named) => ProviderBuilder::new()
+            .with_chain(named)
+            .wallet(wallet)
+            .connect_http(rpc_url)
+            .erased(),
+        None => ProviderBuilder::new()
+            .wallet(wallet)
+            .connect_http(rpc_url)
+            .erased(),
+    };
 
     // 1) Pre-flight gas check BEFORE requesting a voucher. A voucher places an
     //    off-chain withdraw HOLD on the funds (reserved until the voucher lands
