@@ -190,6 +190,68 @@ pub struct TradeRecord {
     pub quantity: String,
     #[serde(rename = "orderHit")]
     pub order_hit: u64,
+    /// `"MAKER"` | `"TAKER"` | `""` — which side bought, and which sold.
+    ///
+    /// Side is NOT derivable without these, and neither is fill attribution
+    /// without the addresses below. They are defaulted rather than required so
+    /// this SDK still decodes a response from an older adapter that predates
+    /// them — an omission there should degrade, not fail.
+    #[serde(rename = "buyerIs", default)]
+    pub buyer_is: String,
+    #[serde(rename = "sellerIs", default)]
+    pub seller_is: String,
+    /// Empty when the arborter redacted that side as hidden. Keep it empty:
+    /// substituting the visible side's address flips the "is this my fill?"
+    /// comparison and attributes someone else's trade to the user.
+    #[serde(rename = "makerBaseAddress", default)]
+    pub maker_base_address: String,
+    #[serde(rename = "makerQuoteAddress", default)]
+    pub maker_quote_address: String,
+    #[serde(rename = "takerBaseAddress", default)]
+    pub taker_base_address: String,
+    #[serde(rename = "takerQuoteAddress", default)]
+    pub taker_quote_address: String,
+}
+
+#[cfg(test)]
+mod trade_record_tests {
+    use super::*;
+
+    /// The adapter sends roles and addresses; serde must not silently drop
+    /// them. It did, live on 2026-08-05: the Go adapter and the TS SDK were
+    /// widened together while this struct kept four fields, so every consumer
+    /// of this SDK saw price/qty and nothing else — indistinguishable from the
+    /// adapter never sending them.
+    #[test]
+    fn decodes_the_roles_and_addresses_the_adapter_sends() {
+        let json = r#"{
+            "timestamp": 1785870359683,
+            "price": "1000000",
+            "quantity": "2000000",
+            "orderHit": 2262015529707170898,
+            "buyerIs": "TAKER",
+            "sellerIs": "MAKER",
+            "makerBaseAddress": "0xmb",
+            "makerQuoteAddress": "0xmq",
+            "takerBaseAddress": "0xtb",
+            "takerQuoteAddress": "0xtq"
+        }"#;
+        let t: TradeRecord = serde_json::from_str(json).expect("decode");
+        assert_eq!(t.buyer_is, "TAKER");
+        assert_eq!(t.seller_is, "MAKER");
+        assert_eq!(t.maker_base_address, "0xmb");
+        assert_eq!(t.taker_base_address, "0xtb");
+    }
+
+    /// An older adapter that predates the widening must still decode: the new
+    /// fields degrade to empty rather than failing the whole response.
+    #[test]
+    fn tolerates_an_adapter_that_omits_the_new_fields() {
+        let json = r#"{"timestamp":1,"price":"1","quantity":"1","orderHit":2}"#;
+        let t: TradeRecord = serde_json::from_str(json).expect("decode");
+        assert_eq!(t.buyer_is, "");
+        assert_eq!(t.maker_base_address, "");
+    }
 }
 
 #[cfg(test)]
