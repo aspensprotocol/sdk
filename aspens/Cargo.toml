@@ -154,3 +154,7 @@ required-features = ["client"]
 [[example]]
 name = "fce_live"
 required-features = ["fce"]
+
+[[example]]
+name = "fce_balances"
+required-features = ["fce"]
