@@ -9,11 +9,11 @@ pub mod arborter_pb {
 // call / signing logic.
 mod display;
 
+use crate::chain_client::named_chain_for;
 use crate::wallet::Wallet;
 use alloy::primitives::{Address, U256};
-use alloy::providers::ProviderBuilder;
+use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::PrivateKeySigner;
-use alloy_chains::NamedChain;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{Order, SendOrderRequest, SendOrderResponse};
 use eyre::Result;
@@ -107,12 +107,17 @@ async fn query_deposited_balance(
     let token_addr: Address = token_address.parse()?;
     let rpc_url = Url::parse(rpc_url)?;
 
-    // Try to get NamedChain, fallback to a default
-    let named_chain = NamedChain::try_from(chain_id as u64).unwrap_or(NamedChain::BaseSepolia);
-
-    let provider = ProviderBuilder::new()
-        .with_chain(named_chain)
-        .connect_http(rpc_url);
+    // Chain metadata only when alloy knows the id; `tradeBalance` is a plain
+    // eth_call and needs none. This used to `unwrap_or(BaseSepolia)`, silently
+    // reading balances through another chain's provider config on any id
+    // outside alloy's registry (HyperEVM testnet 998, anvil, a new rollup).
+    let provider = match named_chain_for(chain_id as u64) {
+        Some(named) => ProviderBuilder::new()
+            .with_chain(named)
+            .connect_http(rpc_url)
+            .erased(),
+        None => ProviderBuilder::new().connect_http(rpc_url).erased(),
+    };
     let contract = MidribV3::new(contract_addr, &provider);
     let result = contract
         .tradeBalance(user_address, token_addr)
