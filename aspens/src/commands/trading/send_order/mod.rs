@@ -517,8 +517,11 @@ async fn enhance_balance_error(
     let trade_contract = chain.trade_contract.as_ref()?;
     let token = chain.tokens.get(token_symbol)?;
 
+    // The arborter masks rpc_url; this returns Option, so an unresolvable
+    // endpoint degrades to "no balance shown" rather than a hard failure.
+    let rpc = crate::chain_client::chain_rpc_url(chain).ok()?;
     let deposited_balance = query_deposited_balance(
-        &chain.rpc_url,
+        &rpc,
         &token.address,
         &trade_contract.address,
         user_address,

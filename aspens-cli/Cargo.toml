@@ -15,7 +15,20 @@ path = "src/main.rs"
 # aspens crate's default features don't silently affect this binary.
 # `dcap-fetch` adds the TDX attestation verifier + collateral fetcher
 # (the `verify-attestation` command).
-aspens = { path = "../aspens", default-features = false, features = ["client", "trader", "evm", "solana", "formatting", "dcap-fetch"] }
+aspens = { path = "../aspens", default-features = false, features = [
+  "client",
+  "trader",
+  "evm",
+  "solana",
+  "formatting",
+  "dcap-fetch",
+  # FCE direct-action transport. Without it the CLI can only reach an
+  # arborter over gRPC, which is unreachable when the arborter runs inside
+  # a Confidential Space image — deposits, trades and even config discovery
+  # all fail. Auto-selected at runtime by EXT_PROXY_URL + DIRECT_API_KEY, so
+  # enabling it changes nothing for gRPC stacks.
+  "fce",
+] }
 aspens-cliutil = { path = "../aspens-cliutil" }
 
 # Workspace dependencies

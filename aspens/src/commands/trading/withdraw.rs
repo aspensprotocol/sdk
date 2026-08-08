@@ -286,7 +286,13 @@ async fn solana_withdraw(
     let mut last_err = None;
     let mut sig = None;
     for attempt in 0..VOUCHER_SUBMIT_MAX_ATTEMPTS {
-        match crate::solana::client::submit_user_signed_multi(&chain.rpc_url, keypair, &ixs).await {
+        match crate::solana::client::submit_user_signed_multi(
+            &crate::chain_client::chain_rpc_url(chain)?,
+            keypair,
+            &ixs,
+        )
+        .await
+        {
             Ok(s) => {
                 sig = Some(s);
                 break;
@@ -428,7 +434,8 @@ async fn call_withdraw_from_config_evm(
     // Build the wallet-enabled provider up front so the gas pre-check and the
     // submit share it.
     let wallet = EthereumWallet::new(signer.clone());
-    let rpc_url = Url::parse(&chain.rpc_url)?;
+    // The arborter masks rpc_url; the client-side override is authoritative.
+    let rpc_url = Url::parse(&crate::chain_client::chain_rpc_url(chain)?)?;
     let provider = match named_chain {
         Some(named) => ProviderBuilder::new()
             .with_chain(named)
