@@ -110,7 +110,7 @@ struct OrderFlags {
     hidden: bool,
 }
 
-fn dispatch_send_order(
+async fn dispatch_send_order(
     executor: &DirectExecutor,
     client: &AspensClient,
     market: String,
@@ -120,8 +120,9 @@ fn dispatch_send_order(
     flags: OrderFlags,
 ) -> Result<SendOrderResponse> {
     let stack_url = client.stack_url().to_string();
-    let config = executor
-        .execute(aspens::commands::config::get_config(stack_url.clone()))
+    let config = client
+        .get_config()
+        .await
         .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
     // Load both wallets if available. The lib picks whichever one matches
     // each chain's architecture (and errors if neither matches).
@@ -189,7 +190,7 @@ fn dispatch_send_order(
 /// ceiling / floor that the contract can verify, and the slippage
 /// cap is how the user controls "how aggressively will I cross the
 /// spread".
-fn resolve_marketable_price(
+async fn resolve_marketable_price(
     executor: &DirectExecutor,
     client: &AspensClient,
     market_id: &str,
@@ -204,8 +205,9 @@ fn resolve_marketable_price(
     // round-tripping through human-readable form keeps the API
     // surface consistent with what users see from the buy-limit /
     // sell-limit commands.
-    let config = executor
-        .execute(aspens::commands::config::get_config(stack_url.clone()))
+    let config = client
+        .get_config()
+        .await
         .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
     let market = send_order::lookup_market(&config, market_id)
         .map_err(|e| eyre::eyre!(format_error(&e, &format!("look up market {market_id}"))))?;
@@ -604,9 +606,9 @@ async fn run() -> Result<()> {
         } => {
             info!("Depositing {amount} {token} on {network}");
 
-            let stack_url = client.stack_url().to_string();
-            let config = executor
-                .execute(aspens::commands::config::get_config(stack_url))
+            let config = client
+                .get_config()
+                .await
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let context = format!("deposit {} {} on {}", amount, token, network);
             let amount_base = resolve_token_amount(&config, &network, &token, &amount)
@@ -637,8 +639,9 @@ async fn run() -> Result<()> {
             info!("Withdrawing {amount} {token} from {network}");
 
             let stack_url = client.stack_url().to_string();
-            let config = executor
-                .execute(aspens::commands::config::get_config(stack_url.clone()))
+            let config = client
+                .get_config()
+                .await
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let context = format!("withdraw {} {} from {}", amount, token, network);
             let amount_base = resolve_token_amount(&config, &network, &token, &amount)
@@ -681,7 +684,8 @@ async fn run() -> Result<()> {
                     post_only: false, // meaningless for market orders
                     hidden,
                 },
-            )?;
+            )
+            .await?;
             info!(
                 "Market buy order sent successfully (order_id: {})",
                 result.order_id
@@ -707,7 +711,8 @@ async fn run() -> Result<()> {
                 amount,
                 Some(price),
                 OrderFlags { post_only, hidden },
-            )?;
+            )
+            .await?;
             info!(
                 "Limit buy order sent successfully (order_id: {})",
                 result.order_id
@@ -731,7 +736,8 @@ async fn run() -> Result<()> {
                     post_only: false, // meaningless for market orders
                     hidden,
                 },
-            )?;
+            )
+            .await?;
             info!(
                 "Market sell order sent successfully (order_id: {})",
                 result.order_id
@@ -757,7 +763,8 @@ async fn run() -> Result<()> {
                 amount,
                 Some(price),
                 OrderFlags { post_only, hidden },
-            )?;
+            )
+            .await?;
             info!(
                 "Limit sell order sent successfully (order_id: {})",
                 result.order_id
@@ -771,7 +778,8 @@ async fn run() -> Result<()> {
             hidden,
         } => {
             let price =
-                resolve_marketable_price(&executor, &client, &market, Side::Bid, slippage_bps)?;
+                resolve_marketable_price(&executor, &client, &market, Side::Bid, slippage_bps)
+                    .await?;
             info!(
                 "Sending marketable BUY for {amount} on {market} (slippage cap {} bps -> price {}, hidden={})",
                 slippage_bps, price, hidden
@@ -789,7 +797,8 @@ async fn run() -> Result<()> {
                     post_only: false,
                     hidden,
                 },
-            )?;
+            )
+            .await?;
             info!(
                 "Marketable buy order sent successfully (order_id: {})",
                 result.order_id
@@ -803,7 +812,8 @@ async fn run() -> Result<()> {
             hidden,
         } => {
             let price =
-                resolve_marketable_price(&executor, &client, &market, Side::Ask, slippage_bps)?;
+                resolve_marketable_price(&executor, &client, &market, Side::Ask, slippage_bps)
+                    .await?;
             info!(
                 "Sending marketable SELL for {amount} on {market} (slippage cap {} bps -> price {}, hidden={})",
                 slippage_bps, price, hidden
@@ -819,7 +829,8 @@ async fn run() -> Result<()> {
                     post_only: false,
                     hidden,
                 },
-            )?;
+            )
+            .await?;
             info!(
                 "Marketable sell order sent successfully (order_id: {})",
                 result.order_id
@@ -834,8 +845,9 @@ async fn run() -> Result<()> {
             info!("Canceling order {order_id} ({side}) on market {market}");
 
             let stack_url = client.stack_url().to_string();
-            let config = executor
-                .execute(aspens::commands::config::get_config(stack_url.clone()))
+            let config = client
+                .get_config()
+                .await
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let context = format!("cancel order {} on {}", order_id, market);
             let origin = origin_network_for_side(&config, &market, parse_side(&side)?)
@@ -869,12 +881,10 @@ async fn run() -> Result<()> {
             }
         }
         Commands::Balance => {
-            use aspens::commands::config;
-
             info!("Fetching balances for all tokens across all chains");
-            let stack_url = client.stack_url().to_string();
-            let config = executor
-                .execute(config::get_config(stack_url))
+            let config = client
+                .get_config()
+                .await
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
             // Chains whose architecture has no matching wallet are rendered
@@ -992,18 +1002,20 @@ async fn run() -> Result<()> {
             );
         }
         Commands::Config { output_file } => {
-            use aspens::commands::config;
-
             let stack_url = client.stack_url().to_string();
             info!("Fetching configuration from {stack_url}");
-            let config = executor
-                .execute(config::get_config(stack_url.clone()))
+            let config = client
+                .get_config()
+                .await
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
 
             // If output_file is provided, save to file
             if let Some(ref path) = output_file {
                 executor
-                    .execute(config::download_config(stack_url.clone(), path.clone()))
+                    .execute(aspens::commands::config::download_config(
+                        stack_url.clone(),
+                        path.clone(),
+                    ))
                     .map_err(|e| {
                         eyre::eyre!(format_error(
                             &e,
@@ -1019,15 +1031,15 @@ async fn run() -> Result<()> {
             }
         }
         Commands::SignerPublicKey { chain_network } => {
-            use aspens::commands::config;
-
             let stack_url = client.stack_url().to_string();
             info!("Fetching signer public key(s) and gas balances from {stack_url}");
             let signer_infos = executor
-                .execute(config::get_signer_public_key_with_balances(
-                    stack_url,
-                    chain_network,
-                ))
+                .execute(
+                    aspens::commands::config::get_signer_public_key_with_balances(
+                        stack_url,
+                        chain_network,
+                    ),
+                )
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch signer public key(s)")))?;
 
             println!("Signer Public Keys:");
@@ -1051,8 +1063,9 @@ async fn run() -> Result<()> {
             }
 
             let stack_url = client.stack_url().to_string();
-            let config = executor
-                .execute(aspens::commands::config::get_config(stack_url.clone()))
+            let config = client
+                .get_config()
+                .await
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let resolved_market = send_order::lookup_market(&config, &market)
                 .map_err(|e| eyre::eyre!(format_error(&e, "look up market")))?;
@@ -1098,8 +1111,9 @@ async fn run() -> Result<()> {
             }
 
             let stack_url = client.stack_url().to_string();
-            let config = executor
-                .execute(aspens::commands::config::get_config(stack_url.clone()))
+            let config = client
+                .get_config()
+                .await
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
             let resolved_market = send_order::lookup_market(&config, &market)
                 .map_err(|e| eyre::eyre!(format_error(&e, "look up market")))?;
@@ -1131,8 +1145,6 @@ async fn run() -> Result<()> {
             report_data,
             output,
         } => {
-            use aspens::commands::config;
-
             info!("Fetching TEE attestation from signer");
 
             let stack_url = client.stack_url().to_string();
@@ -1169,7 +1181,10 @@ async fn run() -> Result<()> {
             }
 
             let response = executor
-                .execute(config::get_attestation(stack_url, report_data_bytes))
+                .execute(aspens::commands::config::get_attestation(
+                    stack_url,
+                    report_data_bytes,
+                ))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch TEE attestation")))?;
 
             match output.as_str() {
@@ -1206,7 +1221,10 @@ async fn run() -> Result<()> {
                 _ => {
                     // Default text output
                     if let Some(report) = &response.report {
-                        print!("{}", config::format_attestation_report(report));
+                        print!(
+                            "{}",
+                            aspens::commands::config::format_attestation_report(report)
+                        );
                     } else {
                         println!("No attestation report available");
                     }
@@ -1232,7 +1250,6 @@ async fn run() -> Result<()> {
             accept_tcb,
             output,
         } => {
-            use aspens::commands::config;
             use aspens::tdx_verify::collateral::{collateral_from_json, fetch_collateral};
             use aspens::tdx_verify::dcap::DcapQuoteVerifier;
             use aspens::tdx_verify::{ExpectedReportData, MeasurementPolicy, verify_attestation};
@@ -1327,8 +1344,11 @@ async fn run() -> Result<()> {
                 let raw_quote = match quote_from_file {
                     Some(q) => q,
                     None => {
-                        let resp =
-                            config::get_attestation(stack_url, Some(nonce_for_request)).await?;
+                        let resp = aspens::commands::config::get_attestation(
+                            stack_url,
+                            Some(nonce_for_request),
+                        )
+                        .await?;
                         resp.report
                             .ok_or_else(|| eyre::eyre!("stack returned no attestation report"))?
                             .raw_quote
