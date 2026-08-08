@@ -200,14 +200,12 @@ async fn solana_user_balance(
         Ok(p) => p,
         Err(_) => return ("bad mint".to_string(), "bad mint".to_string()),
     };
-    match crate::solana::client::fetch_user_balance(
-        &chain.rpc_url,
-        &instance,
-        &user,
-        &mint,
-        &program_id,
-    )
-    .await
+    let rpc = match crate::chain_client::chain_rpc_url(chain) {
+        Ok(u) => u,
+        Err(_) => return ("no rpc".to_string(), "no rpc".to_string()),
+    };
+    match crate::solana::client::fetch_user_balance(&rpc, &instance, &user, &mint, &program_id)
+        .await
     {
         Ok((deposited, locked)) => {
             let available = deposited.saturating_sub(locked);
@@ -241,6 +239,19 @@ async fn query_token_balance_via_client(
     owner_address: &str,
 ) -> ChainBalance {
     let chain_network = chain.network.clone();
+    // Resolved once: the arborter masks rpc_url, so without a client-side
+    // override every read below would fail identically and unhelpfully.
+    let rpc = match crate::chain_client::chain_rpc_url(chain) {
+        Ok(u) => u,
+        Err(_) => {
+            return ChainBalance {
+                chain_network,
+                wallet_balance: "no rpc".to_string(),
+                available_balance: "no rpc".to_string(),
+                locked_balance: "no rpc".to_string(),
+            };
+        }
+    };
     let token = match chain.tokens.get(token_symbol) {
         Some(t) => t,
         None => {
@@ -279,67 +290,65 @@ async fn query_token_balance_via_client(
 
     // Locked/deposited balances come from the trade contract.
     // Solana side is not yet wired up; EVM uses MidribV3.
-    let (available_balance, locked_balance) =
-        if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
-            solana_user_balance(chain, token, owner_address).await
-        } else {
-            let contract_address = chain
-                .trade_contract
-                .as_ref()
-                .map(|tc| tc.address.clone())
-                .unwrap_or_default();
+    let (available_balance, locked_balance) = if chain
+        .architecture
+        .eq_ignore_ascii_case(ARCH_SOLANA)
+    {
+        solana_user_balance(chain, token, owner_address).await
+    } else {
+        let contract_address = chain
+            .trade_contract
+            .as_ref()
+            .map(|tc| tc.address.clone())
+            .unwrap_or_default();
 
-            if contract_address.is_empty() {
-                ("not deployed".to_string(), "not deployed".to_string())
-            } else {
-                // Reuse existing EVM helpers — they need a privkey to derive the address,
-                // but we already have the address. Use *_for_address variants.
-                let owner: Address = match owner_address.parse() {
-                    Ok(a) => a,
-                    Err(_) => {
-                        return ChainBalance {
-                            chain_network,
-                            wallet_balance,
-                            available_balance: "bad address".to_string(),
-                            locked_balance: "bad address".to_string(),
-                        };
-                    }
-                };
-                let available = call_get_balance_for_address(
-                    chain.chain_id as u64,
-                    &chain.rpc_url,
-                    &token.address,
-                    &contract_address,
-                    owner,
-                )
-                .await
-                .map_or_else(
-                    |e| {
-                        warn!(
-                            "Failed to get available balance on {}: {}",
-                            chain_network, e
-                        );
-                        "error".to_string()
-                    },
-                    |v| v.to_string(),
-                );
-                let locked = call_get_locked_balance_for_address(
-                    &chain.rpc_url,
-                    &token.address,
-                    &contract_address,
-                    owner,
-                )
-                .await
-                .map_or_else(
-                    |e| {
-                        warn!("Failed to get locked balance on {}: {}", chain_network, e);
-                        "error".to_string()
-                    },
-                    |v| v.to_string(),
-                );
-                (available, locked)
-            }
-        };
+        if contract_address.is_empty() {
+            ("not deployed".to_string(), "not deployed".to_string())
+        } else {
+            // Reuse existing EVM helpers — they need a privkey to derive the address,
+            // but we already have the address. Use *_for_address variants.
+            let owner: Address = match owner_address.parse() {
+                Ok(a) => a,
+                Err(_) => {
+                    return ChainBalance {
+                        chain_network,
+                        wallet_balance,
+                        available_balance: "bad address".to_string(),
+                        locked_balance: "bad address".to_string(),
+                    };
+                }
+            };
+            let available = call_get_balance_for_address(
+                chain.chain_id as u64,
+                &rpc,
+                &token.address,
+                &contract_address,
+                owner,
+            )
+            .await
+            .map_or_else(
+                |e| {
+                    warn!(
+                        "Failed to get available balance on {}: {}",
+                        chain_network, e
+                    );
+                    "error".to_string()
+                },
+                |v| v.to_string(),
+            );
+            let locked =
+                call_get_locked_balance_for_address(&rpc, &token.address, &contract_address, owner)
+                    .await
+                    .map_or_else(
+                        |e| {
+                            warn!("Failed to get locked balance on {}: {}", chain_network, e);
+                            "error".to_string()
+                        },
+                        |v| v.to_string(),
+                    );
+            (available, locked)
+        }
+    };
 
     ChainBalance {
         chain_network,

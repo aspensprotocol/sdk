@@ -138,6 +138,16 @@ impl ChainClient {
     }
 }
 
+/// The usable RPC endpoint for `chain`, honouring the client-side override.
+///
+/// Prefer this over reading `chain.rpc_url` directly. The arborter MASKS that
+/// field in `GetConfig` (it can embed an API key), so the raw value is normally
+/// the literal `********` — parsing it yields the memorable and thoroughly
+/// unhelpful "relative URL without a base", several layers from the cause.
+pub fn chain_rpc_url(chain: &crate::commands::config::config_pb::Chain) -> Result<String> {
+    resolve_rpc_url(&chain.network, &chain.rpc_url)
+}
+
 /// alloy's [`NamedChain`] for `chain_id`, or `None` when alloy does not know it.
 ///
 /// `None` is a normal, working outcome — not a failure. A chain outside alloy's

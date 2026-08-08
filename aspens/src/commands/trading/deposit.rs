@@ -129,13 +129,22 @@ async fn solana_deposit(
         let wrap_ix = crate::solana::system_transfer_ix(&user, &user_ata, amount);
         let sync_ix = crate::solana::sync_native_ix(&user_ata);
         let ixs = [ata_ix, wrap_ix, sync_ix, ix];
-        let sig =
-            crate::solana::client::submit_user_signed_multi(&chain.rpc_url, keypair, &ixs).await?;
+        let sig = crate::solana::client::submit_user_signed_multi(
+            &crate::chain_client::chain_rpc_url(chain)?,
+            keypair,
+            &ixs,
+        )
+        .await?;
         tracing::info!("Solana native (wrapped-SOL) deposit confirmed: {}", sig);
         return Ok(());
     }
 
-    let sig = crate::solana::client::submit_user_signed(&chain.rpc_url, keypair, ix).await?;
+    let sig = crate::solana::client::submit_user_signed(
+        &crate::chain_client::chain_rpc_url(chain)?,
+        keypair,
+        ix,
+    )
+    .await?;
     tracing::info!("Solana deposit confirmed: {}", sig);
     Ok(())
 }
@@ -236,7 +245,8 @@ async fn call_deposit_from_config_evm(
     let token_addr: Address = token.address.parse()?;
     let signer_address = signer.address();
     let wallet = EthereumWallet::new(signer);
-    let rpc_url = Url::parse(&chain.rpc_url)?;
+    // The arborter masks rpc_url; the client-side override is authoritative.
+    let rpc_url = Url::parse(&crate::chain_client::chain_rpc_url(chain)?)?;
 
     // Set up the provider
     let provider = match named_chain {
