@@ -56,6 +56,13 @@ impl FceClient {
         self
     }
 
+    /// The active poll schedule, `(attempts, interval)` — lets the builder's
+    /// tests assert what the env actually configured.
+    #[cfg(test)]
+    pub(crate) fn polling(&self) -> (u32, Duration) {
+        (self.poll_attempts, self.poll_interval)
+    }
+
     // ---- typed direct actions ----
 
     pub async fn place_order(
