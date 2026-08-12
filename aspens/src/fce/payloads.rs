@@ -49,6 +49,7 @@ pub struct PlaceOrderRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaceOrderResponse {
     #[serde(rename = "orderId")]
+    #[serde(with = "crate::fce::wire::u64_string")]
     pub order_id: u64,
     #[serde(rename = "orderInBook")]
     pub order_in_book: bool,
@@ -67,6 +68,7 @@ pub struct CancelOrderRequest {
     pub token_address: String,
     /// arborter-internal order id.
     #[serde(rename = "orderId")]
+    #[serde(with = "crate::fce::wire::u64_string")]
     pub order_id: u64,
     #[serde(rename = "signatureHash", with = "hexbytes")]
     pub signature_hash: Vec<u8>,
@@ -101,7 +103,9 @@ pub struct WithdrawVoucher {
     pub account: String,
     pub token: String,
     pub amount: String,
+    #[serde(with = "crate::fce::wire::u64_string")]
     pub nonce: u64,
+    #[serde(with = "crate::fce::wire::u64_string")]
     pub expiry: u64,
     #[serde(with = "hexbytes")]
     pub signature: Vec<u8>,
@@ -137,6 +141,7 @@ pub struct GetMyStateResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenOrder {
     #[serde(rename = "orderId")]
+    #[serde(with = "crate::fce::wire::u64_string")]
     pub order_id: u64,
     #[serde(rename = "marketId")]
     pub market_id: String,
@@ -185,10 +190,12 @@ pub struct ExportHistoryResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeRecord {
+    #[serde(with = "crate::fce::wire::u64_string")]
     pub timestamp: u64,
     pub price: String,
     pub quantity: String,
     #[serde(rename = "orderHit")]
+    #[serde(with = "crate::fce::wire::u64_string")]
     pub order_hit: u64,
     /// `"MAKER"` | `"TAKER"` | `""` — which side bought, and which sold.
     ///

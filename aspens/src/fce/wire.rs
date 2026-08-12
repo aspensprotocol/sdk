@@ -79,6 +79,41 @@ pub(crate) mod hex32 {
     }
 }
 
+/// A `u64` that crosses the JSON wire as a QUOTED STRING.
+///
+/// JavaScript numbers are doubles, so any integer above 2^53 is rounded by
+/// `JSON.parse`. In production the arborter held order 173852891691592598, the
+/// browser read 173852891691592600, and every cancel failed with NotFound while
+/// the order sat in the book with its collateral reserved. Rust would not have
+/// rounded it, but it shares the wire, so it has to agree on the encoding —
+/// see `types.U64String` on the Go side.
+///
+/// Serializes as a string always. Deserializes from either a string or a bare
+/// number, so both ends do not have to ship at once.
+pub mod u64_string {
+    use super::*;
+    use serde::de::{Error as DeError, Unexpected};
+
+    pub fn serialize<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&v.to_string())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+        match serde_json::Value::deserialize(d)? {
+            serde_json::Value::String(s) => s
+                .parse::<u64>()
+                .map_err(|e| D::Error::custom(format!("u64 string {s:?}: {e}"))),
+            serde_json::Value::Number(n) => n.as_u64().ok_or_else(|| {
+                D::Error::invalid_value(Unexpected::Other(&n.to_string()), &"a u64")
+            }),
+            other => Err(D::Error::invalid_type(
+                Unexpected::Other(&other.to_string()),
+                &"a u64 as string or number",
+            )),
+        }
+    }
+}
+
 /// `0x`-prefixed hex for a variable-length byte slice (go-ethereum
 /// `hexutil.Bytes`). Empty bytes serialize as `"0x"`; `"0x"` deserializes to
 /// empty (matches go-ethereum).
@@ -181,5 +216,65 @@ mod tests {
         assert_eq!(v["message"], "0x");
         let back: DirectInstruction = serde_json::from_value(v).unwrap();
         assert!(back.message.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod u64_string_tests {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    struct Holder {
+        #[serde(with = "super::u64_string")]
+        id: u64,
+    }
+
+    /// The id that broke cancel in production.
+    const TRUE_ID: u64 = 173_852_891_691_592_598;
+
+    #[test]
+    fn serializes_as_a_quoted_string() {
+        let j = serde_json::to_string(&Holder { id: TRUE_ID }).unwrap();
+        assert_eq!(j, r#"{"id":"173852891691592598"}"#);
+    }
+
+    #[test]
+    fn round_trips_every_u64_exactly() {
+        for id in [
+            TRUE_ID,
+            6_755_360_711_411_187_334,
+            1 << 53,
+            (1 << 53) + 1,
+            u64::MAX,
+            0,
+        ] {
+            let j = serde_json::to_string(&Holder { id }).unwrap();
+            let back: Holder = serde_json::from_str(&j).unwrap();
+            assert_eq!(back.id, id, "round trip lost precision for {id}");
+        }
+    }
+
+    #[test]
+    fn accepts_a_bare_number_for_compatibility() {
+        let h: Holder = serde_json::from_str(r#"{"id":42}"#).unwrap();
+        assert_eq!(h.id, 42);
+    }
+
+    #[test]
+    fn rejects_non_integers_and_overflow() {
+        for bad in [
+            r#"{"id":"1.5"}"#,
+            r#"{"id":1.5}"#,
+            r#"{"id":"-1"}"#,
+            r#"{"id":-1}"#,
+            r#"{"id":"abc"}"#,
+            r#"{"id":"18446744073709551616"}"#,
+            r#"{"id":null}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Holder>(bad).is_err(),
+                "accepted {bad}"
+            );
+        }
     }
 }
