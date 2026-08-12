@@ -46,12 +46,20 @@ impl ChainClient {
     /// Dispatches on `chain.architecture`:
     /// - `"EVM"` (or empty/anything else for backward compat) → Alloy provider
     /// - `"Solana"` → Solana RPC client (requires the `solana` feature)
+    ///
+    /// The endpoint goes through [`resolve_rpc_url`], NOT `chain.rpc_url`
+    /// directly: the server masks `rpc_url` (it can embed an API key), so the
+    /// raw field is usually the literal `"********"`. Resolving here rather
+    /// than at each call site means no caller can reintroduce that — reaching
+    /// for `chain.rpc_url` was what silently broke every wallet and native
+    /// balance read while the deposited column beside them stayed correct.
     pub fn from_chain_config(chain: &Chain) -> Result<Self> {
+        let rpc_url = resolve_rpc_url(&chain.network, &chain.rpc_url)?;
         if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
             #[cfg(feature = "solana")]
             {
                 return Ok(ChainClient::Solana {
-                    client: SolanaRpcClient::new(chain.rpc_url.clone()),
+                    client: SolanaRpcClient::new(rpc_url),
                 });
             }
             #[cfg(not(feature = "solana"))]
@@ -63,7 +71,7 @@ impl ChainClient {
             }
         }
         Ok(ChainClient::Evm {
-            rpc_url: chain.rpc_url.clone(),
+            rpc_url,
             chain_id: chain.chain_id,
         })
     }
@@ -309,6 +317,58 @@ mod rpc_resolve_tests {
     #[test]
     fn empty_server_without_override_errors() {
         assert!(resolve_rpc_url_with("net", None, "").is_err());
+    }
+
+    /// RPC-MASK-2 regression. `from_chain_config` used to take
+    /// `chain.rpc_url` verbatim, so against a masking server it happily
+    /// returned a client holding `"********"`. Every read through it then died
+    /// in `Url::parse` with `relative URL without a base` — and because the
+    /// deposited/locked reads resolve the endpoint separately, `balance`
+    /// printed `error` in the wallet column next to a correct deposited
+    /// figure. Fail at construction instead, naming the env key to set.
+    ///
+    /// The network name is unique to this test so the override key cannot be
+    /// set by another test running in parallel (`resolve_rpc_url` reads the
+    /// process env, which is global).
+    #[test]
+    fn from_chain_config_rejects_a_masked_url_rather_than_building_a_broken_client() {
+        let chain = Chain {
+            network: "rpc-mask-2-regression".to_string(),
+            rpc_url: "********".to_string(),
+            chain_id: 114,
+            ..Default::default()
+        };
+        // Matched rather than `expect_err`: that needs `T: Debug`, and adding
+        // `Debug` to a public client type just to satisfy a test is the wrong
+        // trade — the Solana variant would have to derive it too.
+        let err = match ChainClient::from_chain_config(&chain) {
+            Ok(_) => panic!("a masked rpc_url must not yield a client"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("ASPENS_RPC_URL_RPC_MASK_2_REGRESSION"),
+            "error should name the env key to set, got: {err}"
+        );
+    }
+
+    /// The unmasked case is unchanged: a stack that serves a real `rpc_url`
+    /// (local anvil, any non-masking server) still works with no override set.
+    #[test]
+    fn from_chain_config_keeps_using_a_usable_server_url() {
+        let chain = Chain {
+            network: "rpc-mask-2-unmasked".to_string(),
+            rpc_url: "http://localhost:8545".to_string(),
+            chain_id: 31337,
+            ..Default::default()
+        };
+        match ChainClient::from_chain_config(&chain).expect("usable url builds a client") {
+            ChainClient::Evm { rpc_url, chain_id } => {
+                assert_eq!(rpc_url, "http://localhost:8545");
+                assert_eq!(chain_id, 31337);
+            }
+            #[cfg(feature = "solana")]
+            ChainClient::Solana { .. } => panic!("expected an EVM client"),
+        }
     }
 }
 
