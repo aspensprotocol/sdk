@@ -333,7 +333,25 @@ impl AspensClientBuilder {
                     .map(|u| (u.clone(), env_vars.get("DIRECT_API_KEY").cloned()))
             });
             match cfg {
-                Some((url, key)) => Transport::Fce(crate::fce::FceClient::new(url, key)?),
+                Some((url, key)) => {
+                    let mut fce = crate::fce::FceClient::new(url, key)?;
+                    // The ext-proxy queues direct actions, so end-to-end latency
+                    // is the queue depth, not the arborter. A backlogged proxy
+                    // pushes a result minutes out and the 15 × 2s default gives
+                    // up long before it lands — the action still executed, which
+                    // reads as a silent failure. Let the caller widen the wait.
+                    if let Some(attempts) = env_vars
+                        .get("FCE_POLL_ATTEMPTS")
+                        .and_then(|v| v.parse::<u32>().ok())
+                    {
+                        let interval = env_vars
+                            .get("FCE_POLL_INTERVAL_SECS")
+                            .and_then(|v| v.parse::<u64>().ok())
+                            .unwrap_or(2);
+                        fce = fce.with_polling(attempts, std::time::Duration::from_secs(interval));
+                    }
+                    Transport::Fce(fce)
+                }
                 None => Transport::Grpc,
             }
         };
@@ -441,5 +459,61 @@ mod tests {
         assert_eq!(env_vars.get("SINGLE_QUOTED"), Some(&"value2".to_string()));
         assert_eq!(env_vars.get("UNQUOTED"), Some(&"value3".to_string()));
         assert_eq!(env_vars.get("EMPTY_VALUE"), Some(&"".to_string()));
+    }
+
+    /// Builds an FCE-transport client from an env file carrying `extra` lines.
+    #[cfg(feature = "fce")]
+    fn fce_client_from_env(extra: &[&str]) -> AspensClient {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "ASPENS_MARKET_STACK_URL=http://example.com:8080").unwrap();
+        writeln!(file, "EXT_PROXY_URL=http://example.com:6674").unwrap();
+        for line in extra {
+            writeln!(file, "{line}").unwrap();
+        }
+        file.flush().unwrap();
+        AspensClient::builder()
+            .with_env_file(file.path().to_str().unwrap())
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    #[cfg(feature = "fce")]
+    fn fce_poll_schedule_defaults_when_env_absent() {
+        let client = fce_client_from_env(&[]);
+        let (attempts, interval) = client.fce().expect("FCE transport").polling();
+        assert_eq!(attempts, 15);
+        assert_eq!(interval, std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    #[cfg(feature = "fce")]
+    fn fce_poll_schedule_honours_env() {
+        let client = fce_client_from_env(&["FCE_POLL_ATTEMPTS=200", "FCE_POLL_INTERVAL_SECS=10"]);
+        let (attempts, interval) = client.fce().expect("FCE transport").polling();
+        assert_eq!(attempts, 200);
+        assert_eq!(interval, std::time::Duration::from_secs(10));
+    }
+
+    /// The interval is optional: attempts alone widens the wait, keeping the
+    /// 2s default cadence.
+    #[test]
+    #[cfg(feature = "fce")]
+    fn fce_poll_attempts_alone_keeps_default_interval() {
+        let client = fce_client_from_env(&["FCE_POLL_ATTEMPTS=50"]);
+        let (attempts, interval) = client.fce().expect("FCE transport").polling();
+        assert_eq!(attempts, 50);
+        assert_eq!(interval, std::time::Duration::from_secs(2));
+    }
+
+    /// A garbled value must not silently become a 0-attempt schedule — that
+    /// would turn every action into an instant "no result" while it executes.
+    #[test]
+    #[cfg(feature = "fce")]
+    fn fce_poll_schedule_ignores_unparseable_values() {
+        let client = fce_client_from_env(&["FCE_POLL_ATTEMPTS=soon", "FCE_POLL_INTERVAL_SECS=x"]);
+        let (attempts, interval) = client.fce().expect("FCE transport").polling();
+        assert_eq!(attempts, 15);
+        assert_eq!(interval, std::time::Duration::from_secs(2));
     }
 }
