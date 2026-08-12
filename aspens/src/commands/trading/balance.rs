@@ -277,16 +277,25 @@ async fn query_token_balance_via_client(
         }
     };
 
-    let wallet_balance = client
-        .token_balance(token, owner_address)
-        .await
-        .map_or_else(
-            |e| {
-                warn!("Failed to get wallet balance on {}: {}", chain_network, e);
-                "error".to_string()
-            },
-            |v| v.to_string(),
-        );
+    // The NATIVE sentinel is a mapping key, not a contract — `balanceOf` on it
+    // reverts, which printed `error` for the native token row (C2FLR, HYPE)
+    // while the GAS row above showed that very balance correctly. Read the gas
+    // balance for it instead; both are 18-dec so the shared formatter agrees.
+    let is_native_sentinel = token
+        .address
+        .eq_ignore_ascii_case(crate::evm::NATIVE_TOKEN_SENTINEL);
+    let wallet_result = if is_native_sentinel {
+        client.native_balance(owner_address).await
+    } else {
+        client.token_balance(token, owner_address).await
+    };
+    let wallet_balance = wallet_result.map_or_else(
+        |e| {
+            warn!("Failed to get wallet balance on {}: {}", chain_network, e);
+            "error".to_string()
+        },
+        |v| v.to_string(),
+    );
 
     // Locked/deposited balances come from the trade contract.
     // Solana side is not yet wired up; EVM uses MidribV3.
