@@ -199,8 +199,8 @@ pub async fn withdraw(
 /// Cancel an order via FCE, resolving the released token from the config the
 /// way the gRPC path does.
 ///
-/// Delegates the side→token mapping to
-/// [`cancel_order::resolve_side_and_token`] rather than repeating it: the
+/// Delegates the side→token mapping to the gRPC path's own
+/// `super::cancel_order::resolve_side_and_token` rather than repeating it: the
 /// arborter matches the resting order on the signed `OrderToCancel`, so a
 /// transport that resolved a different token would sign a well-formed request
 /// that cancels nothing at all.
