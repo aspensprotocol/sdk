@@ -95,6 +95,49 @@ pub async fn call_cancel_order_with_wallet(
     Ok(response_data)
 }
 
+/// Resolve the `(side, token_address)` pair a cancel must carry: a BID locked
+/// quote-chain funds, an ASK locked base-chain funds, so the token to release is
+/// the one on that side's chain.
+///
+/// Shared by the gRPC and FCE cancel paths. Keep it shared: the arborter
+/// authenticates the signed `OrderToCancel`, so a transport that resolved a
+/// different token would sign a well-formed request that simply never matches
+/// the resting order — a silent no-op cancel, not an error.
+pub(crate) fn resolve_side_and_token(
+    config: &GetConfigResponse,
+    market: &crate::commands::config::config_pb::Market,
+    side: &str,
+) -> Result<(i32, String)> {
+    let (side_value, network, symbol) = match side.to_lowercase().as_str() {
+        "buy" | "bid" => (
+            Side::Bid as i32,
+            &market.quote_chain_network,
+            &market.quote_chain_token_symbol,
+        ),
+        "sell" | "ask" => (
+            Side::Ask as i32,
+            &market.base_chain_network,
+            &market.base_chain_token_symbol,
+        ),
+        _ => {
+            return Err(eyre::eyre!(
+                "Invalid side '{}'. Must be 'buy' or 'sell'",
+                side
+            ));
+        }
+    };
+
+    let chain = config
+        .get_chain(network)
+        .ok_or_else(|| eyre::eyre!("Chain '{}' not found in configuration", network))?;
+    let token = chain
+        .tokens
+        .get(symbol)
+        .ok_or_else(|| eyre::eyre!("Token '{}' not found on chain '{}'", symbol, network))?;
+
+    Ok((side_value, token.address.clone()))
+}
+
 /// Cancel an order using configuration from the server with a curve-agnostic wallet.
 ///
 /// # Arguments
@@ -115,59 +158,7 @@ pub async fn call_cancel_order_from_config_with_wallet(
     // Look up market info
     let market = super::send_order::lookup_market(&config, &market_id)?;
 
-    // Convert side string to Side enum value
-    let (side_value, token_address) = match side.to_lowercase().as_str() {
-        "buy" | "bid" => {
-            // For buy orders, the token is on the quote chain
-            let quote_chain = config
-                .get_chain(&market.quote_chain_network)
-                .ok_or_else(|| {
-                    eyre::eyre!(
-                        "Quote chain '{}' not found in configuration",
-                        market.quote_chain_network
-                    )
-                })?;
-            let token = quote_chain
-                .tokens
-                .get(&market.quote_chain_token_symbol)
-                .ok_or_else(|| {
-                    eyre::eyre!(
-                        "Token '{}' not found on chain '{}'",
-                        market.quote_chain_token_symbol,
-                        market.quote_chain_network
-                    )
-                })?;
-            (Side::Bid as i32, token.address.clone())
-        }
-        "sell" | "ask" => {
-            // For sell orders, the token is on the base chain
-            let base_chain = config
-                .get_chain(&market.base_chain_network)
-                .ok_or_else(|| {
-                    eyre::eyre!(
-                        "Base chain '{}' not found in configuration",
-                        market.base_chain_network
-                    )
-                })?;
-            let token = base_chain
-                .tokens
-                .get(&market.base_chain_token_symbol)
-                .ok_or_else(|| {
-                    eyre::eyre!(
-                        "Token '{}' not found on chain '{}'",
-                        market.base_chain_token_symbol,
-                        market.base_chain_network
-                    )
-                })?;
-            (Side::Ask as i32, token.address.clone())
-        }
-        _ => {
-            return Err(eyre::eyre!(
-                "Invalid side '{}'. Must be 'buy' or 'sell'",
-                side
-            ));
-        }
-    };
+    let (side_value, token_address) = resolve_side_and_token(&config, market, &side)?;
 
     tracing::info!(
         "Canceling order: market={}, side={}, order_id={}, token_address={}",
@@ -186,4 +177,113 @@ pub async fn call_cancel_order_from_config_with_wallet(
         wallet,
     )
     .await
+}
+
+#[cfg(test)]
+mod resolve_side_and_token_tests {
+    use super::*;
+    use crate::commands::config::config_pb::{Chain, Configuration, Market, Token};
+
+    fn chain(network: &str, symbol: &str, address: &str) -> Chain {
+        let mut c = Chain {
+            network: network.to_string(),
+            ..Default::default()
+        };
+        c.tokens.insert(
+            symbol.to_string(),
+            Token {
+                symbol: symbol.to_string(),
+                address: address.to_string(),
+                ..Default::default()
+            },
+        );
+        c
+    }
+
+    fn fixture() -> (GetConfigResponse, Market) {
+        let market = Market {
+            base_chain_network: "base-net".into(),
+            quote_chain_network: "quote-net".into(),
+            base_chain_token_symbol: "BASE".into(),
+            quote_chain_token_symbol: "QUOTE".into(),
+            market_id: "m".into(),
+            ..Default::default()
+        };
+        let config = GetConfigResponse {
+            config: Some(Configuration {
+                chains: vec![
+                    chain("base-net", "BASE", "0xbase"),
+                    chain("quote-net", "QUOTE", "0xquote"),
+                ],
+                markets: vec![market.clone()],
+            }),
+        };
+        (config, market)
+    }
+
+    /// A BID locked quote-chain funds, so cancelling one releases the QUOTE
+    /// token. Getting this backwards signs a valid request that matches no
+    /// resting order — the cancel silently does nothing.
+    #[test]
+    fn a_bid_resolves_the_quote_chain_token() {
+        let (config, market) = fixture();
+        for side in ["buy", "bid", "BUY", "Bid"] {
+            let (s, token) = resolve_side_and_token(&config, &market, side).expect(side);
+            assert_eq!(s, Side::Bid as i32, "side for {side}");
+            assert_eq!(token, "0xquote", "token for {side}");
+        }
+    }
+
+    /// An ASK locked base-chain funds — the mirror of the bid case.
+    #[test]
+    fn an_ask_resolves_the_base_chain_token() {
+        let (config, market) = fixture();
+        for side in ["sell", "ask", "SELL", "Ask"] {
+            let (s, token) = resolve_side_and_token(&config, &market, side).expect(side);
+            assert_eq!(s, Side::Ask as i32, "side for {side}");
+            assert_eq!(token, "0xbase", "token for {side}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_side_is_rejected() {
+        let (config, market) = fixture();
+        let err = resolve_side_and_token(&config, &market, "sideways")
+            .expect_err("an unknown side must not resolve");
+        assert!(err.to_string().contains("sideways"), "got: {err}");
+    }
+
+    /// A market naming a chain the config doesn't carry must error rather than
+    /// fall through to some other chain's token.
+    #[test]
+    fn a_missing_chain_is_an_error() {
+        let (_, market) = fixture();
+        let config = GetConfigResponse {
+            config: Some(Configuration {
+                chains: vec![chain("base-net", "BASE", "0xbase")],
+                markets: vec![market.clone()],
+            }),
+        };
+        let err = resolve_side_and_token(&config, &market, "buy")
+            .expect_err("a missing quote chain must not resolve");
+        assert!(err.to_string().contains("quote-net"), "got: {err}");
+    }
+
+    /// Likewise a chain that exists but doesn't list the market's token.
+    #[test]
+    fn a_missing_token_is_an_error() {
+        let (_, market) = fixture();
+        let config = GetConfigResponse {
+            config: Some(Configuration {
+                chains: vec![
+                    chain("base-net", "BASE", "0xbase"),
+                    chain("quote-net", "OTHER", "0xother"),
+                ],
+                markets: vec![market.clone()],
+            }),
+        };
+        let err = resolve_side_and_token(&config, &market, "buy")
+            .expect_err("a missing token must not resolve");
+        assert!(err.to_string().contains("QUOTE"), "got: {err}");
+    }
 }

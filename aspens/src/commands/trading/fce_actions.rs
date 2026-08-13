@@ -27,6 +27,7 @@ use crate::fce::{
 use super::gasless::build_gasless_authorization;
 use super::send_order::arborter_pb::{Order, OrderToCancel, Side};
 use super::send_order::{convert_to_pair_decimals, lookup_market};
+use super::stream_orderbook::TopOfBook;
 
 fn fce_client(client: &AspensClient) -> Result<&fce::FceClient> {
     client
@@ -195,6 +196,73 @@ pub async fn withdraw(
     fce.withdraw(&req).await
 }
 
+/// Cancel an order via FCE, resolving the released token from the config the
+/// way the gRPC path does.
+///
+/// Delegates the side→token mapping to the gRPC path's own
+/// `super::cancel_order::resolve_side_and_token` rather than repeating it: the
+/// arborter matches the resting order on the signed `OrderToCancel`, so a
+/// transport that resolved a different token would sign a well-formed request
+/// that cancels nothing at all.
+pub async fn cancel_order_from_config(
+    client: &AspensClient,
+    wallet: &Wallet,
+    market_id: &str,
+    side: &str,
+    order_id: u64,
+    config: &GetConfigResponse,
+) -> Result<Outcome<CancelOrderResponse>> {
+    let market = lookup_market(config, market_id)?;
+    let (_, token_address) = super::cancel_order::resolve_side_and_token(config, market, side)?;
+    // Sign against the RESOLVED market id, as the gRPC path does — the caller's
+    // `market_id` may be the shorthand form.
+    cancel_order(
+        client,
+        wallet,
+        &market.market_id,
+        side,
+        &token_address,
+        order_id,
+    )
+    .await
+}
+
+/// Top-of-book for `market_id` from a one-shot FCE book snapshot.
+///
+/// Returns the same [`TopOfBook`] the gRPC stream path produces, so the
+/// slippage-cap math in the marketable-order helpers is shared verbatim. The
+/// gRPC path has to listen for a collection window because it is draining a
+/// live stream; a snapshot needs no window.
+///
+/// Zero prices and zero-quantity levels are skipped, matching
+/// [`super::stream_orderbook::fetch_top_of_book`] — only resting, non-zero
+/// levels can match an aggressor.
+pub async fn top_of_book(client: &AspensClient, market_id: &str) -> Result<TopOfBook> {
+    let outcome = book_state(client, market_id, 0).await?;
+    if !outcome.ok() {
+        return Err(eyre!("book snapshot failed: {}", outcome.log));
+    }
+    let book = outcome.into_data()?;
+    Ok(top_of_book_from_snapshot(&book))
+}
+
+/// The pure part of [`top_of_book`] — split out so the level filtering and the
+/// max-bid / min-ask choice are testable without a proxy.
+fn top_of_book_from_snapshot(book: &GetBookStateResponse) -> TopOfBook {
+    /// A level counts only if both price and quantity parse and are non-zero.
+    fn price_of(level: &crate::fce::BookLevel) -> Option<u128> {
+        let qty: u128 = level.quantity.parse().ok()?;
+        let price: u128 = level.price.parse().ok()?;
+        (qty > 0 && price > 0).then_some(price)
+    }
+
+    // Don't assume the adapter sorts the levels — take the extremes explicitly.
+    TopOfBook {
+        best_bid: book.bids.iter().filter_map(price_of).max(),
+        best_ask: book.asks.iter().filter_map(price_of).min(),
+    }
+}
+
 /// One-shot orderbook snapshot via FCE (not a live stream). `depth` caps levels
 /// per side (0 => default).
 pub async fn book_state(
@@ -241,7 +309,7 @@ pub async fn export_history(
 /// Fetch the arborter config over FCE and decode it into the SAME generated
 /// type the gRPC path returns.
 ///
-/// This is what makes an FCE-only client possible. `place_order` below needs the
+/// This is what makes an FCE-only client possible. `place_order` above needs the
 /// market's pair decimals and the base/quote chains' curves to build and sign an
 /// order; before this existed those came only from arborter gRPC, so a client
 /// could read over `/direct` but had to reach the arborter directly to write.
@@ -258,4 +326,113 @@ pub async fn get_config(client: &AspensClient) -> Result<GetConfigResponse> {
     // market id instead of at the transport.
     GetConfigResponse::decode(envelope.config_proto.as_slice())
         .map_err(|e| eyre!("decoding GetConfigResponse protobuf from the FCE adapter: {e}"))
+}
+
+#[cfg(test)]
+mod top_of_book_tests {
+    use super::*;
+    use crate::fce::BookLevel;
+
+    fn level(price: &str, quantity: &str) -> BookLevel {
+        BookLevel {
+            price: price.into(),
+            quantity: quantity.into(),
+        }
+    }
+
+    fn book(bids: Vec<BookLevel>, asks: Vec<BookLevel>) -> GetBookStateResponse {
+        GetBookStateResponse {
+            market_id: "m".into(),
+            bids,
+            asks,
+        }
+    }
+
+    /// Best bid is the HIGHEST bid, best ask the LOWEST ask. Inverting either
+    /// would hand the slippage cap a price on the wrong side of the spread and
+    /// submit a limit order that can never fill (or fills far too aggressively).
+    #[test]
+    fn takes_the_highest_bid_and_the_lowest_ask() {
+        let top = top_of_book_from_snapshot(&book(
+            vec![level("100", "1"), level("300", "1"), level("200", "1")],
+            vec![level("900", "1"), level("700", "1"), level("800", "1")],
+        ));
+        assert_eq!(top.best_bid, Some(300));
+        assert_eq!(top.best_ask, Some(700));
+    }
+
+    /// Don't assume the adapter sorts: the same levels in any order must give
+    /// the same answer.
+    #[test]
+    fn does_not_depend_on_level_ordering() {
+        let ascending = top_of_book_from_snapshot(&book(
+            vec![level("100", "1"), level("300", "1")],
+            vec![level("700", "1"), level("900", "1")],
+        ));
+        let descending = top_of_book_from_snapshot(&book(
+            vec![level("300", "1"), level("100", "1")],
+            vec![level("900", "1"), level("700", "1")],
+        ));
+        assert_eq!(ascending.best_bid, descending.best_bid);
+        assert_eq!(ascending.best_ask, descending.best_ask);
+    }
+
+    /// Zero-quantity levels don't match an aggressor, so they must not set the
+    /// reference price — same filter the gRPC stream path applies.
+    #[test]
+    fn skips_zero_quantity_levels() {
+        let top = top_of_book_from_snapshot(&book(
+            vec![level("300", "0"), level("100", "5")],
+            vec![level("700", "0"), level("900", "5")],
+        ));
+        assert_eq!(top.best_bid, Some(100));
+        assert_eq!(top.best_ask, Some(900));
+    }
+
+    /// A zero price is not a real level either.
+    #[test]
+    fn skips_zero_prices() {
+        let top = top_of_book_from_snapshot(&book(
+            vec![level("0", "5"), level("100", "5")],
+            vec![level("0", "5"), level("900", "5")],
+        ));
+        assert_eq!(top.best_bid, Some(100));
+        assert_eq!(top.best_ask, Some(900));
+    }
+
+    /// An empty (or one-sided) book yields None rather than a bogus 0 — the
+    /// caller must be able to say "no resting liquidity" instead of pricing
+    /// off zero.
+    #[test]
+    fn an_empty_side_is_none() {
+        let top = top_of_book_from_snapshot(&book(vec![], vec![level("900", "5")]));
+        assert_eq!(top.best_bid, None);
+        assert_eq!(top.best_ask, Some(900));
+
+        let empty = top_of_book_from_snapshot(&book(vec![], vec![]));
+        assert_eq!(empty.best_bid, None);
+        assert_eq!(empty.best_ask, None);
+    }
+
+    /// Unparseable amounts are skipped, not fatal — one malformed level must
+    /// not blind the caller to the rest of the book.
+    #[test]
+    fn skips_unparseable_levels() {
+        let top = top_of_book_from_snapshot(&book(
+            vec![level("banana", "5"), level("100", "5")],
+            vec![level("900", "melon"), level("950", "5")],
+        ));
+        assert_eq!(top.best_bid, Some(100));
+        assert_eq!(top.best_ask, Some(950));
+    }
+
+    /// Prices exceeding u64 must survive — pair-decimal prices are u128 on this
+    /// wire, and truncating one would misprice the cap by orders of magnitude.
+    #[test]
+    fn handles_prices_beyond_u64() {
+        let big = "340282366920938463463374607431768211455"; // u128::MAX
+        let top = top_of_book_from_snapshot(&book(vec![level(big, "1")], vec![level(big, "1")]));
+        assert_eq!(top.best_bid, Some(u128::MAX));
+        assert_eq!(top.best_ask, Some(u128::MAX));
+    }
 }
