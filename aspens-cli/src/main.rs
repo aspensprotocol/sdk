@@ -1,4 +1,6 @@
 use aspens::commands::config::config_pb::GetConfigResponse;
+#[cfg(feature = "fce")]
+use aspens::commands::trading::fce_actions;
 use aspens::commands::trading::send_order::{
     arborter_pb::{SendOrderResponse, Side},
     origin_network_for_side, parse_side,
@@ -110,6 +112,55 @@ struct OrderFlags {
     hidden: bool,
 }
 
+/// What the CLI needs back from a submitted order, normalized across the two
+/// transports.
+///
+/// gRPC answers with a `SendOrderResponse`; FCE answers with a
+/// `PlaceOrderResponse`, which carries no transaction hashes — trading is
+/// off-chain until settlement, so there is nothing to link to an explorer. The
+/// hash list is simply empty there rather than fabricated.
+struct SentOrder {
+    order_id: u64,
+    tx_hashes: Vec<String>,
+}
+
+impl From<SendOrderResponse> for SentOrder {
+    fn from(r: SendOrderResponse) -> Self {
+        Self {
+            order_id: r.order_id,
+            tx_hashes: r.get_formatted_transaction_hashes(),
+        }
+    }
+}
+
+/// The side string `fce_actions` parses ("bid"/"ask").
+#[cfg(feature = "fce")]
+fn fce_side_str(side: Side) -> Result<&'static str> {
+    match side {
+        Side::Bid => Ok("bid"),
+        Side::Ask => Ok("ask"),
+        Side::Unspecified => Err(eyre::eyre!("side must be Bid or Ask")),
+    }
+}
+
+/// Reject flags the direct-action wire cannot express.
+///
+/// `--hidden` is the only one: the FCE `PlaceOrderRequest` carries no `hidden`
+/// field and the adapter rebuilds the order with `hidden=false`, so accepting
+/// the flag here would rest the order VISIBLY while the user believes it is
+/// hidden. That is a disclosure, not a degraded feature — refuse instead.
+#[cfg(feature = "fce")]
+fn check_flags_supported_over_fce(flags: OrderFlags) -> Result<()> {
+    if flags.hidden {
+        return Err(eyre::eyre!(
+            "--hidden is not supported over the FCE transport: the direct-action wire \
+             carries no `hidden` field, so the order would rest visibly. Submit it \
+             against an arborter reachable over gRPC, or drop --hidden."
+        ));
+    }
+    Ok(())
+}
+
 async fn dispatch_send_order(
     executor: &DirectExecutor,
     client: &AspensClient,
@@ -118,7 +169,15 @@ async fn dispatch_send_order(
     amount: String,
     price: Option<String>,
     flags: OrderFlags,
-) -> Result<SendOrderResponse> {
+) -> Result<SentOrder> {
+    // Reject flags this transport can't express BEFORE any network work — an
+    // unsupported argument should not cost a config round-trip to discover, and
+    // over FCE that round-trip is a queued direct action.
+    #[cfg(feature = "fce")]
+    if client.uses_fce() {
+        check_flags_supported_over_fce(flags)?;
+    }
+
     let stack_url = client.stack_url().to_string();
     let config = client
         .get_config()
@@ -148,6 +207,48 @@ async fn dispatch_send_order(
         (Side::Ask, None) => format!("send market sell order for {} on {}", amount, market),
         (Side::Unspecified, _) => format!("send order on {}", market),
     };
+
+    // FCE stacks run the arborter inside a Confidential Space image with no
+    // reachable gRPC, so route the same signed envelope through the ext-proxy
+    // instead. Signing is shared (`trading::sign_encoded`) — only the transport
+    // differs.
+    #[cfg(feature = "fce")]
+    if client.uses_fce() {
+        check_flags_supported_over_fce(flags)?;
+        let wallets: Vec<&Wallet> = [evm.as_ref(), solana.as_ref()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let outcome = fce_actions::place_order(
+            client,
+            &wallets,
+            &market,
+            fce_side_str(side)?,
+            &amount,
+            price.as_deref(),
+            flags.post_only,
+        )
+        .await
+        .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+        if !outcome.ok() {
+            return Err(eyre::eyre!(format_error(
+                &eyre::eyre!("{}", outcome.log),
+                &context
+            )));
+        }
+        let resp = outcome
+            .into_data()
+            .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+        info!(
+            "FCE order accepted (resting in book: {}, immediate fills: {})",
+            resp.order_in_book, resp.fills
+        );
+        return Ok(SentOrder {
+            order_id: resp.order_id,
+            tx_hashes: vec![],
+        });
+    }
+
     executor
         .execute(async move {
             let wallets: Vec<&Wallet> = [evm.as_ref(), solana.as_ref()]
@@ -167,7 +268,25 @@ async fn dispatch_send_order(
             )
             .await
         })
+        .map(SentOrder::from)
         .map_err(|e| eyre::eyre!(format_error(&e, &context)))
+}
+
+/// Top-of-book via the gRPC orderbook stream. The 1.5s window is enough for the
+/// matching engine to flush its historical-open-orders burst; live updates after
+/// the deadline are ignored.
+fn grpc_top_of_book(
+    executor: &DirectExecutor,
+    stack_url: String,
+    market_id: String,
+) -> Result<stream_orderbook::TopOfBook> {
+    executor
+        .execute(stream_orderbook::fetch_top_of_book(
+            stack_url,
+            market_id,
+            std::time::Duration::from_millis(1_500),
+        ))
+        .map_err(|e| eyre::eyre!(format_error(&e, "fetch top-of-book")))
 }
 
 /// Resolve a slippage-capped limit price for the `buy-marketable` /
@@ -213,14 +332,19 @@ async fn resolve_marketable_price(
         .map_err(|e| eyre::eyre!(format_error(&e, &format!("look up market {market_id}"))))?;
     let pair_decimals = market.pair_decimals as u32;
 
-    let collection_window = std::time::Duration::from_millis(1_500);
-    let top = executor
-        .execute(stream_orderbook::fetch_top_of_book(
-            stack_url,
-            market.market_id.clone(),
-            collection_window,
-        ))
-        .map_err(|e| eyre::eyre!(format_error(&e, "fetch top-of-book")))?;
+    // Over FCE the book arrives as a one-shot snapshot, so there is no stream to
+    // drain and no collection window to wait out. Both branches produce the same
+    // `TopOfBook`, so the slippage math below is shared verbatim.
+    #[cfg(feature = "fce")]
+    let top = if client.uses_fce() {
+        fce_actions::top_of_book(client, &market.market_id)
+            .await
+            .map_err(|e| eyre::eyre!(format_error(&e, "fetch top-of-book")))?
+    } else {
+        grpc_top_of_book(executor, stack_url, market.market_id.clone())?
+    };
+    #[cfg(not(feature = "fce"))]
+    let top = grpc_top_of_book(executor, stack_url, market.market_id.clone())?;
 
     let (is_buy, reference, label) = match side {
         Side::Bid => (
@@ -648,6 +772,29 @@ async fn run() -> Result<()> {
                 .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
             let wallet = load_trader_wallet_for_network(&config, &network)
                 .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+            let opts = withdraw::WithdrawOpts {
+                unwrap_native: !no_unwrap,
+            };
+
+            // Only the voucher request goes over FCE; the on-chain submit that
+            // follows it is the same code either way.
+            #[cfg(feature = "fce")]
+            if let Some(fce) = client.fce() {
+                withdraw::call_withdraw_from_config_with_fce_opts(
+                    fce,
+                    network,
+                    token,
+                    amount_base,
+                    &wallet,
+                    config,
+                    opts,
+                )
+                .await
+                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+                info!("Withdraw was successful");
+                return Ok(());
+            }
+
             executor
                 .execute(async move {
                     withdraw::call_withdraw_from_config_with_wallet_opts(
@@ -657,9 +804,7 @@ async fn run() -> Result<()> {
                         amount_base,
                         &wallet,
                         config,
-                        withdraw::WithdrawOpts {
-                            unwrap_native: !no_unwrap,
-                        },
+                        opts,
                     )
                     .await
                 })
@@ -690,7 +835,7 @@ async fn run() -> Result<()> {
                 "Market buy order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.get_formatted_transaction_hashes());
+            log_tx_hashes(&result.tx_hashes);
         }
         Commands::BuyLimit {
             market,
@@ -717,7 +862,7 @@ async fn run() -> Result<()> {
                 "Limit buy order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.get_formatted_transaction_hashes());
+            log_tx_hashes(&result.tx_hashes);
         }
         Commands::SellMarket {
             market,
@@ -742,7 +887,7 @@ async fn run() -> Result<()> {
                 "Market sell order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.get_formatted_transaction_hashes());
+            log_tx_hashes(&result.tx_hashes);
         }
         Commands::SellLimit {
             market,
@@ -769,7 +914,7 @@ async fn run() -> Result<()> {
                 "Limit sell order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.get_formatted_transaction_hashes());
+            log_tx_hashes(&result.tx_hashes);
         }
         Commands::BuyMarketable {
             market,
@@ -803,7 +948,7 @@ async fn run() -> Result<()> {
                 "Marketable buy order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.get_formatted_transaction_hashes());
+            log_tx_hashes(&result.tx_hashes);
         }
         Commands::SellMarketable {
             market,
@@ -835,7 +980,7 @@ async fn run() -> Result<()> {
                 "Marketable sell order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.get_formatted_transaction_hashes());
+            log_tx_hashes(&result.tx_hashes);
         }
         Commands::CancelOrder {
             market,
@@ -854,6 +999,33 @@ async fn run() -> Result<()> {
                 .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
             let wallet = load_trader_wallet_for_network(&config, origin)
                 .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+
+            #[cfg(feature = "fce")]
+            if client.uses_fce() {
+                let outcome = fce_actions::cancel_order_from_config(
+                    &client, &wallet, &market, &side, order_id, &config,
+                )
+                .await
+                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+                if !outcome.ok() {
+                    return Err(eyre::eyre!(format_error(
+                        &eyre::eyre!("{}", outcome.log),
+                        &context
+                    )));
+                }
+                let canceled = outcome
+                    .into_data()
+                    .map_err(|e| eyre::eyre!(format_error(&e, &context)))?
+                    .canceled;
+                if canceled {
+                    info!("Order {} canceled successfully", order_id);
+                } else {
+                    info!("Order {} was not found or already canceled", order_id);
+                }
+                // No transaction hashes over FCE — cancels are off-chain.
+                return Ok(());
+            }
+
             let result = executor
                 .execute(async move {
                     cancel_order::call_cancel_order_from_config_with_wallet(
@@ -1425,4 +1597,55 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "fce"))]
+mod fce_dispatch_tests {
+    use super::*;
+
+    /// The FCE wire has no `hidden` field, so a hidden order submitted over it
+    /// would rest VISIBLY. Refusing is the only safe answer — dropping the flag
+    /// silently discloses the order.
+    #[test]
+    fn hidden_is_refused_over_fce() {
+        let err = check_flags_supported_over_fce(OrderFlags {
+            post_only: false,
+            hidden: true,
+        })
+        .expect_err("--hidden must not be accepted over FCE");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--hidden"),
+            "error should name the flag: {msg}"
+        );
+        assert!(
+            msg.contains("gRPC"),
+            "error should say where it does work: {msg}"
+        );
+    }
+
+    /// post_only IS expressible on the FCE wire, so it must pass through.
+    #[test]
+    fn post_only_is_allowed_over_fce() {
+        check_flags_supported_over_fce(OrderFlags {
+            post_only: true,
+            hidden: false,
+        })
+        .expect("post_only is carried by the FCE PlaceOrderRequest");
+    }
+
+    /// The side strings must be the ones `send_order::parse_side` accepts —
+    /// `fce_actions::place_order` parses them with exactly that function.
+    #[test]
+    fn side_strings_round_trip_through_parse_side() {
+        assert_eq!(
+            parse_side(fce_side_str(Side::Bid).unwrap()).unwrap(),
+            Side::Bid
+        );
+        assert_eq!(
+            parse_side(fce_side_str(Side::Ask).unwrap()).unwrap(),
+            Side::Ask
+        );
+        assert!(fce_side_str(Side::Unspecified).is_err());
+    }
 }

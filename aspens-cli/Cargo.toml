@@ -22,12 +22,6 @@ aspens = { path = "../aspens", default-features = false, features = [
   "solana",
   "formatting",
   "dcap-fetch",
-  # FCE direct-action transport. Without it the CLI can only reach an
-  # arborter over gRPC, which is unreachable when the arborter runs inside
-  # a Confidential Space image — deposits, trades and even config discovery
-  # all fail. Auto-selected at runtime by EXT_PROXY_URL + DIRECT_API_KEY, so
-  # enabling it changes nothing for gRPC stacks.
-  "fce",
 ] }
 aspens-cliutil = { path = "../aspens-cliutil" }
 
@@ -47,5 +41,16 @@ tracing-subscriber.workspace = true
 url.workspace = true
 
 [features]
-default = []
+default = ["fce"]
 admin = ["aspens/admin"]
+
+# FCE direct-action transport. Without it the CLI can only reach an arborter
+# over gRPC, which is unreachable when the arborter runs inside a Confidential
+# Space image — trades, withdraws and even config discovery all fail there.
+#
+# A local feature rather than a bare `aspens/fce` entry above, because the CLI
+# has to `#[cfg]` its own direct-action branches and a `cfg(feature = ...)` in
+# this crate resolves against THIS crate's features. On by default and selected
+# at runtime by EXT_PROXY_URL + DIRECT_API_KEY, so it changes nothing for gRPC
+# stacks; `--no-default-features` yields a pure-gRPC binary.
+fce = ["aspens/fce"]

@@ -26,6 +26,134 @@ use arborter_pb::arborter_service_client::ArborterServiceClient;
 /// Minimum gas balance required for transactions (0.0001 ETH = 100000 gwei)
 const MIN_GAS_BALANCE: u128 = 100_000_000_000_000; // 0.0001 ETH in wei
 
+/// Where the TEE-signed withdrawal voucher is requested from.
+///
+/// The voucher is the ONLY part of a withdraw that needs the arborter — the gas
+/// pre-check, the on-chain submit, and the resubmit-on-transient-revert logic
+/// below are pure chain work and are identical either way. Keeping the choice in
+/// one enum is what lets the FCE path reuse all of that verbatim instead of
+/// forking a second withdraw implementation that could drift.
+pub(crate) enum VoucherSource<'a> {
+    /// Arborter gRPC at this stack URL (the default).
+    Grpc(&'a str),
+    /// The FCE ext-proxy (`POST /direct` + poll, command WITHDRAW).
+    #[cfg(feature = "fce")]
+    Fce(&'a crate::fce::FceClient),
+}
+
+/// The voucher fields both transports return, normalized. Deliberately not the
+/// gRPC `WithdrawResponse`: the submit code below should not care which wire
+/// produced these bytes.
+pub(crate) struct Voucher {
+    /// u128 decimal, echoed by the arborter.
+    amount: String,
+    nonce: u64,
+    expiry: u64,
+    signature: Vec<u8>,
+}
+
+impl VoucherSource<'_> {
+    /// Request a voucher for an already-authenticated withdraw. `signature` is
+    /// the caller's signature over the canonical `network|token|account|amount`
+    /// bytes — both transports carry exactly those bytes, so the arborter
+    /// authenticates identically regardless of which one is in use.
+    async fn fetch(
+        &self,
+        network: &str,
+        token: &str,
+        account: &str,
+        amount: &str,
+        signature: Vec<u8>,
+    ) -> Result<Voucher> {
+        match self {
+            Self::Grpc(url) => {
+                let channel = create_channel(url).await?;
+                let mut client = ArborterServiceClient::new(channel);
+                let v = client
+                    .withdraw(tonic::Request::new(WithdrawRequest {
+                        network: network.to_string(),
+                        token: token.to_string(),
+                        account: account.to_string(),
+                        amount: amount.to_string(),
+                        signature,
+                    }))
+                    .await?
+                    .into_inner();
+                Ok(Voucher {
+                    amount: v.amount,
+                    nonce: v.nonce,
+                    expiry: v.expiry,
+                    signature: v.signature,
+                })
+            }
+            #[cfg(feature = "fce")]
+            Self::Fce(fce) => {
+                let outcome = fce
+                    .withdraw(&crate::fce::WithdrawRequest {
+                        network: network.to_string(),
+                        token: token.to_string(),
+                        account: account.to_string(),
+                        amount: amount.to_string(),
+                        signature,
+                    })
+                    .await?;
+                let v = outcome.into_data()?;
+                Ok(Voucher {
+                    amount: v.amount,
+                    nonce: v.nonce,
+                    expiry: v.expiry,
+                    signature: v.signature,
+                })
+            }
+        }
+    }
+
+    /// The instance signer pubkey for `chain` — the Ed25519 key that signed a
+    /// Solana voucher, which the on-chain program's verify must recover to.
+    ///
+    /// Only the gRPC transport has a `GetSignerPublicKey` RPC; the direct-action
+    /// wire has no such command. Over FCE this comes from the chain config
+    /// instead, which the same proxy already serves via `GET_CONFIG`.
+    #[cfg(feature = "solana")]
+    async fn instance_signer_pubkey(
+        &self,
+        chain: &crate::commands::config::config_pb::Chain,
+    ) -> Result<String> {
+        match self {
+            Self::Grpc(url) => {
+                let resp = crate::commands::config::get_signer_public_key(
+                    url.to_string(),
+                    Some(chain.network.clone()),
+                )
+                .await?;
+                resp.chain_keys
+                    .get(&chain.network)
+                    .map(|k| k.public_key.clone())
+                    .ok_or_else(|| {
+                        eyre::eyre!("no signer public key for chain '{}'", chain.network)
+                    })
+            }
+            #[cfg(feature = "fce")]
+            Self::Fce(_) => {
+                let key = chain.instance_signer_address.trim();
+                if key.is_empty() {
+                    // Fail loudly rather than submitting a voucher whose
+                    // signature can't be verified on-chain: the tx would revert
+                    // after the hold is already placed.
+                    return Err(eyre::eyre!(
+                        "chain '{}' has no instance_signer_address in the config, and the FCE \
+                         direct-action wire has no GetSignerPublicKey command — the Solana \
+                         voucher's signer key cannot be resolved. Set it on the chain entry \
+                         (aspens-admin set-chain --instance-signer-address) and re-fetch config.",
+                        chain.network
+                    ));
+                }
+                Ok(key.to_string())
+            }
+        }
+    }
+}
+
 /// Withdraw tokens using a curve-agnostic wallet.
 ///
 /// Branches on `chain.architecture`:
@@ -84,6 +212,55 @@ pub async fn call_withdraw_from_config_with_wallet_opts(
     config: GetConfigResponse,
     opts: WithdrawOpts,
 ) -> Result<()> {
+    withdraw_from_source(
+        VoucherSource::Grpc(&url),
+        network,
+        token_symbol,
+        amount,
+        wallet,
+        config,
+        opts,
+    )
+    .await
+}
+
+/// [`call_withdraw_from_config_with_wallet_opts`], sourcing the voucher from the
+/// FCE ext-proxy instead of arborter gRPC.
+///
+/// Everything after the voucher is byte-identical to the gRPC path — same
+/// canonical request signature, same on-chain `MidribV3.withdraw` submit, same
+/// retries. Only the transport that carries the voucher request differs.
+#[cfg(feature = "fce")]
+pub async fn call_withdraw_from_config_with_fce_opts(
+    fce: &crate::fce::FceClient,
+    network: String,
+    token_symbol: String,
+    amount: u128,
+    wallet: &Wallet,
+    config: GetConfigResponse,
+    opts: WithdrawOpts,
+) -> Result<()> {
+    withdraw_from_source(
+        VoucherSource::Fce(fce),
+        network,
+        token_symbol,
+        amount,
+        wallet,
+        config,
+        opts,
+    )
+    .await
+}
+
+async fn withdraw_from_source(
+    source: VoucherSource<'_>,
+    network: String,
+    token_symbol: String,
+    amount: u128,
+    wallet: &Wallet,
+    config: GetConfigResponse,
+    opts: WithdrawOpts,
+) -> Result<()> {
     let chain_for_arch = config
         .get_chain(&network)
         .ok_or_else(|| eyre::eyre!("Chain '{}' not found in configuration", network))?;
@@ -98,7 +275,7 @@ pub async fn call_withdraw_from_config_with_wallet_opts(
             eyre::eyre!("amount {amount} exceeds the SPL token u64 max on Solana chain '{network}'")
         })?;
         return solana_withdraw(
-            url,
+            source,
             chain_for_arch,
             &token_symbol,
             spl_amount,
@@ -120,14 +297,14 @@ pub async fn call_withdraw_from_config_with_wallet_opts(
         .ok_or_else(|| eyre::eyre!("expected EVM wallet for chain '{}'", network))?
         .clone();
 
-    call_withdraw_from_config_evm(url, network, token_symbol, amount, signer, config).await
+    call_withdraw_from_config_evm(source, network, token_symbol, amount, signer, config).await
 }
 
 /// Solana withdraw — builds and submits the user-signed Midrib `withdraw`
 /// instruction. Requires the `solana` feature.
 #[cfg(feature = "solana")]
 async fn solana_withdraw(
-    url: String,
+    source: VoucherSource<'_>,
     chain: &crate::commands::config::config_pb::Chain,
     token_symbol: &str,
     amount: u64,
@@ -187,18 +364,15 @@ async fn solana_withdraw(
     let req_sig = wallet.sign_message(canonical.as_bytes()).await?;
 
     // 2) Request the TEE-signed voucher.
-    let channel = create_channel(&url).await?;
-    let mut client = ArborterServiceClient::new(channel);
-    let voucher = client
-        .withdraw(tonic::Request::new(WithdrawRequest {
-            network: chain.network.clone(),
-            token: token.address.clone(),
-            account: account_str,
-            amount: amount.to_string(),
-            signature: req_sig,
-        }))
-        .await?
-        .into_inner();
+    let voucher = source
+        .fetch(
+            &chain.network,
+            &token.address,
+            &account_str,
+            &amount.to_string(),
+            req_sig,
+        )
+        .await?;
     tracing::info!(
         "Received Solana withdrawal voucher (nonce={}, deadline_slot={})",
         voucher.nonce,
@@ -207,14 +381,7 @@ async fn solana_withdraw(
 
     // 3) Fetch the instance signer pubkey (the Ed25519 key that signed the
     //    voucher) so the program's Ed25519 verify recovers to it.
-    let signer_resp =
-        crate::commands::config::get_signer_public_key(url.clone(), Some(chain.network.clone()))
-            .await?;
-    let signer_str = signer_resp
-        .chain_keys
-        .get(&chain.network)
-        .map(|k| k.public_key.clone())
-        .ok_or_else(|| eyre::eyre!("no signer public key for chain '{}'", chain.network))?;
+    let signer_str = source.instance_signer_pubkey(chain).await?;
     let signer_pk = Pubkey::from_str(&signer_str)
         .map_err(|e| eyre::eyre!("invalid signer pubkey '{}': {}", signer_str, e))?;
 
@@ -338,7 +505,7 @@ const VOUCHER_SUBMIT_RETRY_MS: u64 = 700;
 
 #[cfg(not(feature = "solana"))]
 async fn solana_withdraw(
-    _url: String,
+    _source: VoucherSource<'_>,
     chain: &crate::commands::config::config_pb::Chain,
     _token_symbol: &str,
     _amount: u64,
@@ -354,7 +521,7 @@ async fn solana_withdraw(
 /// EVM withdraw via the TEE voucher flow (Track A §8): authenticate the request,
 /// get an owner-signed voucher from the arborter, submit it on-chain.
 async fn call_withdraw_from_config_evm(
-    url: String,
+    source: VoucherSource<'_>,
     network: String,
     token_symbol: String,
     amount: u128,
@@ -477,18 +644,15 @@ async fn call_withdraw_from_config_evm(
     let canonical = format!("{network}|{req_token}|{req_account}|{req_amount}");
     let req_sig = signer.sign_message(canonical.as_bytes()).await?;
 
-    let channel = create_channel(&url).await?;
-    let mut client = ArborterServiceClient::new(channel);
-    let voucher = client
-        .withdraw(tonic::Request::new(WithdrawRequest {
-            network: network.clone(),
-            token: req_token,
-            account: req_account,
-            amount: req_amount,
-            signature: req_sig.as_bytes().to_vec(),
-        }))
-        .await?
-        .into_inner();
+    let voucher = source
+        .fetch(
+            &network,
+            &req_token,
+            &req_account,
+            &req_amount,
+            req_sig.as_bytes().to_vec(),
+        )
+        .await?;
     tracing::info!(
         "Received withdrawal voucher (nonce={}, expiry={})",
         voucher.nonce,
