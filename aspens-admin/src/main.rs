@@ -483,6 +483,18 @@ async fn run() -> Result<()> {
                 factory_address,
                 trade_contract: None,
                 tokens: HashMap::new(),
+                // 0 = FINALITY_POLICY_UNSPECIFIED, which the arborter resolves
+                // to FINALIZED — the safe default, and what every existing
+                // chain row already reads back as.
+                //
+                // NOTE: this is the ONLY place an operator could set a
+                // per-chain finality policy, so until `set-chain` grows flags
+                // for it (and `set_chain` on the arborter side supports
+                // update, not just insert), FINALITY_POLICY_CONFIRMATIONS is
+                // unreachable in practice. Do not describe it as an escape
+                // hatch until both land.
+                finality: 0,
+                finality_confirmations: 0,
             };
 
             let result = executor
