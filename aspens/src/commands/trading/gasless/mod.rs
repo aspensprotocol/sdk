@@ -377,6 +377,10 @@ mod tests {
                 address: "0xtradecontract".into(),
             }),
             tokens: base_tokens,
+            // 0 = FINALITY_POLICY_UNSPECIFIED, which the arborter resolves to
+            // FINALIZED. Deposit finality is irrelevant to this fixture.
+            finality: 0,
+            finality_confirmations: 0,
         };
         let quote_chain = Chain {
             architecture: "evm".into(),
@@ -392,6 +396,10 @@ mod tests {
                 address: "0xtradecontract".into(),
             }),
             tokens: quote_tokens,
+            // 0 = FINALITY_POLICY_UNSPECIFIED, which the arborter resolves to
+            // FINALIZED. Deposit finality is irrelevant to this fixture.
+            finality: 0,
+            finality_confirmations: 0,
         };
 
         let market = Market {

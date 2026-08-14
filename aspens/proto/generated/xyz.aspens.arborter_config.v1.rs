@@ -263,12 +263,18 @@ pub struct Chain {
     /// The address of the factory contract on this chain. This is the address to call to deploy a new trading instance
     #[prost(string, tag = "8")]
     pub factory_address: ::prost::alloc::string::String,
+    /// Finality policy for deposit reads on this chain.
+    #[prost(enumeration = "FinalityPolicy", tag = "9")]
+    pub finality: i32,
     /// The trading instance details
     #[prost(message, optional, tag = "10")]
     pub trade_contract: ::core::option::Option<TradeContract>,
     /// Mapping of token symbols to token details
     #[prost(map = "string, message", tag = "11")]
     pub tokens: ::std::collections::HashMap<::prost::alloc::string::String, Token>,
+    /// Confirmations to lag by. Read only when finality = FINALITY_POLICY_CONFIRMATIONS.
+    #[prost(uint32, tag = "12")]
+    pub finality_confirmations: u32,
 }
 /// Represents a market with a base- and quote- chain token pair
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -455,6 +461,44 @@ pub struct VersionInfo {
     /// The cargo features enabled
     #[prost(string, repeated, tag = "8")]
     pub cargo_features: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+/// How far behind the chain head a deposit balance must be before it may
+/// back a withdrawal voucher. Deposits credited from an unfinalized read can
+/// be reorged out after a voucher has already been redeemed, which is
+/// irreversible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum FinalityPolicy {
+    /// Not set. Treated as FINALITY_POLICY_FINALIZED — the safe default, so
+    /// that existing chain rows upgrade into the protected behaviour.
+    Unspecified = 0,
+    /// Read at the chain's finalized tag (EVM) / finalized commitment (Solana).
+    Finalized = 1,
+    /// Read at (head - finality_confirmations). Escape hatch for a chain whose
+    /// RPC rejects the finalized tag.
+    Confirmations = 2,
+}
+impl FinalityPolicy {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "FINALITY_POLICY_UNSPECIFIED",
+            Self::Finalized => "FINALITY_POLICY_FINALIZED",
+            Self::Confirmations => "FINALITY_POLICY_CONFIRMATIONS",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "FINALITY_POLICY_UNSPECIFIED" => Some(Self::Unspecified),
+            "FINALITY_POLICY_FINALIZED" => Some(Self::Finalized),
+            "FINALITY_POLICY_CONFIRMATIONS" => Some(Self::Confirmations),
+            _ => None,
+        }
+    }
 }
 /// Generated client implementations.
 pub mod config_service_client {
