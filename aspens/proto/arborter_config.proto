@@ -222,6 +222,21 @@ message TradeContract {
   string address = 2;
 }
 
+// How far behind the chain head a deposit balance must be before it may
+// back a withdrawal voucher. Deposits credited from an unfinalized read can
+// be reorged out after a voucher has already been redeemed, which is
+// irreversible.
+enum FinalityPolicy {
+  // Not set. Treated as FINALITY_POLICY_FINALIZED — the safe default, so
+  // that existing chain rows upgrade into the protected behaviour.
+  FINALITY_POLICY_UNSPECIFIED = 0;
+  // Read at the chain's finalized tag (EVM) / finalized commitment (Solana).
+  FINALITY_POLICY_FINALIZED = 1;
+  // Read at (head - finality_confirmations). Escape hatch for a chain whose
+  // RPC rejects the finalized tag.
+  FINALITY_POLICY_CONFIRMATIONS = 2;
+}
+
 // Represents a single blockchain network
 message Chain {
   // The architecture of the chain (e.g., EVM, Hedera)
@@ -240,10 +255,14 @@ message Chain {
   string rpc_url = 7;
   // The address of the factory contract on this chain. This is the address to call to deploy a new trading instance
   string factory_address = 8;
+  // Finality policy for deposit reads on this chain.
+  FinalityPolicy finality = 9;
   // The trading instance details
   TradeContract trade_contract = 10;
   // Mapping of token symbols to token details
   map<string, Token> tokens = 11;
+  // Confirmations to lag by. Read only when finality = FINALITY_POLICY_CONFIRMATIONS.
+  uint32 finality_confirmations = 12;
 }
 
 // Represents a market with a base- and quote- chain token pair
