@@ -291,35 +291,6 @@ pub fn deposit_ix(
     })
 }
 
-/// Build the `withdraw` instruction. User-signed.
-pub fn withdraw_ix(
-    program_id: &Pubkey,
-    instance: &Pubkey,
-    user: &Pubkey,
-    mint: &Pubkey,
-    user_token_account: &Pubkey,
-    amount: u64,
-) -> Result<Instruction> {
-    let (user_balance, _) = derive_user_balance_pda(instance, user, mint, program_id);
-    let (instance_vault, _) = derive_instance_vault(instance, mint, program_id);
-    let (vault_authority, _) = derive_vault_authority(instance, program_id);
-    let data = encode_ix("withdraw", &AmountArgs { amount })?;
-    Ok(Instruction {
-        program_id: *program_id,
-        accounts: vec![
-            AccountMeta::new_readonly(*instance, false),
-            AccountMeta::new_readonly(*mint, false),
-            AccountMeta::new(user_balance, false),
-            AccountMeta::new(*user_token_account, false),
-            AccountMeta::new(instance_vault, false),
-            AccountMeta::new_readonly(vault_authority, false),
-            AccountMeta::new_readonly(*user, true),
-            AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
-        ],
-        data,
-    })
-}
-
 // -- Withdrawal voucher (Track A §8) --------------------------------------
 
 /// Derive the single-use withdrawal-voucher tombstone PDA
@@ -478,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn deposit_and_withdraw_have_signer_at_user_slot() {
+    fn deposit_has_signer_at_user_slot() {
         let pid = Pubkey::new_from_array([1; 32]);
         let inst = Pubkey::new_from_array([2; 32]);
         let user = Pubkey::new_from_array([3; 32]);
@@ -486,8 +457,6 @@ mod tests {
         let ata = Pubkey::new_from_array([5; 32]);
         let dep = deposit_ix(&pid, &inst, &user, &mint, &ata, 100).unwrap();
         assert!(dep.accounts.iter().any(|a| a.is_signer && a.pubkey == user));
-        let wd = withdraw_ix(&pid, &inst, &user, &mint, &ata, 100).unwrap();
-        assert!(wd.accounts.iter().any(|a| a.is_signer && a.pubkey == user));
     }
 
     #[test]
