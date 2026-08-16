@@ -96,6 +96,9 @@ pub mod seeds {
     /// Seed for the per-(instance, mint) FeeAccrual PDA — running total of
     /// settle-time fees awaiting `sweep_fees`.
     pub const FEE_ACCRUAL_SEED: &[u8] = b"fee_accrual";
+    /// Seed for the per-(instance, mint) WithdrawEpoch PDA — the per-token
+    /// per-epoch withdrawal cap plus the current epoch's running total.
+    pub const WITHDRAW_EPOCH_SEED: &[u8] = b"withdraw_epoch";
 }
 
 /// Sysvar Rent — `"SysvarRent111111111111111111111111111111111"`.
@@ -195,6 +198,23 @@ pub fn derive_fee_accrual_pda(
 ) -> (Pubkey, u8) {
     Pubkey::find_program_address(
         &[seeds::FEE_ACCRUAL_SEED, instance.as_ref(), mint.as_ref()],
+        program_id,
+    )
+}
+
+/// Derive the per-(instance, mint) `WithdrawEpoch` PDA — the per-token
+/// per-epoch withdrawal cap and the current epoch's running total. Seeds:
+/// `[WITHDRAW_EPOCH_SEED, instance, mint]`.
+///
+/// `withdraw_voucher` takes this account `init_if_needed`, so it must be passed
+/// WRITABLE even on the first withdrawal for a mint.
+pub fn derive_withdraw_epoch_pda(
+    instance: &Pubkey,
+    mint: &Pubkey,
+    program_id: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[seeds::WITHDRAW_EPOCH_SEED, instance.as_ref(), mint.as_ref()],
         program_id,
     )
 }
@@ -376,8 +396,13 @@ pub fn withdraw_voucher_ix(
     let (instance_vault, _) = derive_instance_vault(instance, mint, program_id);
     let (vault_authority, _) = derive_vault_authority(instance, program_id);
     let (used_nonce, _) = derive_withdraw_nonce_pda(instance, account, args.nonce, program_id);
+    let (withdraw_epoch, _) = derive_withdraw_epoch_pda(instance, mint, program_id);
     let data = encode_ix("withdraw_voucher", args)?;
-    // Account order MUST match the program's `WithdrawVoucher` accounts struct.
+    // Account order MUST match the program's `WithdrawVoucher` accounts struct —
+    // Anchor binds POSITIONALLY, so a missing or misordered entry is not a
+    // "missing account" error, it silently reinterprets the account at that
+    // index as something else. `withdraw_voucher_accounts_match_program` pins
+    // this list; update both together.
     Ok(Instruction {
         program_id: *program_id,
         accounts: vec![
@@ -388,6 +413,8 @@ pub fn withdraw_voucher_ix(
             AccountMeta::new(instance_vault, false),
             AccountMeta::new_readonly(vault_authority, false),
             AccountMeta::new(used_nonce, false),
+            // `init_if_needed` on the program side → writable, not a signer.
+            AccountMeta::new(withdraw_epoch, false),
             AccountMeta::new_readonly(*account, false),
             AccountMeta::new(*payer, true),
             AccountMeta::new_readonly(sysvar_instructions_id(), false),
@@ -465,6 +492,88 @@ mod tests {
             SPL_TOKEN_PROGRAM_ID.to_string(),
             "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         );
+    }
+
+    /// Pin `withdraw_voucher`'s account list — order, length, and the
+    /// writable/signer flags — against the on-chain `WithdrawVoucher` accounts
+    /// struct. Anchor binds accounts POSITIONALLY: a missing entry does not
+    /// surface as "too few accounts", it shifts every later account up a slot
+    /// and the program reinterprets whatever now sits at that index. That is
+    /// exactly how `withdraw_epoch` (index 7) was omitted here while 144 other
+    /// SDK tests stayed green — the withdrawer's pubkey landed in its slot and
+    /// every voucher withdrawal failed on-chain with `ConstraintSeeds`.
+    ///
+    /// EXPECTED LIST SOURCE: `arborter/chains/solana/programs/midrib/src/
+    /// instructions/withdraw_voucher.rs`, struct `WithdrawVoucher`, field order
+    /// top to bottom. Reproduce it from the built IDL with:
+    ///   cd arborter/chains/solana
+    ///   anchor idl build -o /tmp/midrib.json -p midrib
+    ///   jq -r '.instructions[] | select(.name=="withdraw_voucher")
+    ///          | .accounts[] | .name' /tmp/midrib.json
+    /// REGENERATE THIS TEST whenever that accounts struct changes — adding,
+    /// removing, or reordering a field there is a breaking wire change here.
+    #[test]
+    fn withdraw_voucher_accounts_match_program() {
+        let pid = Pubkey::new_from_array([1; 32]);
+        let instance = Pubkey::new_from_array([2; 32]);
+        let account = Pubkey::new_from_array([3; 32]);
+        let mint = Pubkey::new_from_array([4; 32]);
+        let user_token_account = Pubkey::new_from_array([5; 32]);
+        let payer = Pubkey::new_from_array([6; 32]);
+        let args = WithdrawVoucherArgs {
+            amount: 1,
+            nonce: 7,
+            deadline: 99,
+            signature: [0; 64],
+        };
+        let ix = withdraw_voucher_ix(
+            &pid,
+            &instance,
+            &account,
+            &mint,
+            &user_token_account,
+            &payer,
+            &args,
+        )
+        .expect("build withdraw_voucher ix");
+
+        let (user_balance, _) = derive_user_balance_pda(&instance, &account, &mint, &pid);
+        let (instance_vault, _) = derive_instance_vault(&instance, &mint, &pid);
+        let (vault_authority, _) = derive_vault_authority(&instance, &pid);
+        let (used_nonce, _) = derive_withdraw_nonce_pda(&instance, &account, args.nonce, &pid);
+        let (withdraw_epoch, _) = derive_withdraw_epoch_pda(&instance, &mint, &pid);
+
+        // (name, pubkey, writable, signer) — index i here is account i on-chain.
+        let expected: &[(&str, Pubkey, bool, bool)] = &[
+            ("instance", instance, false, false),
+            ("mint", mint, false, false),
+            ("user_balance", user_balance, true, false),
+            ("user_token_account", user_token_account, true, false),
+            ("instance_vault", instance_vault, true, false),
+            ("vault_authority", vault_authority, false, false),
+            ("used_nonce", used_nonce, true, false),
+            ("withdraw_epoch", withdraw_epoch, true, false),
+            ("account", account, false, false),
+            ("payer", payer, true, true),
+            ("instructions", sysvar_instructions_id(), false, false),
+            ("token_program", SPL_TOKEN_PROGRAM_ID, false, false),
+            ("system_program", SYSTEM_PROGRAM_ID, false, false),
+        ];
+
+        assert_eq!(
+            ix.accounts.len(),
+            expected.len(),
+            "withdraw_voucher account COUNT drifted from the program's \
+             WithdrawVoucher struct (expected {}, got {})",
+            expected.len(),
+            ix.accounts.len()
+        );
+        for (i, (name, pubkey, writable, signer)) in expected.iter().enumerate() {
+            let got = &ix.accounts[i];
+            assert_eq!(got.pubkey, *pubkey, "account {i} should be `{name}`");
+            assert_eq!(got.is_writable, *writable, "`{name}` writable flag");
+            assert_eq!(got.is_signer, *signer, "`{name}` signer flag");
+        }
     }
 
     #[test]
