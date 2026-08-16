@@ -204,6 +204,20 @@ message Trade {
   TradeRole seller_is = 11;
   // The order_id that created this trade.
   uint64 order_hit = 12;
+  // Which market this trade executed on:
+  // `base_chain::base_token::quote_chain::quote_token`, the same identity
+  // `TradeRequest.market_id` and `OrderbookEntry.market_id` use.
+  //
+  // REQUIRED for the live Trades stream to be scoped. Without it, a live
+  // trade carries no market identity, so a per-market subscription can only
+  // filter on the four trader-address fields — meaning a subscriber to one
+  // market would receive fills from every other market as long as the
+  // addresses matched. The engine's trade already carries this; it simply
+  // was not on the wire, which is why the live half of `Trades` has no
+  // producer today.
+  //
+  // Set on every `Trade`, including those embedded in `SendOrderResponse`.
+  string market_id = 13;
 }
 
 enum TradeRole {
