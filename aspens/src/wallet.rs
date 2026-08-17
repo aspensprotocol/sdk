@@ -252,6 +252,45 @@ pub fn load_admin_wallet(curve: CurveType) -> Result<Wallet> {
     }
 }
 
+/// Env var holding the Solana operator-admin keypair — the authority on
+/// `instance.operator_admin`, which gates `set_withdraw_epoch_cap`.
+///
+/// Deliberately its OWN variable, not `TRADER_PRIVKEY_SOLANA` or
+/// `ADMIN_PRIVKEY_SOLANA`: the withdrawal cap only contains a compromised or
+/// buggy TEE while its authority is a key nothing else in the stack holds, so
+/// conflating it with the trading wallet would quietly dissolve the guarantee
+/// the cap exists to provide. Keep this key offline.
+#[cfg(feature = "solana")]
+pub const OPERATOR_ADMIN_PRIVKEY_SOLANA_ENV: &str = "OPERATOR_ADMIN_PRIVKEY_SOLANA";
+
+/// Load the Solana operator-admin wallet from
+/// [`OPERATOR_ADMIN_PRIVKEY_SOLANA_ENV`].
+///
+/// Accepts either `solana-keygen` format — a base58 64-byte keypair string or
+/// a JSON byte array (`[12,34,…]`, e.g. the contents of an `id.json`) — so an
+/// operator can paste whichever form their key custody produced.
+#[cfg(feature = "solana")]
+pub fn load_operator_admin_wallet_solana() -> Result<Wallet> {
+    let key = std::env::var(OPERATOR_ADMIN_PRIVKEY_SOLANA_ENV).map_err(|_| {
+        eyre!(
+            "{} not set in environment — it must hold the Solana keypair for the \
+             instance's `operator_admin` (base58 or JSON byte array). This is \
+             intentionally NOT the trader/admin key.",
+            OPERATOR_ADMIN_PRIVKEY_SOLANA_ENV
+        )
+    })?;
+    Wallet::from_solana_base58(&key)
+        .or_else(|_| Wallet::from_solana_json(&key))
+        .map_err(|e| {
+            eyre!(
+                "{} is not a valid Solana keypair (expected base58 or a JSON \
+                 byte array of 64 bytes): {}",
+                OPERATOR_ADMIN_PRIVKEY_SOLANA_ENV,
+                e
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +350,27 @@ mod tests {
         let w = Wallet::from_solana_base58(&fresh_solana_keypair_b58()).unwrap();
         let digest = B256::ZERO;
         assert!(w.sign_eip712_digest(digest).await.is_err());
+    }
+
+    /// The operator-admin key is loaded format-agnostically (base58 OR a JSON
+    /// byte array), so an operator whose custody produced an `id.json` doesn't
+    /// have to re-encode it. Exercises both branches of the `or_else` in
+    /// [`load_operator_admin_wallet_solana`] without touching the process env.
+    #[cfg(feature = "solana")]
+    #[test]
+    fn solana_keypair_loads_from_either_format() {
+        let kp = Keypair::new();
+        let expected = kp.pubkey().to_string();
+
+        let b58 = bs58::encode(kp.to_bytes()).into_string();
+        let json = serde_json::to_string(&kp.to_bytes().to_vec()).unwrap();
+
+        for key in [b58, json] {
+            let w = Wallet::from_solana_base58(&key)
+                .or_else(|_| Wallet::from_solana_json(&key))
+                .expect("both solana-keygen formats must load");
+            assert_eq!(w.address(), expected);
+        }
     }
 
     #[cfg(feature = "solana")]

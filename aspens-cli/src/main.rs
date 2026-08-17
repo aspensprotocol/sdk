@@ -673,6 +673,43 @@ enum Commands {
         #[arg(long, short = 'o', default_value = "text")]
         output: String,
     },
+    /// Arm the per-token per-epoch withdrawal cap on a Solana instance,
+    /// signing DIRECTLY with the offline operator-admin key.
+    ///
+    /// Semantics you need before using this:
+    ///
+    /// * CAP = 0 MEANS UNLIMITED — the shipped default for every mint, and
+    ///   the same sentinel EVM's MidribV3.setWithdrawEpochCap uses. Passing 0
+    ///   disarms the cap; it does not block withdrawals.
+    ///
+    /// * The cap is per (instance, mint) and per epoch. An epoch is 9,000
+    ///   slots, roughly 1 hour. It is per TOKEN because one scalar cannot be
+    ///   sane across a 6-decimal and an 18-decimal mint at once.
+    ///
+    /// * The window is TUMBLING, not sliding: the running total resets at the
+    ///   epoch boundary, so a withdrawal of the full cap just before a
+    ///   rollover and another just after puts 2x CAP out inside one hour. To
+    ///   guarantee at most X per hour, SET CAP = X/2. EVM behaves identically.
+    ///
+    /// * The signer must equal the instance's on-chain `operator_admin`
+    ///   (checked before submitting). IF THAT IS THE ARBORTER'S OWN KEY — the
+    ///   default the Solana deployer takes when no operator admin is
+    ///   configured — THE CAP PROVIDES NO CONTAINMENT against a compromised
+    ///   signer, which can simply raise it again. It still bounds bugs and
+    ///   operator error. The command warns when it detects that shape.
+    ///
+    /// Reads the key from OPERATOR_ADMIN_PRIVKEY_SOLANA (base58 or JSON byte
+    /// array) — deliberately NOT the trader or admin key. Never goes through
+    /// the arborter.
+    SetWithdrawEpochCap {
+        /// The Solana network name (e.g. solana-local, solana-devnet)
+        network: String,
+        /// Token symbol the cap applies to (e.g. USDC, WSOL)
+        token: String,
+        /// Cap in human-readable units (e.g. "50000", "12.5"), scaled by the
+        /// token's `decimals` from the chain config. "0" = UNLIMITED.
+        cap: String,
+    },
 }
 
 #[tokio::main]
@@ -1592,6 +1629,92 @@ async fn run() -> Result<()> {
                     println!("  XFAM:          {}", hex::encode(verified.xfam));
                     println!("  REPORTDATA:    {}", hex::encode(verified.report_data));
                 }
+            }
+        }
+        Commands::SetWithdrawEpochCap {
+            network,
+            token,
+            cap,
+        } => {
+            let config = client
+                .get_config()
+                .await
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
+            let context = format!("set withdraw epoch cap for {} on {}", token, network);
+
+            // Human units -> the mint's base units, the scale the program
+            // accumulates withdrawals in. `0` survives as `0` = UNLIMITED.
+            let cap_base = resolve_token_amount(&config, &network, &token, &cap)
+                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+            let cap_base: u64 = cap_base.try_into().map_err(|_| {
+                eyre::eyre!(
+                    "cap {} {} is {} base units, which exceeds u64 — Solana amounts \
+                     are u64, so no such cap is representable (and any cap above \
+                     the mint's supply is unlimited in practice; pass 0 for that)",
+                    cap,
+                    token,
+                    cap_base
+                )
+            })?;
+
+            if cap_base == 0 {
+                info!(
+                    "Setting {token} withdrawal cap on {network} to 0 = UNLIMITED \
+                     (this DISARMS the cap)"
+                );
+            } else {
+                info!(
+                    "Setting {token} withdrawal cap on {network} to {cap} ({cap_base} \
+                     base units) per ~1h epoch. Tumbling window: up to {} base units \
+                     can leave across a boundary.",
+                    cap_base.saturating_mul(2)
+                );
+            }
+
+            // Direct-signing, never through the arborter: the cap's authority
+            // must be a key the TEE does not hold, or it bounds nothing.
+            //
+            // These two errors deliberately bypass `format_error`. Its
+            // key-related branch fires on any message containing "privkey" and
+            // rewrites the hints to "ensure TRADER_PRIVKEY is set … a
+            // 64-character hex string" — the wrong variable and the wrong
+            // format for an Ed25519 operator-admin key, and precisely the
+            // trader/admin conflation this command exists to prevent. The
+            // messages raised below already name the right variable.
+            let wallet = aspens::load_operator_admin_wallet_solana()?;
+
+            let outcome = executor.execute(async move {
+                aspens::operator::set_withdraw_epoch_cap(
+                    &config, &network, &token, cap_base, &wallet,
+                )
+                .await
+            })?;
+
+            info!("Transaction: {}", outcome.signature);
+            info!("  instance:       {}", outcome.instance);
+            info!("  mint:           {}", outcome.mint);
+            info!("  withdraw_epoch: {}", outcome.withdraw_epoch);
+            match outcome.state {
+                Some(state) if state.cap == 0 => info!(
+                    "  cap on chain:   0 (UNLIMITED); epoch {} has {} base units withdrawn",
+                    state.epoch, state.withdrawn
+                ),
+                Some(state) => info!(
+                    "  cap on chain:   {} base units; epoch {} has {} withdrawn",
+                    state.cap, state.epoch, state.withdrawn
+                ),
+                None => info!(
+                    "  cap on chain:   could not be read back (the transaction confirmed; \
+                     re-check with a fresh RPC read)"
+                ),
+            }
+            if outcome.admin_is_tee_signer {
+                eprintln!(
+                    "warning: this instance's operator_admin IS its TEE signer, so the cap \
+                     bounds bugs and operator error but NOT a compromised signer — that key \
+                     can raise the cap again. Configure a distinct operator-admin key for \
+                     real containment."
+                );
             }
         }
     }

@@ -316,6 +316,29 @@ just clean                 # Clean build artifacts
 
 Command-line interface for scripted trading operations.
 
+It also carries the one **operator** command that must NOT go through the
+arborter, `set-withdraw-epoch-cap`:
+
+```bash
+OPERATOR_ADMIN_PRIVKEY_SOLANA=<base58 or id.json contents> \
+  aspens-cli set-withdraw-epoch-cap <network> <token> <cap>
+```
+
+This arms the Solana midrib program's per-`(instance, mint)` per-epoch
+withdrawal ceiling. `cap` is in human units (scaled by the token's `decimals`),
+and **`0` means unlimited** — the shipped default for every mint, matching
+`MidribV3.setWithdrawEpochCap` on EVM. The epoch is 9,000 slots (~1 hour) and
+the window is **tumbling, not sliding**, so up to `2 × cap` can leave across a
+boundary; for at most X per hour, set `cap = X/2`.
+
+The authority is the instance's on-chain `operator_admin`, so the command
+builds, signs and submits the transaction locally with an offline key
+(`OPERATOR_ADMIN_PRIVKEY_SOLANA`, base58 or JSON keypair) — deliberately not
+the trader or admin key, and never the arborter's. A cap whose authority is the
+arborter's own signer bounds bugs and operator error but provides no
+containment against a compromised TEE; the command warns when it sees that
+shape. `aspens-cli set-withdraw-epoch-cap --help` restates all of this.
+
 ### REPL Binary (`aspens-repl/`)
 
 Interactive Read-Eval-Print Loop for manual trading with command history and session state.

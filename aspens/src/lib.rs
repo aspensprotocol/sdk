@@ -103,6 +103,15 @@ pub use wallet::{CurveType, Wallet, load_admin_wallet, load_trader_wallet};
 #[cfg(feature = "client")]
 pub use wallet::{chain_curve, load_trader_wallet_for_chain, load_trader_wallet_for_network};
 
+// Operator-authority direct-signing flows (Solana). Deliberately not behind
+// `admin`: `commands::admin` is the gRPC surface where the ARBORTER signs, and
+// these exist precisely because that shape can't secure a control aimed at the
+// arborter's own key.
+#[cfg(all(feature = "client", feature = "solana"))]
+pub use commands::operator;
+#[cfg(feature = "solana")]
+pub use wallet::{OPERATOR_ADMIN_PRIVKEY_SOLANA_ENV, load_operator_admin_wallet_solana};
+
 // Re-export admin types when admin feature is enabled
 #[cfg(all(feature = "admin", feature = "client"))]
 pub use commands::admin;
