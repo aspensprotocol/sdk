@@ -195,6 +195,12 @@ enum ReplCommand {
         market: String,
         /// Amount to buy
         amount: String,
+        /// REQUIRED: the maximum QUOTE you are prepared to spend,
+        /// human-readable (e.g. "250.5"). A market buy gives quote and
+        /// has no price to size that with, so this — not `amount` — is
+        /// what bounds and collateralises it.
+        #[arg(long)]
+        quote_budget: String,
         /// Invisible order: your fills print in the public trade stream
         /// with your side's identity redacted. A market order never
         /// rests, so orderbook suppression doesn't apply — the flag's
@@ -513,9 +519,13 @@ fn main() {
         ReplCommand::BuyMarket {
             market,
             amount,
+            quote_budget,
             hidden,
         } => {
-            info!("Sending market BUY order for {amount} on market {market} (hidden={hidden})");
+            info!(
+                "Sending market BUY order for {amount} on market {market} \
+                 (quote_budget={quote_budget}, hidden={hidden})"
+            );
 
             // Fetch configuration from server
             let config = match app_state.get_config_sync() {
@@ -534,12 +544,19 @@ fn main() {
             let url = app_state.stack_url();
             let mkt = market.clone();
             let amt = amount.clone();
+            let budget = quote_budget.clone();
             let res = executor.execute(async move {
                 send_order::send_order_with_wallet(
-                    url, mkt, 1, // Buy side
-                    amt, None, // No limit price (market order)
-                    &wallet, config, false, // post_only meaningless for market orders
+                    url,
+                    mkt,
+                    1, // Buy side
+                    amt,
+                    None, // No limit price (market order)
+                    &wallet,
+                    config,
+                    false, // post_only meaningless for market orders
                     hidden,
+                    Some(budget), // what actually bounds a market buy
                 )
                 .await
             });
@@ -604,6 +621,7 @@ fn main() {
                     config,
                     post_only,
                     hidden,
+                    None, // a limit order's budget is derived: quantity x price
                 )
                 .await
             });
@@ -659,7 +677,7 @@ fn main() {
                     url, mkt, 2, // Sell side
                     amt, None, // No limit price (market order)
                     &wallet, config, false, // post_only meaningless for market orders
-                    hidden,
+                    hidden, None, // an ASK gives base: its budget IS its quantity
                 )
                 .await
             });
@@ -724,6 +742,7 @@ fn main() {
                     config,
                     post_only,
                     hidden,
+                    None, // a limit order's budget is derived: quantity x price
                 )
                 .await
             });

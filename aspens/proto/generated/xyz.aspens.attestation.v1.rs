@@ -3,7 +3,7 @@
 pub struct GetAttestationRequest {
     /// Caller-supplied freshness nonce (anti-replay). At most 64 bytes.
     ///
-    /// NOTE: semantics narrowed (see ATTESTATION_QUOTE_DESIGN.md §4.4). The signer no
+    /// NOTE: these semantics are narrower than they look. The signer no
     /// longer writes these bytes directly into REPORTDATA; it assembles REPORTDATA
     /// server-side as SHA-512( DOMAIN || SHA256(pubkey_manifest) || SHA256(image_digests) || SHA256(report_data) ),
     /// where `pubkey_manifest` is the canonical manifest binding ALL of the signer's
@@ -75,8 +75,9 @@ pub struct AttestationReport {
     /// the PCK chain is embedded in the quote's certification data.
     #[prost(bytes = "vec", tag = "17")]
     pub cert_chain: ::prost::alloc::vec::Vec<u8>,
-    /// Self-reported running image digest(s) (see design §4.7). Trust rests on the
-    /// MRTD/RTMR measurement policy, not on this self-report.
+    /// Self-reported running image digest(s). Trust rests on the MRTD/RTMR
+    /// measurement policy, NOT on this self-report — a compromised signer can put
+    /// anything here.
     #[prost(bytes = "vec", tag = "18")]
     pub image_digest: ::prost::alloc::vec::Vec<u8>,
 }

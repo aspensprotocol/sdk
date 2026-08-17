@@ -127,8 +127,16 @@ encoder must match (empty bytes → `"0x"`).
   "postOnly": false,               // optional
   "signatureHash": "0x<eip712-sig>",
   "orderId": "0x<sdk-derived>",
-  "amountIn": "5"
+  "amountIn": "5"                  // the order's budget; now inert at the
+                                   // arborter (OrderAuthorization.amount_in
+                                   // was deleted), kept for the adapter
 }
+
+// NOTE: this wire has no `quoteBudget`, and `Order.quote_budget` is what a
+// market BID must sign. The adapter rebuilds the arborter `Order` from the
+// fields above, so an order carrying a budget would hash differently there
+// and fail signature verification. The SDK refuses a market BID over FCE
+// rather than send one; a limit buy is unaffected.
 
 // CANCEL_ORDER   — { orderId, marketId, signatureHash, ... } (mirror CancelOrderRequest)
 // WITHDRAW       — { "network":"flare-coston2", "token":"0x..", "account":"0x..",

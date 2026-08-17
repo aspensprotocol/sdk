@@ -69,9 +69,17 @@ Trading is off-chain in the TEE; the chain only sees deposits, net settlement
 - **Order entry is authenticated by the outer envelope signature only**
   (`aspens::evm::sign_send_order_envelope`, EIP-191 over the encoded order — the
   counterpart to arborter's `is_signature_valid`). The order authorization
-  payload carries just `order_id` + `amount_in`. There is **no per-order
-  on-chain lock signature** — the legacy gasless `open`/`open_for` lock signing
-  (EVM `GaslessCrossChainOrder`, Solana `OpenForSignedPayload`) was burned.
+  payload carries just `order_id`. There is **no per-order on-chain lock
+  signature** — the legacy gasless `open`/`open_for` lock signing (EVM
+  `GaslessCrossChainOrder`, Solana `OpenForSignedPayload`) was burned.
+- **An order commits a budget, denominated in the asset it gives**, and
+  anything that binds the caller to a number must be INSIDE `Order`, where the
+  envelope signature covers it. `OrderAuthorization.amount_in` was deleted for
+  failing that test — it sat in a sibling message, unsigned. Three cells derive
+  their budget from the signed `(quantity, price)`; a **market bid** cannot, and
+  states it as `Order.quote_budget` — in the QUOTE TOKEN's own base units, not
+  pair decimals, required there and rejected on every other cell. `quantity` is
+  ignored for sizing a market bid but is still signed and must be non-zero.
 - The live EVM contract is **MidribV3** (`artifacts/MidribV3.json`); MidribV3
   has no on-chain locked balance, so EVM "locked" reads as 0.
 - Settlement (`settleBatch` / Solana `settle_batch`) is arborter-signed and

@@ -80,6 +80,8 @@ prep-for-pr: lint fmt-check test
 #   SDK_LIVE_TEST_SIDE        — BID|ASK (default ASK)
 #   SDK_LIVE_TEST_QUANTITY    — default "0.001"
 #   SDK_LIVE_TEST_PRICE       — omit for market order
+#   SDK_LIVE_TEST_QUOTE_BUDGET — max quote to spend; REQUIRED for a market
+#                                BID (BID with no price), rejected otherwise
 test-live-send-order:
     cargo test -p aspens --test send_order_live --all-features -- --ignored --nocapture
 
