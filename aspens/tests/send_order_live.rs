@@ -36,6 +36,11 @@
 //! - `SDK_LIVE_TEST_SIDE` — `BID` or `ASK` (default `ASK`)
 //! - `SDK_LIVE_TEST_QUANTITY` — pair-decimal quantity, e.g. `"0.001"` (default `"0.001"`)
 //! - `SDK_LIVE_TEST_PRICE` — pair-decimal limit price; omit for a market order
+//! - `SDK_LIVE_TEST_QUOTE_BUDGET` — human-readable max quote to spend.
+//!   **Required for a market BID** (`SIDE=BID` with no `PRICE`): that order
+//!   gives quote and has no price to size that with, so the budget is what
+//!   bounds it. Rejected on every other (side, type) combination, where the
+//!   budget is derived from the signed quantity/price.
 //! - `TRADER_PRIVKEY` / `TRADER_PRIVKEY_SOLANA` — at least one, matching
 //!   origin-chain curve
 //!
@@ -105,12 +110,20 @@ async fn send_order_roundtrip_against_live_stack() -> Result<()> {
     let quantity =
         env::var("SDK_LIVE_TEST_QUANTITY").unwrap_or_else(|_| DEFAULT_QUANTITY.to_string());
     let price = env::var("SDK_LIVE_TEST_PRICE").ok();
+    let quote_budget = env::var("SDK_LIVE_TEST_QUOTE_BUDGET").ok();
+    if side == 1 && price.is_none() && quote_budget.is_none() {
+        return Err(eyre!(
+            "a market BID needs SDK_LIVE_TEST_QUOTE_BUDGET (the max quote to \
+             spend) — set it, or set SDK_LIVE_TEST_PRICE to make this a limit bid"
+        ));
+    }
 
     tracing::info!(
         market = %market.market_id,
         %side,
         %quantity,
         ?price,
+        ?quote_budget,
         origin = %origin_network,
         arch = %origin_chain.architecture,
         addr = %wallet.address(),
@@ -127,6 +140,7 @@ async fn send_order_roundtrip_against_live_stack() -> Result<()> {
         config,
         false, // post_only — live happy-path test exercises the regular take-or-rest flow
         false, // hidden — live happy-path test exercises the regular visible-order flow
+        quote_budget,
     )
     .await?;
 

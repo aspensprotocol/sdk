@@ -18,8 +18,22 @@ use sha2::{Digest, Sha256};
 /// )
 /// ```
 ///
-/// Both EVM and Solana clients MUST use this exact derivation — the arborter
-/// rehashes with the same recipe and will reject orders whose id doesn't match.
+/// Both EVM and Solana clients MUST use this exact derivation.
+///
+/// **What actually checks it, today: nothing.** The arborter carries the same
+/// recipe (`chain_traits::market::derive_order_id`) but has no production call
+/// site for it — it takes `OrderAuthorization.order_id` verbatim and uses that
+/// id throughout match, settle and cancel. So the id is unauthenticated and
+/// predictable, and an attacker who predicts one can claim it first. Deriving
+/// it server-side, from the signed order, is what will close that; until then
+/// this recipe is a convention both clients keep, not one the venue enforces.
+///
+/// That is precisely why it must not drift: the id is the key the ledger and
+/// `settleBatch` agree a fill belongs to, and the moment the arborter starts
+/// deriving it, a client that hashed anything else stops matching. Note what
+/// the recipe hashes — `input_amount` is the order's BUDGET, in the asset it
+/// gives (a market bid's is its stated `quote_budget`), and `output_amount` is
+/// zero for a market order, which has no price to expect anything with.
 // The argument list mirrors arborter's hashing recipe one-to-one; bundling
 // it into a struct here would just push the unpacking to every caller and
 // drift more easily from the arborter side. Kept flat on purpose.

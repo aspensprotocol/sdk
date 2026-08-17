@@ -23,48 +23,91 @@ use crate::commands::config::config_pb::GetConfigResponse;
 use crate::evm::rpc::MidribV3;
 use crate::grpc::create_channel;
 
-// Internal RPC dispatcher: encodes the protobuf request fields the gRPC
-// server expects. The argument list intentionally mirrors the
-// `SendOrderRequest` protobuf shape — bundling fields into a struct here
-// would split the protobuf-mapping site across two locations.
+/// The two things the send path derives from one set of inputs: the `Order`
+/// that gets signed, and the authorization derived over the same budget.
+///
+/// They are built together, in [`prepare_order`], because they must agree.
+/// The budget the id is hashed over and the budget the arborter reserves come
+/// from the same resolution of the same numbers — build them apart and the
+/// only symptom of a mismatch is an order the venue reads differently from
+/// the one the user believed they signed.
+#[cfg_attr(test, derive(Debug))]
+pub(crate) struct PreparedOrder {
+    /// Exactly the bytes the envelope signature is taken over, once encoded.
+    pub order: Order,
+    /// `order_id` for the request, plus the budget it was derived over.
+    pub commitment: crate::commands::trading::gasless::OrderCommitment,
+}
+
+/// Resolve the order's budget, derive its id, and build the `Order` that
+/// carries them — all pure, no I/O, so the whole shape is testable.
 #[allow(clippy::too_many_arguments)]
-async fn call_send_order(
-    url: String,
+pub(crate) fn prepare_order(
+    config: &GetConfigResponse,
+    market: &crate::commands::config::config_pb::Market,
     side: i32,
-    quantity: String,
-    price: Option<String>,
-    market_id: String,
+    quantity_raw: String,
+    price_raw: Option<String>,
     base_account_address: String,
     quote_account_address: String,
-    wallet: &Wallet,
-    authorization: Option<arborter_pb::OrderAuthorization>,
+    signing_wallet: &Wallet,
     post_only: bool,
     hidden: bool,
+    quote_budget_raw: Option<String>,
+) -> Result<PreparedOrder> {
+    // The budget the arborter will reserve, and the id derived over it. This
+    // is also where a budget on the wrong cell (or a missing one on a market
+    // bid) is refused, before anything is signed.
+    let commitment = super::gasless::build_gasless_authorization(
+        config,
+        market,
+        side,
+        signing_wallet,
+        &quantity_raw,
+        price_raw.as_deref(),
+        quote_budget_raw.as_deref(),
+    )?;
+
+    // The order carries the original pair-decimal values.
+    // `post_only=false` is the proto3 default and is wire-skipped on encode,
+    // so existing callers' signed envelopes are byte-identical to pre-feature
+    // builds; only true post-only orders change the envelope digest (which
+    // arborter's signature check transparently honors — same encoded bytes
+    // hashed on both sides).
+    //
+    // `quote_budget` (field 11) is the same story: `None` emits nothing, so
+    // every order that isn't a market bid signs the exact bytes it always did.
+    // Note the units differ from `quantity`/`price` — it is the QUOTE token's
+    // own base units, not pair decimals (see `Order.quote_budget`).
+    let order = Order {
+        side,
+        quantity: quantity_raw,
+        price: price_raw,
+        market_id: market.market_id.clone(),
+        base_account_address,
+        quote_account_address,
+        execution_type: 0,
+        matching_order_ids: vec![],
+        post_only,
+        hidden,
+        quote_budget: quote_budget_raw,
+    };
+
+    Ok(PreparedOrder { order, commitment })
+}
+
+// Internal RPC dispatcher: signs the prepared order and sends it.
+async fn call_send_order(
+    url: String,
+    order_for_sending: Order,
+    wallet: &Wallet,
+    authorization: Option<arborter_pb::OrderAuthorization>,
 ) -> Result<SendOrderResponse> {
     // Create a channel to connect to the gRPC server (with TLS support for HTTPS)
     let channel = create_channel(&url).await?;
 
     // Instantiate the client
     let mut client = ArborterServiceClient::new(channel);
-
-    // Create the order for sending with original pair decimal values.
-    // `post_only=false` is the proto3 default and is wire-skipped on encode,
-    // so existing callers' signed envelopes are byte-identical to pre-feature
-    // builds; only true post-only orders change the envelope digest (which
-    // arborter's signature check transparently honors — same encoded bytes
-    // hashed on both sides).
-    let order_for_sending = Order {
-        side,
-        quantity: quantity.clone(), // Original pair decimal values
-        price: price.clone(),       // Original pair decimal values
-        market_id: market_id.clone(),
-        base_account_address: base_account_address.clone(),
-        quote_account_address: quote_account_address.clone(),
-        execution_type: 0,
-        matching_order_ids: vec![],
-        post_only,
-        hidden,
-    };
 
     // Encode + sign the order via the shared helper (the single sign site so
     // the gRPC and FCE paths produce byte-identical envelopes). EVM signatures
@@ -148,6 +191,32 @@ fn format_balance_for_display(balance: U256, decimals: u32) -> String {
 /// stays untouched.
 pub(crate) fn convert_to_pair_decimals(amount: &str, decimals: u32) -> Result<String> {
     Ok(crate::decimals::parse_decimal_amount(amount, decimals)?.to_string())
+}
+
+/// Scale a human-readable quote budget (e.g. `"250.5"`) into the decimal
+/// string `Order.quote_budget` carries.
+///
+/// **Not pair decimals.** `quote_budget` is denominated in the QUOTE TOKEN's
+/// own base units, and the arborter converts the wire value back with
+/// `market.quote_chain_token_decimals` (`get_market_decimals` →
+/// `quote_budget_in_pair_units`). Scaling here with any other number — pair
+/// decimals, the base token's decimals — would commit a budget orders of
+/// magnitude away from the one the user typed, on every market where those
+/// differ. So this reads the same field the arborter does.
+pub(crate) fn quote_budget_to_raw(
+    market: &crate::commands::config::config_pb::Market,
+    budget: &str,
+) -> Result<String> {
+    let decimals = u32::try_from(market.quote_chain_token_decimals).map_err(|_| {
+        eyre::eyre!(
+            "market '{}' has a negative quote_chain_token_decimals ({})",
+            market.name,
+            market.quote_chain_token_decimals
+        )
+    })?;
+    let raw = crate::decimals::parse_decimal_amount(budget, decimals)
+        .map_err(|e| eyre::eyre!("Invalid quote budget '{}': {}", budget, e))?;
+    Ok(raw.to_string())
 }
 
 /// Look up a market from the configuration
@@ -282,6 +351,10 @@ pub fn derive_address(privkey: &str) -> Result<(Address, String)> {
 ///   response-embedded books; appears in NO stream, not even your own —
 ///   track it via `SendOrderResponse.order_id`. Fills print publicly
 ///   with your side's identity redacted.
+/// * `quote_budget` - The maximum QUOTE to spend, human-readable (e.g.
+///   "250.5"), scaled here by the market's quote-token decimals.
+///   **Required for a market buy** (`side == 1` with no `price`) and
+///   rejected on every other order — see [`send_order_with_wallets`].
 // Public top-level API — the argument list is the documented entry
 // point; introducing a builder/struct here would break every caller
 // (CLI, REPL, examples) for no behavioural gain.
@@ -296,6 +369,7 @@ pub async fn send_order_with_wallet(
     config: GetConfigResponse,
     post_only: bool,
     hidden: bool,
+    quote_budget: Option<String>,
 ) -> Result<SendOrderResponse> {
     send_order_with_wallets(
         url,
@@ -307,6 +381,7 @@ pub async fn send_order_with_wallet(
         config,
         post_only,
         hidden,
+        quote_budget,
     )
     .await
 }
@@ -326,6 +401,17 @@ pub async fn send_order_with_wallet(
 /// `post_only`: see [`send_order_with_wallet`].
 /// `hidden`: see [`send_order_with_wallet`]. No client-side validation —
 /// hidden combines legally with market, limit, and post_only orders.
+///
+/// `quote_budget`: human-readable quote amount, scaled here by the market's
+/// `quote_chain_token_decimals` — the SAME field the arborter reads the wire
+/// value back with, so the two sides cannot disagree about what "250.5" meant.
+/// One rule decides whether it is needed: **an order commits a budget,
+/// denominated in the asset it gives.** A market buy gives quote and has no
+/// price to size that with, so it must state the budget; a sell gives base
+/// (`quantity` IS its budget) and a limit buy derives `quantity x price`, so
+/// both reject a stated one. Note the budget bounds the spend — a market buy's
+/// `quantity` bounds nothing, though it must still be non-zero and is still
+/// signed.
 // Public top-level API — same rationale as `send_order_with_wallet`
 // for keeping the argument list flat.
 #[allow(clippy::too_many_arguments)]
@@ -339,6 +425,7 @@ pub async fn send_order_with_wallets(
     config: GetConfigResponse,
     post_only: bool,
     hidden: bool,
+    quote_budget: Option<String>,
 ) -> Result<SendOrderResponse> {
     if wallets.is_empty() {
         return Err(eyre::eyre!(
@@ -368,6 +455,10 @@ pub async fn send_order_with_wallets(
         .map(|p| convert_to_pair_decimals(p, pair_decimals))
         .transpose()
         .map_err(|e| eyre::eyre!("Invalid price: {}", e))?;
+    let quote_budget_raw = quote_budget
+        .as_deref()
+        .map(|b| quote_budget_to_raw(market, b))
+        .transpose()?;
 
     // Pick the wallet whose curve matches each chain's architecture. The
     // SDK's `chain_curve` helper is the single source of truth for the
@@ -426,33 +517,32 @@ pub async fn send_order_with_wallets(
         signing_wallet.curve()
     );
 
-    // Build the order authorization for the SendOrderRequest. Under the
-    // optimistic ledger the arborter authenticates via the outer envelope
-    // signature and reads only `order_id` + `amount_in` from this payload —
-    // there is no per-order on-chain lock signature.
-    let authorization = super::gasless::build_gasless_authorization(
+    // Build what gets signed and the authorization that accompanies it. Under
+    // the optimistic ledger the arborter authenticates via the outer envelope
+    // signature and reads only `order_id` from the authorization — there is no
+    // per-order on-chain lock signature, and no declared amount either
+    // (`OrderAuthorization.amount_in` was deleted: it sat outside the signed
+    // `Order`, so nothing bound the caller to it). The budget it commits is
+    // signed, inside the order.
+    let prepared = prepare_order(
         &config,
         market,
         side,
-        signing_wallet,
-        &quantity_raw,
-        price_raw.as_deref(),
-    )?;
-
-    // Send using the resolved market_id from config
-    let resolved_market_id = market.market_id.clone();
-    let result = call_send_order(
-        url,
-        side,
         quantity_raw.clone(),
         price_raw.clone(),
-        resolved_market_id,
         base_account_address,
         quote_account_address,
         signing_wallet,
-        Some(authorization),
         post_only,
         hidden,
+        quote_budget_raw,
+    )?;
+
+    let result = call_send_order(
+        url,
+        prepared.order,
+        signing_wallet,
+        Some(prepared.commitment.authorization),
     )
     .await;
 
@@ -651,6 +741,7 @@ mod tests {
             matching_order_ids: vec![],
             post_only: false,
             hidden: false,
+            quote_budget: None,
         };
 
         let response = SendOrderResponse {
@@ -708,6 +799,139 @@ mod tests {
     fn test_convert_to_pair_decimals_whitespace() {
         assert_eq!(convert_to_pair_decimals("  1.5  ", 6).unwrap(), "1500000");
     }
+
+    // ----- quote_budget_to_raw: the scale that must NOT be pair decimals ---
+
+    /// Base 18, quote 6, pair 8 — three different scales, so a budget scaled
+    /// by the wrong one lands on a different integer and the assertions below
+    /// can actually tell them apart.
+    fn market_with_decimals(
+        base_dec: i32,
+        quote_dec: i32,
+        pair_dec: i32,
+    ) -> crate::commands::config::config_pb::Market {
+        crate::commands::config::config_pb::Market {
+            name: "BASE/QUOTE".into(),
+            base_chain_network: "base-net".into(),
+            quote_chain_network: "quote-net".into(),
+            base_chain_token_symbol: "BASE".into(),
+            quote_chain_token_symbol: "QUOTE".into(),
+            base_chain_token_decimals: base_dec,
+            quote_chain_token_decimals: quote_dec,
+            pair_decimals: pair_dec,
+            market_id: "base-net::0xbase::quote-net::0xquote".into(),
+        }
+    }
+
+    /// `Order.quote_budget` is in the QUOTE token's own base units. The
+    /// arborter reads it back with `market.quote_chain_token_decimals`, so
+    /// scaling by pair decimals (10^8 here) or the base token's (10^18) would
+    /// commit a budget 100x or 10^12x away from what the user typed — and
+    /// nothing would report an error, because every one of those is a
+    /// well-formed u128.
+    #[test]
+    fn quote_budget_scales_by_the_quote_tokens_decimals() {
+        let market = market_with_decimals(18, 6, 8);
+        assert_eq!(quote_budget_to_raw(&market, "7.5").unwrap(), "7500000");
+        assert_eq!(quote_budget_to_raw(&market, "1").unwrap(), "1000000");
+        // Pair decimals would have given 750000000; base decimals
+        // 7500000000000000000. Neither is this.
+        assert_ne!(quote_budget_to_raw(&market, "7.5").unwrap(), "750000000");
+    }
+
+    /// Same input, a market whose quote token has different decimals: the
+    /// answer must follow the token, not a constant baked in here.
+    #[test]
+    fn quote_budget_follows_the_market_not_a_constant() {
+        let six = market_with_decimals(18, 6, 8);
+        let eighteen = market_with_decimals(6, 18, 8);
+        assert_eq!(quote_budget_to_raw(&six, "7.5").unwrap(), "7500000");
+        assert_eq!(
+            quote_budget_to_raw(&eighteen, "7.5").unwrap(),
+            "7500000000000000000"
+        );
+    }
+
+    #[test]
+    fn quote_budget_rejects_a_non_numeric_amount() {
+        let market = market_with_decimals(18, 6, 8);
+        assert!(quote_budget_to_raw(&market, "banana").is_err());
+    }
+
+    // ----- prepare_order: the budget must reach BOTH the signed order and
+    //       the id derived alongside it -----------------------------------
+
+    /// An anvil dev key — this is a signing-shape fixture, not a secret.
+    const TEST_PRIVKEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+    fn prepared(
+        side: i32,
+        price_raw: Option<&str>,
+        quote_budget_raw: Option<&str>,
+    ) -> Result<PreparedOrder> {
+        // base 18, quote 6, pair 8 — three different scales.
+        let (config, market) =
+            crate::commands::trading::gasless::tests::config_with_market(18, 6, 8);
+        let wallet = Wallet::from_evm_hex(TEST_PRIVKEY).expect("test key parses");
+        prepare_order(
+            &config,
+            &market,
+            side,
+            "100000000".to_string(), // 1.0 base at pair decimals 8
+            price_raw.map(str::to_string),
+            "0xbaseaccount".to_string(),
+            "0xquoteaccount".to_string(),
+            &wallet,
+            false,
+            false,
+            quote_budget_raw.map(str::to_string),
+        )
+    }
+
+    /// The budget has to land in TWO places at once: on the `Order` (where
+    /// the envelope signature covers it and the arborter reserves against
+    /// it) and in the id derived beside it. Dropping either one is silent —
+    /// an order the arborter reads differently from the one that was signed.
+    #[test]
+    fn prepare_market_bid_carries_the_budget_into_order_and_id() {
+        let p = prepared(1, None, Some("7500000")).expect("market bid with a budget");
+        assert_eq!(p.order.quote_budget.as_deref(), Some("7500000"));
+        assert_eq!(p.commitment.input_amount, 7_500_000);
+        // And it survives encoding — this is what actually gets signed.
+        let mut buf = Vec::new();
+        prost::Message::encode(&p.order, &mut buf).unwrap();
+        let decoded = <Order as prost::Message>::decode(&*buf).unwrap();
+        assert_eq!(decoded.quote_budget.as_deref(), Some("7500000"));
+    }
+
+    /// Every other order sets no budget, so its encoding — and therefore its
+    /// signature — is byte-for-byte what it was before the field existed.
+    #[test]
+    fn prepare_limit_order_sets_no_budget() {
+        let p = prepared(1, Some("200000000"), None).expect("limit bid");
+        assert_eq!(p.order.quote_budget, None);
+        // Decoding back to `None` is exact proof no field-11 record was
+        // written: an emitted-but-empty field would decode as `Some("")`.
+        let mut buf = Vec::new();
+        prost::Message::encode(&p.order, &mut buf).unwrap();
+        let decoded = <Order as prost::Message>::decode(&*buf).unwrap();
+        assert_eq!(decoded.quote_budget, None);
+        // 1.0 base x 2.0 price = 2.0 quote, at the quote token's 6 decimals.
+        assert_eq!(p.commitment.input_amount, 2_000_000);
+    }
+
+    /// The refusals are enforced on the path that actually signs, not only in
+    /// the resolver: a budget on a limit order, and a market bid with none.
+    #[test]
+    fn prepare_enforces_the_budget_rule() {
+        let err = prepared(1, Some("200000000"), Some("7500000")).unwrap_err();
+        assert!(err.to_string().contains("only for a MARKET bid"), "{err}");
+        let err = prepared(1, None, None).unwrap_err();
+        assert!(
+            err.to_string().contains("must set Order.quote_budget"),
+            "{err}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -748,6 +972,7 @@ mod order_flag_wire_pinning_tests {
             matching_order_ids: vec![],
             post_only: false,
             hidden: false,
+            quote_budget: None,
         }
     }
 

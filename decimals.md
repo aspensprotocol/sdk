@@ -74,24 +74,35 @@ on-chain integer                ← what the user's signature commits to
 ```
 
 Both legs of every order are normalised, not just one. For a Bid
-(side = 1, locks on the quote chain):
+(side = 1, giving quote):
 
 - `amount_in` = `quantity × price` (in `pair_decimals × 2`) normalised to
   the **input/quote** token's native decimals.
 - `amount_out` = `quantity` (in `pair_decimals`) normalised to the
   **output/base** token's native decimals.
 
-For an Ask (side = 2, locks on the base chain) the roles flip:
+For an Ask (side = 2, giving base) the roles flip:
 
 - `amount_in` = `quantity` normalised to the **input/base** token's decimals.
 - `amount_out` = `quantity × price` (in `pair_decimals × 2`) normalised to
   the **output/quote** token's decimals.
 
-These are the integers the user's EIP-712 (EVM) or Ed25519 (Solana)
-signature binds; the on-chain contract recomputes them and rejects the
-order if they don't match. See `commands/trading/gasless.rs::resolve_order`
-for the source; the on-chain verifier lives in arborter
-(`arborter/app/chain-evm` / `chain-solana`).
+`amount_in` is the order's **budget**: how much of the asset it gives it
+commits. One rule covers all four cells — and a **market bid** is the one
+that cannot derive it, because it gives quote and has no price to size that
+with. It states the budget instead, as `Order.quote_budget`, already in the
+**quote token's own base units** (not pair decimals, so it is passed through
+unscaled). A market ask needs nothing extra: it gives base, and its budget IS
+its `quantity`. `quote_budget` is rejected on any other order, where the
+budget is derived and a stated one could only disagree.
+
+These integers feed `derive_order_id`. What the arborter actually
+authenticates is the **outer envelope signature** over the prost-encoded
+`Order` (`sign_send_order_envelope`), and `quote_budget` rides inside `Order`
+precisely so that signature covers it. There is no on-chain lock and no
+per-order on-chain verifier under the optimistic ledger — the arborter
+re-derives the collateral requirement from the signed order and reserves it in
+the shadow ledger. See `commands/trading/gasless.rs::resolve_order`.
 
 ## Real-world examples
 
@@ -123,25 +134,44 @@ Internally:
 - ASK → base-leg lock normalised from 8 → 8 (no change) →
   `50_000_000` BTC base units.
 
-### Example 3: Market orders are not supported on the cross-chain path
+### Example 3: A market BUY states its budget in quote
 
 ```sh
-aspens-cli buy-market "$MARKET" 0.75   # rejected by the SDK
+aspens-cli buy-market "$MARKET" 0.75 --quote-budget 2000
 ```
 
-Every order routes through the gasless cross-chain authorisation flow
-(see `send_order.rs` — the legacy `lock_for_order` path is gone). A
-market order has no committed price at signing time, so the SDK cannot
-honestly pre-compute the `amount_in` the user is locking, and the
-on-chain verifier would reject any guess. `gasless::resolve_order`
-fails fast with:
+A market buy gives quote and has no price to convert `0.75` with, so its
+`quantity` bounds nothing — `--quote-budget` does, and it is what the arborter
+reserves. Internally, on a market whose quote token is USDC (6 decimals):
 
-> gasless cross-chain orders require a limit price — market orders
-> cannot pre-commit a lock amount the on-chain verifier will recompute
-> identically. Use buy-limit / sell-limit with a slippage-capped price.
+- `quote_budget = 2000 × 10^6 = 2_000_000_000` — scaled by the **quote
+  token's** decimals, NOT `pair_decimals`, and sent as `Order.quote_budget`.
+- `quantity` is still scaled to pair decimals, still signed, and must still be
+  greater than zero.
 
-If you want market-like behaviour, use a limit at a slippage-capped
-price (e.g. `buy-limit` at `best_ask × 1.005`).
+Omit `--quote-budget` and the order is refused before it leaves the process:
+
+> a market BID (side BID, no price) must set Order.quote_budget: it gives
+> quote and has no price to size that with, so nothing else bounds what it
+> may spend.
+
+A market SELL needs no budget — it gives base, so `amount` IS its budget:
+
+```sh
+aspens-cli sell-market "$MARKET" 0.75
+```
+
+Passing `--quote-budget` to anything but a market buy is an error, not a
+no-op: the budget there is derived from what is already signed, so a stated
+one could only disagree with it.
+
+If you want market-like behaviour with an explicit price ceiling instead, use
+a limit at a slippage-capped price (`buy-marketable`, or `buy-limit` at
+`best_ask × 1.005`).
+
+> **Over the FCE transport**, a market BUY is refused: the direct-action wire
+> has no `quote_budget` field, so the adapter would rebuild a different order
+> and the signature would not verify. Use a limit buy there.
 
 ### Example 4: Deposit 10 USDC (token has 6 decimals)
 

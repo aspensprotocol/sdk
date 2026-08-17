@@ -84,6 +84,10 @@ fn main() -> Result<()> {
             cfg_clone,
             false, // post_only
             false, // hidden
+            // quote_budget: only a market BUY needs one (it gives quote and
+            // has no price to size that with). This is a limit order, whose
+            // budget is the already-signed `quantity x price`.
+            None,
         )
         .await
     })?;

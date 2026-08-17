@@ -24,7 +24,7 @@ pub struct WithdrawRequest {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WithdrawResponse {
-    /// The voucher fields the holder submits to MidribV2.withdraw(...).
+    /// The voucher fields the holder submits to MidribV3.withdraw(...).
     #[prost(string, tag = "1")]
     pub account: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
@@ -96,8 +96,8 @@ pub struct SendOrderRequest {
     /// Valid EIP-712 signature hash of this order
     #[prost(bytes = "vec", tag = "2")]
     pub signature_hash: ::prost::alloc::vec::Vec<u8>,
-    /// Order authorization carrying the SDK-derived canonical order id and the
-    /// committed lock amount. Required. For message-typed fields proto3 tracks
+    /// Order authorization carrying the SDK-derived canonical order id. Required.
+    /// For message-typed fields proto3 tracks
     /// presence by default, so the generated Rust API is
     /// `Option<OrderAuthorization>`; the arborter handler enforces presence at
     /// the request boundary.
@@ -107,7 +107,7 @@ pub struct SendOrderRequest {
 /// SDK-derived order authorization. Under the optimistic shadow ledger, order
 /// entry never touches the chain — the arborter authenticates the order via the
 /// outer envelope signature (`SendOrderRequest.signature_hash`) and consumes
-/// only the two fields below. The legacy gasless on-chain-lock fields
+/// only the single field below. The legacy gasless on-chain-lock fields
 /// (user_signature / deadline / nonce / open_deadline / amount_out) were removed
 /// with the on-chain order machinery; the message and its `SendOrderRequest`
 /// field were renamed from `GaslessAuthorization` / `gasless` to match.
@@ -117,21 +117,28 @@ pub struct OrderAuthorization {
     /// SDK (`aspens::orders::derive_order_id`). The arborter uses it verbatim as
     /// the order's id throughout match / settle, so it MUST match the SDK's
     /// derivation exactly.
+    ///
+    /// NOTE: `amount_in` (field 2) was removed. It declared the collateral the
+    /// caller committed, but it lived HERE — in a sibling of `Order` — so
+    /// `signature_hash` never covered it, and the arborter now derives the
+    /// requirement from the signed order itself and reserves that. The one figure
+    /// that genuinely cannot be derived, a market BID's budget, moved INTO `Order`
+    /// as `quote_budget` so that it is signed. Field 2 is free for reuse.
     #[prost(string, tag = "1")]
     pub order_id: ::prost::alloc::string::String,
-    /// The committed lock amount on the origin chain (input token), in that
-    /// token's native base units (NOT pair decimals). Decimal-string encoding of
-    /// `u128` (no `0x` prefix, no separators) so values up to 2^128-1 round-trip
-    /// exactly across the gRPC boundary — protobuf has no native 128-bit integer.
-    #[prost(string, tag = "2")]
-    pub amount_in: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Order {
     /// 'BID' or 'ASK'
     #[prost(enumeration = "Side", tag = "1")]
     pub side: i32,
-    /// Order size
+    /// Order size, in BASE units at pair decimals.
+    ///
+    /// For three of the four (side, type) combinations this is what bounds the
+    /// order's obligation: an ASK gives base, so `quantity` IS its budget; a LIMIT
+    /// BID gives quote, and `quantity * price` bounds it. The fourth — a MARKET
+    /// BID — is bounded by `quote_budget` below instead, and its `quantity` is
+    /// ignored.
     #[prost(string, tag = "2")]
     pub quantity: ::prost::alloc::string::String,
     /// Optional. including is a LIMIT order. excluding is a MARKET order.
@@ -172,6 +179,27 @@ pub struct Order {
     /// are byte-identical.
     #[prost(bool, tag = "10")]
     pub hidden: bool,
+    /// The maximum QUOTE this order may spend, in the quote token's native base
+    /// units (NOT pair decimals) — the same denomination the ledger reserves in.
+    /// Decimal-string encoding of `u128`, matching `quantity` / `price`.
+    ///
+    /// One rule governs every order: **it commits a budget, denominated in the
+    /// asset it gives.** An ASK gives base and is bounded by `quantity`; a LIMIT
+    /// BID gives quote and is bounded by `quantity * price`. A MARKET BID gives
+    /// quote with no price to convert with, so nothing derivable bounds it — it
+    /// must say outright how much it is prepared to spend. That is this field, and
+    /// it is the order's SIZE, not a restatement of a size given elsewhere.
+    ///
+    /// REQUIRED for a market BID (no price, side BID); the arborter refuses one
+    /// without it, because an unbounded obligation cannot be collateralised.
+    /// REJECTED on every other order, where the budget is derived and a
+    /// caller-supplied figure could only disagree with it.
+    ///
+    /// It lives in `Order` rather than beside it precisely so `signature_hash`
+    /// covers it: this number authorises spending, and the retired
+    /// `OrderAuthorization.amount_in` was unsigned.
+    #[prost(string, optional, tag = "11")]
+    pub quote_budget: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Trade {
@@ -211,6 +239,21 @@ pub struct Trade {
     /// The order_id that created this trade.
     #[prost(uint64, tag = "12")]
     pub order_hit: u64,
+    /// Which market this trade executed on:
+    /// `base_chain::base_token::quote_chain::quote_token`, the same identity
+    /// `TradeRequest.market_id` and `OrderbookEntry.market_id` use.
+    ///
+    /// REQUIRED for the live Trades stream to be scoped. Without it, a live
+    /// trade carries no market identity, so a per-market subscription can only
+    /// filter on the four trader-address fields — meaning a subscriber to one
+    /// market would receive fills from every other market as long as the
+    /// addresses matched. The engine's trade already carries this; it simply
+    /// was not on the wire, which is why the live half of `Trades` has no
+    /// producer today.
+    ///
+    /// Set on every `Trade`, including those embedded in `SendOrderResponse`.
+    #[prost(string, tag = "13")]
+    pub market_id: ::prost::alloc::string::String,
 }
 /// Transaction hash information
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -629,10 +672,10 @@ pub mod arborter_service_client {
                 );
             self.inner.server_streaming(req, path, codec).await
         }
-        /// Request a TEE-signed withdrawal voucher (Track A §8). The chain can no
+        /// Request a TEE-signed withdrawal voucher. The chain can no
         /// longer self-judge a withdrawal under the optimistic shadow ledger, so the
         /// arborter freezes the settled funds and returns an owner-signed voucher the
-        /// holder submits to MidribV2.withdraw(voucher, signature).
+        /// holder submits to MidribV3.withdraw(voucher, signature).
         pub async fn withdraw(
             &mut self,
             request: impl tonic::IntoRequest<super::WithdrawRequest>,

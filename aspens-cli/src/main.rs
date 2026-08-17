@@ -161,6 +161,12 @@ fn check_flags_supported_over_fce(flags: OrderFlags) -> Result<()> {
     Ok(())
 }
 
+/// `quote_budget` is the human-readable maximum QUOTE a market buy may spend,
+/// and belongs to exactly that one cell of the order table: a sell's budget is
+/// its `amount` (base) and a limit buy's is `amount x price`, both derived from
+/// what is already signed, so those pass `None` and the library rejects a
+/// budget on them.
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_send_order(
     executor: &DirectExecutor,
     client: &AspensClient,
@@ -169,6 +175,7 @@ async fn dispatch_send_order(
     amount: String,
     price: Option<String>,
     flags: OrderFlags,
+    quote_budget: Option<String>,
 ) -> Result<SentOrder> {
     // Reject flags this transport can't express BEFORE any network work — an
     // unsupported argument should not cost a config round-trip to discover, and
@@ -265,6 +272,7 @@ async fn dispatch_send_order(
                 config,
                 flags.post_only,
                 flags.hidden,
+                quote_budget,
             )
             .await
         })
@@ -301,14 +309,11 @@ fn grpc_top_of_book(
 /// the existing `convert_to_pair_decimals` path on the way to the
 /// gRPC `SendOrderRequest`).
 ///
-/// Why this is a wrapper: the gasless cross-chain protocol rejects
-/// `buy-market` / `sell-market` at the SDK layer (see
-/// `gasless::resolve_order` — true market orders can't pre-commit a
-/// lock amount the contract will verify). Marketable-limit is the
-/// supported equivalent — it commits the user to an explicit price
-/// ceiling / floor that the contract can verify, and the slippage
-/// cap is how the user controls "how aggressively will I cross the
-/// spread".
+/// Why this exists alongside `buy-market` / `sell-market`: those bound the
+/// order by a BUDGET (quote for a buy, base for a sell), which caps the
+/// spend but says nothing about the price paid. Marketable-limit caps the
+/// PRICE instead, and the slippage cap is how the user controls "how
+/// aggressively will I cross the spread".
 async fn resolve_marketable_price(
     executor: &DirectExecutor,
     client: &AspensClient,
@@ -467,6 +472,13 @@ enum Commands {
         market: String,
         /// Amount to buy
         amount: String,
+        /// REQUIRED: the maximum QUOTE you are prepared to spend,
+        /// human-readable (e.g. "250.5"), scaled by the market's
+        /// quote-token decimals. A market buy gives quote and has no
+        /// price to size that with, so this — not `amount` — is what
+        /// bounds the spend and what gets collateralised.
+        #[arg(long)]
+        quote_budget: String,
         /// Invisible order: your fills print in the public trade stream
         /// with your side's identity redacted. A market order never
         /// rests, so orderbook suppression doesn't apply — the flag's
@@ -520,10 +532,10 @@ enum Commands {
         hidden: bool,
     },
     /// Marketable BUY: snapshot the resting book, cap slippage off the
-    /// best ask, submit as a buy-limit. The gasless cross-chain
-    /// protocol rejects true market orders (no honest amount to sign at
-    /// price-unknown time) — this helper turns "take the top of book
-    /// with a 0.5% slippage cap" into the equivalent priced order.
+    /// best ask, submit as a buy-limit. Turns "take the top of book with a
+    /// 0.5% slippage cap" into the equivalent priced order — use this when
+    /// you want to bound the PRICE; use `buy-market --quote-budget` when you
+    /// want to bound the SPEND.
     BuyMarketable {
         /// Market ID to trade on
         market: String,
@@ -852,9 +864,13 @@ async fn run() -> Result<()> {
         Commands::BuyMarket {
             market,
             amount,
+            quote_budget,
             hidden,
         } => {
-            info!("Sending market BUY order for {amount} on market {market} (hidden={hidden})");
+            info!(
+                "Sending market BUY order for {amount} on market {market} \
+                 (quote_budget={quote_budget}, hidden={hidden})"
+            );
             let result = dispatch_send_order(
                 &executor,
                 &client,
@@ -866,6 +882,7 @@ async fn run() -> Result<()> {
                     post_only: false, // meaningless for market orders
                     hidden,
                 },
+                Some(quote_budget),
             )
             .await?;
             info!(
@@ -893,6 +910,7 @@ async fn run() -> Result<()> {
                 amount,
                 Some(price),
                 OrderFlags { post_only, hidden },
+                None, // a limit order's budget is derived from (amount, price)
             )
             .await?;
             info!(
@@ -918,6 +936,7 @@ async fn run() -> Result<()> {
                     post_only: false, // meaningless for market orders
                     hidden,
                 },
+                None, // an ASK gives base: its budget IS its quantity
             )
             .await?;
             info!(
@@ -945,6 +964,7 @@ async fn run() -> Result<()> {
                 amount,
                 Some(price),
                 OrderFlags { post_only, hidden },
+                None, // a limit order's budget is derived from (amount, price)
             )
             .await?;
             info!(
@@ -979,6 +999,7 @@ async fn run() -> Result<()> {
                     post_only: false,
                     hidden,
                 },
+                None, // priced, so the budget is derived from (amount, price)
             )
             .await?;
             info!(
@@ -1011,6 +1032,7 @@ async fn run() -> Result<()> {
                     post_only: false,
                     hidden,
                 },
+                None, // priced, so the budget is derived from (amount, price)
             )
             .await?;
             info!(

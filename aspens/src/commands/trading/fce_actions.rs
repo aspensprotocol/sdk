@@ -10,6 +10,12 @@
 //! the same bytes (DIRECT execution, non-hidden orders only — the FCE
 //! `PlaceOrderRequest` carries no `hidden`/`matching_order_ids`).
 //!
+//! The wire carries no `quote_budget` either, so a **market BID** — the one
+//! order that must sign one — is refused here rather than sent as an order the
+//! adapter would rebuild differently. See
+//! `check_order_expressible_over_fce` below (private: rustdoc refuses an
+//! intra-doc link from public docs into a private item).
+//!
 //! Reads (`book_state`/`my_state`/`export_history`) are one-shot snapshots.
 
 use eyre::{Result, eyre};
@@ -44,8 +50,35 @@ fn side_str(side: i32) -> Result<&'static str> {
     }
 }
 
+/// Refuse the orders this transport cannot express.
+///
+/// A **market BID** is the one order that must carry `Order.quote_budget`
+/// (field 11) — it gives quote and has no price to size that with. The
+/// direct-action wire has no field for it, and the adapter rebuilds the
+/// arborter `Order` from the JSON it does have, so an order signed WITH a
+/// budget would be verified against bytes WITHOUT one: the arborter recovers a
+/// different address and rejects it for a bad signature, saying nothing about
+/// the budget. Refuse it here, the same way the CLI refuses `--hidden` over
+/// FCE — a wire that cannot carry the order must say so, not send a different
+/// one. A market ASK is fine: its budget is its `quantity`, already on the
+/// wire, so nothing new is signed.
+fn check_order_expressible_over_fce(side: i32, price: Option<&str>) -> Result<()> {
+    if side == Side::Bid as i32 && price.is_none() {
+        return Err(eyre!(
+            "a market BUY is not supported over the FCE transport: it must commit a \
+             quote budget (Order.quote_budget), the direct-action wire carries no such \
+             field, and an order signed with one would fail signature verification \
+             after the adapter rebuilt it without. Submit a limit buy, or send it \
+             against an arborter reachable over gRPC."
+        ));
+    }
+    Ok(())
+}
+
 /// Place a buy/sell order via FCE. `side` is "buy"/"sell"/"bid"/"ask"; amounts
 /// are display units (converted to pair decimals here, as in the gRPC path).
+///
+/// A market BID is refused up front — see `check_order_expressible_over_fce`.
 pub async fn place_order(
     client: &AspensClient,
     wallets: &[&Wallet],
@@ -56,7 +89,6 @@ pub async fn place_order(
     post_only: bool,
 ) -> Result<Outcome<PlaceOrderResponse>> {
     let fce = fce_client(client)?;
-    let config = client.get_config().await?;
     let side_i = super::send_order::parse_side(side)? as i32;
 
     if post_only && price.is_none() {
@@ -64,6 +96,11 @@ pub async fn place_order(
             "post_only is incompatible with market orders (no price)"
         ));
     }
+    // Before any network work, including the config fetch (over FCE that is a
+    // queued direct action).
+    check_order_expressible_over_fce(side_i, price)?;
+
+    let config = client.get_config().await?;
 
     let market = lookup_market(&config, market_id)?;
     let pair_decimals = market.pair_decimals as u32;
@@ -111,16 +148,21 @@ pub async fn place_order(
         matching_order_ids: vec![],
         post_only,
         hidden: false,
+        // Always `None` here: the market bid, the only cell that sets it, is
+        // refused above. Setting it would change the signed bytes without
+        // changing what the adapter rebuilds.
+        quote_budget: None,
     };
     let signature_hash = super::sign_encoded(&order, signing_wallet).await?;
 
-    let authorization = build_gasless_authorization(
+    let commitment = build_gasless_authorization(
         &config,
         market,
         side_i,
         signing_wallet,
         &quantity_raw,
         price_raw.as_deref(),
+        None,
     )?;
 
     let req = fce::PlaceOrderRequest {
@@ -133,8 +175,14 @@ pub async fn place_order(
         execution_type: None,
         post_only: if post_only { Some(true) } else { None },
         signature_hash,
-        order_id: authorization.order_id,
-        amount_in: authorization.amount_in,
+        order_id: commitment.authorization.order_id,
+        // The adapter's JSON still has this field (infra
+        // `stacks/fcc/extension/pkg/types/types.go`), and it forwards it into
+        // `OrderAuthorization.amount_in` — a proto field the arborter has since
+        // deleted, so the value is now inert on arrival. Keep sending the real
+        // budget until infra syncs the proto and drops the field: an omitted key
+        // would reach a deployed adapter as `""`.
+        amount_in: commitment.input_amount.to_string(),
     };
     fce.place_order(&req).await
 }
@@ -326,6 +374,29 @@ pub async fn get_config(client: &AspensClient) -> Result<GetConfigResponse> {
     // market id instead of at the transport.
     GetConfigResponse::decode(envelope.config_proto.as_slice())
         .map_err(|e| eyre!("decoding GetConfigResponse protobuf from the FCE adapter: {e}"))
+}
+
+#[cfg(test)]
+mod expressible_over_fce_tests {
+    use super::*;
+
+    /// The refusal is exactly one cell wide. Refusing more would push callers
+    /// off a transport that handles their order fine; refusing less sends an
+    /// order whose signature cannot verify, and the failure reads as "invalid
+    /// signature" rather than "this wire can't carry a budget".
+    #[test]
+    fn only_the_market_bid_is_refused() {
+        let bid = Side::Bid as i32;
+        let ask = Side::Ask as i32;
+
+        let err = check_order_expressible_over_fce(bid, None).unwrap_err();
+        assert!(err.to_string().contains("market BUY is not supported"));
+
+        // Limit bid, limit ask, market ask — all expressible.
+        assert!(check_order_expressible_over_fce(bid, Some("1000")).is_ok());
+        assert!(check_order_expressible_over_fce(ask, Some("1000")).is_ok());
+        assert!(check_order_expressible_over_fce(ask, None).is_ok());
+    }
 }
 
 #[cfg(test)]

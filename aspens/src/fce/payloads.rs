@@ -41,7 +41,16 @@ pub struct PlaceOrderRequest {
     /// SDK-derived canonical order id (from `derive_order_id`).
     #[serde(rename = "orderId")]
     pub order_id: String,
-    /// Committed lock, u128 decimal.
+    /// The order's budget in the asset it gives, u128 decimal — and now
+    /// **inert on arrival**: the adapter forwards it into
+    /// `OrderAuthorization.amount_in`, a proto field the arborter deleted
+    /// (it was unsigned, sitting outside `Order`). Kept because the adapter's
+    /// `types.go` still declares it and an omitted key would reach a deployed
+    /// adapter as `""`; drop it here once infra syncs the proto.
+    ///
+    /// Note what the wire cannot carry: `Order.quote_budget`. A market BID is
+    /// therefore refused before it is built — see
+    /// [`crate::commands::trading::fce_actions::place_order`].
     #[serde(rename = "amountIn")]
     pub amount_in: String,
 }
