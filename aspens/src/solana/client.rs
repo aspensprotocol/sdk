@@ -94,6 +94,115 @@ pub async fn submit_user_signed_multi(
     Ok(sig.to_string())
 }
 
+/// The two authority keys carried on a `TradingInstance` account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstanceAuthorities {
+    /// The TEE/arborter key that authorizes settlement batches and withdrawal
+    /// vouchers.
+    pub signer: Pubkey,
+    /// The stack-admin key gating `set_operator_fee` / `set_operator_admin` /
+    /// `set_withdraw_epoch_cap`. Equal to `signer` in the default deploy shape,
+    /// in which case the withdrawal cap contains bugs but not a compromised TEE.
+    pub operator_admin: Pubkey,
+}
+
+/// Read the `signer` + `operator_admin` keys off a `TradingInstance` account.
+///
+/// Used as a pre-flight before submitting an operator-admin instruction: the
+/// program rejects a wrong signer with a bare `Unauthorized` custom error, so
+/// checking here turns that into an actionable message (and costs no fee).
+pub async fn fetch_instance_authorities(
+    rpc_url: &str,
+    instance: &Pubkey,
+) -> Result<InstanceAuthorities> {
+    use solana_client::nonblocking::rpc_client::RpcClient;
+    let client = RpcClient::new(rpc_url.to_string());
+    let acc = client
+        .get_account(instance)
+        .await
+        .map_err(|e| eyre!("get_account (TradingInstance {}): {}", instance, e))?;
+
+    // Layout (after the 8-byte Anchor discriminator), borsh-packed:
+    //   factory(32) signer(32) maintenance_address(32) maintenance_bps(u16)
+    //   operator_address(32) operator_bps(u16) operator_admin(32) bump(u8)
+    //   instance_id(u64)
+    const SIGNER_OFFSET: usize = 8 + 32;
+    const OPERATOR_ADMIN_OFFSET: usize = 8 + 32 + 32 + 32 + 2 + 32 + 2;
+    if acc.data.len() < OPERATOR_ADMIN_OFFSET + 32 {
+        return Err(eyre!(
+            "TradingInstance account {} too small: {} bytes",
+            instance,
+            acc.data.len()
+        ));
+    }
+    let read = |offset: usize| -> Result<Pubkey> {
+        let bytes: [u8; 32] = acc.data[offset..offset + 32]
+            .try_into()
+            .map_err(|_| eyre!("TradingInstance account data layout error at {}", offset))?;
+        Ok(Pubkey::new_from_array(bytes))
+    };
+    Ok(InstanceAuthorities {
+        signer: read(SIGNER_OFFSET)?,
+        operator_admin: read(OPERATOR_ADMIN_OFFSET)?,
+    })
+}
+
+/// The per-`(instance, mint)` withdrawal rate-limit state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WithdrawEpochState {
+    /// Epoch index (`slot / 9_000`) the running total belongs to.
+    pub epoch: u64,
+    /// Base units already withdrawn within `epoch`.
+    pub withdrawn: u64,
+    /// The ceiling; `0` = unlimited.
+    pub cap: u64,
+}
+
+/// Fetch the `WithdrawEpoch` PDA state for `(instance, mint)`. Returns `None`
+/// if the account does not exist — the shipped state for every mint until a cap
+/// is armed or the first voucher withdrawal lands, and equivalent to an
+/// unlimited cap with a zero running total.
+pub async fn fetch_withdraw_epoch(
+    rpc_url: &str,
+    instance: &Pubkey,
+    mint: &Pubkey,
+    program_id: &Pubkey,
+) -> Result<Option<WithdrawEpochState>> {
+    use solana_client::nonblocking::rpc_client::RpcClient;
+    let client = RpcClient::new(rpc_url.to_string());
+    let (pda, _) = crate::solana::derive_withdraw_epoch_pda(instance, mint, program_id);
+    let response = client
+        .get_account_with_commitment(&pda, client.commitment())
+        .await
+        .map_err(|e| eyre!("get_account (WithdrawEpoch PDA): {}", e))?;
+    let Some(acc) = response.value else {
+        return Ok(None);
+    };
+
+    // Layout (after the 8-byte Anchor discriminator):
+    //   instance(32) mint(32) epoch(u64) withdrawn(u64) cap(u64) bump(u8)
+    const EPOCH_OFFSET: usize = 8 + 32 + 32;
+    const WITHDRAWN_OFFSET: usize = EPOCH_OFFSET + 8;
+    const CAP_OFFSET: usize = WITHDRAWN_OFFSET + 8;
+    if acc.data.len() < CAP_OFFSET + 8 {
+        return Err(eyre!(
+            "WithdrawEpoch account too small: {} bytes",
+            acc.data.len()
+        ));
+    }
+    let read_u64 = |offset: usize| -> Result<u64> {
+        let bytes: [u8; 8] = acc.data[offset..offset + 8]
+            .try_into()
+            .map_err(|_| eyre!("WithdrawEpoch account data layout error at {}", offset))?;
+        Ok(u64::from_le_bytes(bytes))
+    };
+    Ok(Some(WithdrawEpochState {
+        epoch: read_u64(EPOCH_OFFSET)?,
+        withdrawn: read_u64(WITHDRAWN_OFFSET)?,
+        cap: read_u64(CAP_OFFSET)?,
+    }))
+}
+
 /// Fetch on-chain `(deposited, locked)` from the UserBalance PDA. Returns
 /// `(0, 0)` if the account does not exist (user has never deposited on this
 /// instance/mint).

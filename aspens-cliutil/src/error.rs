@@ -316,13 +316,33 @@ pub fn format_error(err: &eyre::Report, context: &str, ctx: &BinaryContext) -> S
         || err_string.contains("secret key")
         || err_string.contains("hex decode")
     {
+        // Which key actually failed? This branch fires on any message
+        // containing "privkey", and the binary's default is the EVM trader key
+        // — so blindly advising "set TRADER_PRIVKEY to a 64-character hex
+        // string" is wrong for every other key this CLI can load. An Ed25519
+        // admin key (base58 or JSON) told to be 64 hex chars sends the operator
+        // to fix a variable they are not using, in a format it never accepts.
+        // Prefer the variable the error itself names.
+        let named = err
+            .to_string()
+            .split(|c: char| !(c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()))
+            .find(|tok| tok.contains("PRIVKEY") && tok.len() > "PRIVKEY".len())
+            .map(str::to_string);
+        let var = named.as_deref().unwrap_or(ctx.privkey_env_var);
+        // Only the secp256k1/EVM keys are 64-char hex; Ed25519 keys are base58
+        // or a JSON byte array. Say nothing about format unless we know it.
+        let format_hint = if var.ends_with("_SOLANA") {
+            "\n             - A Solana key is base58 or a JSON byte array, not hex"
+        } else if var == ctx.privkey_env_var {
+            "\n             - The private key should be a 64-character hex string\n\
+             - Do not include the '0x' prefix"
+        } else {
+            ""
+        };
         return with_underlying(format!(
             "Failed to {context}: Invalid private key\n\n\
              Hints:\n\
-             - Ensure {privkey} is set correctly in your .env file\n\
-             - The private key should be a 64-character hex string\n\
-             - Do not include the '0x' prefix",
-            privkey = ctx.privkey_env_var,
+             - Ensure {var} is set correctly in your .env file{format_hint}",
         ));
     }
 
@@ -376,6 +396,32 @@ mod tests {
             "admin auth branch must surface ADMIN_PRIVKEY env var: {out}"
         );
         assert!(out.contains("'aspens-admin login'"));
+    }
+
+    /// The privkey branch fires on any message containing "privkey", and this
+    /// CLI can load more than one key. Advising TRADER_PRIVKEY / 64-char hex
+    /// for a base58 Ed25519 admin key sends the operator to the wrong variable
+    /// in a format it never accepts — on the command that arms a withdrawal cap.
+    #[test]
+    fn privkey_branch_names_the_variable_the_error_names() {
+        let err = eyre::eyre!("OPERATOR_ADMIN_PRIVKEY_SOLANA not set in environment");
+        let out = format_error(&err, "arm the cap", &BinaryContext::TRADER_CLI);
+        assert!(
+            out.contains("OPERATOR_ADMIN_PRIVKEY_SOLANA"),
+            "should name the failing variable, got: {out}"
+        );
+        assert!(
+            !out.contains("TRADER_PRIVKEY is set"),
+            "must not redirect to the trader key, got: {out}"
+        );
+        assert!(
+            !out.contains("64-character hex"),
+            "must not claim hex format for an Ed25519 key, got: {out}"
+        );
+        assert!(
+            out.contains("base58"),
+            "should say what a Solana key actually looks like, got: {out}"
+        );
     }
 
     #[test]

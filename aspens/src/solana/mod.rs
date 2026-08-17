@@ -425,6 +425,62 @@ pub fn withdraw_voucher_ix(
     })
 }
 
+// -- Per-epoch withdrawal cap (operator-admin authority) -------------------
+
+/// Args to the Midrib `set_withdraw_epoch_cap` instruction.
+#[derive(borsh::BorshSerialize, Debug)]
+pub struct SetWithdrawEpochCapArgs {
+    /// Base-unit ceiling on withdrawals per `(instance, mint)` per epoch.
+    /// `0` = unlimited (the shipped default), matching MidribV3 on EVM.
+    pub cap: u64,
+}
+
+/// Build the `set_withdraw_epoch_cap` instruction — arm (or disarm) the
+/// per-`(instance, mint)` per-epoch withdrawal ceiling.
+///
+/// `operator_admin` is the sole signer and the fee payer; it MUST equal the
+/// on-chain `instance.operator_admin` or the program rejects the call with
+/// `Unauthorized`. It is writable because the `withdraw_epoch` PDA is
+/// `init_if_needed` with `payer = operator_admin` — arming a cap for a mint
+/// that has never been withdrawn against creates the account and debits rent.
+///
+/// This is deliberately NOT signed by the instance's TEE `signer` key: the cap
+/// exists to bound a misbehaving TEE, so a TEE able to raise its own cap would
+/// defeat it. Sign this with an offline operator key, never through the
+/// arborter.
+///
+/// `cap` is in the mint's BASE units (same scale the program accumulates
+/// withdrawals in), and `0` means unlimited. The epoch is a tumbling window of
+/// 9,000 slots (~1 hour), so up to `2 * cap` can leave across a boundary.
+pub fn set_withdraw_epoch_cap_ix(
+    program_id: &Pubkey,
+    instance: &Pubkey,
+    mint: &Pubkey,
+    operator_admin: &Pubkey,
+    cap: u64,
+) -> Result<Instruction> {
+    let (withdraw_epoch, _) = derive_withdraw_epoch_pda(instance, mint, program_id);
+    let data = encode_ix("set_withdraw_epoch_cap", &SetWithdrawEpochCapArgs { cap })?;
+    // Account order MUST match the program's `SetWithdrawEpochCap` accounts
+    // struct — Anchor binds POSITIONALLY, so a misordered entry is not a
+    // "wrong account" error, the program reinterprets whatever sits at that
+    // index. `set_withdraw_epoch_cap_accounts_match_program` pins this list
+    // against the built IDL; update both together.
+    Ok(Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(*instance, false),
+            AccountMeta::new_readonly(*mint, false),
+            // `init_if_needed` on the program side → writable, not a signer.
+            AccountMeta::new(withdraw_epoch, false),
+            // `mut` (rent payer) + `Signer` on the program side.
+            AccountMeta::new(*operator_admin, true),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data,
+    })
+}
+
 /// Build an Ed25519Program instruction that verifies `signature` was
 /// produced by `pubkey` over `message`. Data layout matches the Solana
 /// Ed25519SigVerify precompile's expectation: a 16-byte header followed by
@@ -574,6 +630,84 @@ mod tests {
             assert_eq!(got.is_writable, *writable, "`{name}` writable flag");
             assert_eq!(got.is_signer, *signer, "`{name}` signer flag");
         }
+    }
+
+    /// Pin `set_withdraw_epoch_cap`'s account list — order, length, and the
+    /// writable/signer flags — against the on-chain `SetWithdrawEpochCap`
+    /// accounts struct. Same hazard as `withdraw_voucher` above: Anchor binds
+    /// accounts POSITIONALLY, so a wrong order silently misassigns them rather
+    /// than erroring. Getting it wrong here is worse than a failed tx — this
+    /// instruction arms the safety ceiling on a fund-custody program, and the
+    /// signer slot is the authority check.
+    ///
+    /// EXPECTED LIST SOURCE: the BUILT IDL, not memory. Reproduce with:
+    ///   cd arborter/chains/solana
+    ///   anchor idl build -o /tmp/midrib.json -p midrib
+    ///   jq '.instructions[] | select(.name=="set_withdraw_epoch_cap")
+    ///       | .accounts' /tmp/midrib.json
+    /// (IDL omits `writable`/`signer` when false.) REGENERATE THIS TEST
+    /// whenever that accounts struct changes.
+    #[test]
+    fn set_withdraw_epoch_cap_accounts_match_program() {
+        let pid = Pubkey::new_from_array([1; 32]);
+        let instance = Pubkey::new_from_array([2; 32]);
+        let mint = Pubkey::new_from_array([3; 32]);
+        let operator_admin = Pubkey::new_from_array([4; 32]);
+
+        let ix = set_withdraw_epoch_cap_ix(&pid, &instance, &mint, &operator_admin, 1_000)
+            .expect("build set_withdraw_epoch_cap ix");
+
+        let (withdraw_epoch, _) = derive_withdraw_epoch_pda(&instance, &mint, &pid);
+
+        // (name, pubkey, writable, signer) — index i here is account i on-chain.
+        let expected: &[(&str, Pubkey, bool, bool)] = &[
+            ("instance", instance, false, false),
+            ("mint", mint, false, false),
+            ("withdraw_epoch", withdraw_epoch, true, false),
+            ("operator_admin", operator_admin, true, true),
+            ("system_program", SYSTEM_PROGRAM_ID, false, false),
+        ];
+
+        assert_eq!(
+            ix.accounts.len(),
+            expected.len(),
+            "set_withdraw_epoch_cap account COUNT drifted from the program's \
+             SetWithdrawEpochCap struct (expected {}, got {})",
+            expected.len(),
+            ix.accounts.len()
+        );
+        for (i, (name, pubkey, writable, signer)) in expected.iter().enumerate() {
+            let got = &ix.accounts[i];
+            assert_eq!(got.pubkey, *pubkey, "account {i} should be `{name}`");
+            assert_eq!(got.is_writable, *writable, "`{name}` writable flag");
+            assert_eq!(got.is_signer, *signer, "`{name}` signer flag");
+        }
+
+        // Discriminator + borsh args: sha256("global:set_withdraw_epoch_cap")[..8]
+        // then the u64 cap, little-endian.
+        assert_eq!(
+            &ix.data[..8],
+            &[251, 61, 122, 122, 154, 228, 208, 222],
+            "discriminator drifted from the IDL's set_withdraw_epoch_cap"
+        );
+        assert_eq!(&ix.data[8..], &1_000u64.to_le_bytes());
+        assert_eq!(ix.program_id, pid);
+    }
+
+    /// `cap = 0` is the "unlimited" sentinel and must reach the program as a
+    /// literal zero — never rejected or coerced client-side.
+    #[test]
+    fn set_withdraw_epoch_cap_encodes_zero_as_unlimited() {
+        let pid = Pubkey::new_from_array([1; 32]);
+        let ix = set_withdraw_epoch_cap_ix(
+            &pid,
+            &Pubkey::new_from_array([2; 32]),
+            &Pubkey::new_from_array([3; 32]),
+            &Pubkey::new_from_array([4; 32]),
+            0,
+        )
+        .expect("build set_withdraw_epoch_cap ix with cap=0");
+        assert_eq!(&ix.data[8..], &0u64.to_le_bytes());
     }
 
     #[test]
