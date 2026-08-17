@@ -13,7 +13,8 @@
 //! The wire carries no `quote_budget` either, so a **market BID** — the one
 //! order that must sign one — is refused here rather than sent as an order the
 //! adapter would rebuild differently. See
-//! [`check_order_expressible_over_fce`].
+//! `check_order_expressible_over_fce` below (private: rustdoc refuses an
+//! intra-doc link from public docs into a private item).
 //!
 //! Reads (`book_state`/`my_state`/`export_history`) are one-shot snapshots.
 
@@ -77,7 +78,7 @@ fn check_order_expressible_over_fce(side: i32, price: Option<&str>) -> Result<()
 /// Place a buy/sell order via FCE. `side` is "buy"/"sell"/"bid"/"ask"; amounts
 /// are display units (converted to pair decimals here, as in the gRPC path).
 ///
-/// A market BID is refused up front — see [`check_order_expressible_over_fce`].
+/// A market BID is refused up front — see `check_order_expressible_over_fce`.
 pub async fn place_order(
     client: &AspensClient,
     wallets: &[&Wallet],
