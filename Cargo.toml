@@ -104,7 +104,7 @@ eyre = "0.6"
 hex = "0.4.3"
 # OS CSPRNG — the CLI uses it to mint a fresh anti-replay nonce for
 # verify-attestation when one isn't supplied.
-getrandom = "0.3"
+getrandom = "0.4"
 url = "2.5.8"
 comfy-table = "8.0.0"
 chrono = "0.4"
