@@ -2,6 +2,23 @@
 // `aspens::evm::rpc` (gated on the `client` feature). Trading commands
 // import them via `use crate::evm::rpc::{MidribV3, IERC20};`.
 
+/// Generated protobuf bindings for the `arborter.v1` trading service.
+///
+/// This is the **only** place `xyz.aspens.arborter.v1.rs` is compiled. Every
+/// `trading/` submodule imports from here rather than `include!`ing its own
+/// copy: an `include!` is a textual expansion, so five copies were five sets
+/// of distinct, mutually incompatible types with one wire format — the
+/// `Order` you signed in `send_order` would not typecheck against the `Order`
+/// spelled anywhere else. The bindings live next to the commands that wrap
+/// the service, matching [`crate::commands::config::config_pb`] and
+/// `commands::auth::auth_pb`. (`attestation.v1` is the one exception,
+/// anchored at [`crate::attestation::v1`] because `build.rs` rewrites the
+/// generated cross-package references to that absolute path.)
+#[allow(missing_docs)]
+pub mod arborter_pb {
+    include!("../../../proto/generated/xyz.aspens.arborter.v1.rs");
+}
+
 /// Query balances across chains (native gas, ERC-20 / SPL, locked / withdrawable).
 pub mod balance;
 /// Submit a `cancel_order` request and decode the gRPC response.

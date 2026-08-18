@@ -1,13 +1,7 @@
-/// Generated protobuf bindings for the `arborter.v1` trading service.
-#[allow(missing_docs)]
-pub mod arborter_pb {
-    include!("../../../proto/generated/xyz.aspens.arborter.v1.rs");
-}
-
 use std::fmt;
 
-use arborter_pb::arborter_service_client::ArborterServiceClient;
-use arborter_pb::{OrderState, OrderbookEntry, OrderbookRequest, Side};
+use super::arborter_pb::arborter_service_client::ArborterServiceClient;
+use super::arborter_pb::{OrderState, OrderbookEntry, OrderbookRequest, Side};
 use eyre::Result;
 use futures::StreamExt;
 use tokio::sync::mpsc;
@@ -227,11 +221,8 @@ pub async fn fetch_top_of_book(
 ///   minimum the user is willing to accept below best bid.
 ///
 /// Takes a plain `bool` rather than the proto `Side` enum so callers
-/// don't have to round-trip through a specific `arborter_pb::Side`
-/// variant (every consumer module includes its own copy of the
-/// generated proto types — see `pub mod arborter_pb` at the top of
-/// each `trading/` module — and those variants don't unify even though
-/// they share a wire format).
+/// that never touch the generated types (tests, CLI arg parsing) don't
+/// have to construct one.
 ///
 /// `slippage_bps` is clamped to `[0, 10_000]` so the sell-side
 /// arithmetic can't underflow and the buy-side cap can't grow

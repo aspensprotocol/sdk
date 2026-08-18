@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use super::arborter_pb::{Order, SendOrderResponse, TransactionHash};
+use crate::commands::trading::arborter_pb::{Order, SendOrderResponse, TransactionHash};
 
 impl fmt::Display for Order {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

@@ -72,21 +72,15 @@ pub mod attestation {
     }
 }
 
-/// Generated protobuf bindings for the arborter config and auth services.
-#[cfg(feature = "client")]
-pub mod proto {
-    /// Arborter config service protobuf bindings.
-    #[allow(missing_docs)]
-    pub mod config {
-        include!("../proto/generated/xyz.aspens.arborter_config.v1.rs");
-    }
-    /// Arborter auth service protobuf bindings (admin feature only).
-    #[cfg(feature = "admin")]
-    #[allow(missing_docs)]
-    pub mod auth {
-        include!("../proto/generated/xyz.aspens.arborter_auth.v1.rs");
-    }
-}
+// The `arborter_config.v1` and `arborter_auth.v1` bindings are NOT included
+// here. Each generated file is compiled exactly once, next to the command
+// module that wraps its service — `commands::config::config_pb` and
+// `commands::auth::auth_pb`. A second `include!` would not alias those types,
+// it would mint a parallel set that shares the wire format and nothing else,
+// so a `GetConfigResponse` from `AspensClient` would refuse to typecheck
+// against the one spelled here. `attestation::v1` above is the sole crate-root
+// binding, because `build.rs` rewrites the generated cross-package references
+// in `arborter_config.v1` to that absolute path.
 
 // Re-export commonly used types
 #[cfg(feature = "client")]

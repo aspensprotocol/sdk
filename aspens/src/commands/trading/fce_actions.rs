@@ -36,8 +36,8 @@ use crate::fce::{
     Outcome, PlaceOrderResponse, WithdrawVoucher,
 };
 
+use super::arborter_pb::{Order, OrderToCancel, Side};
 use super::gasless::build_order_commitment;
-use super::send_order::arborter_pb::{Order, OrderToCancel, Side};
 use super::send_order::{convert_to_pair_decimals, lookup_market};
 use super::stream_orderbook::TopOfBook;
 

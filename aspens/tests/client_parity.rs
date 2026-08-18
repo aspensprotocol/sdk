@@ -290,7 +290,7 @@ mod order_id_composition_parity {
 /// these fails loudly instead of the venue silently refusing market bids.
 #[cfg(feature = "client")]
 mod order_wire {
-    use aspens::commands::trading::send_order::arborter_pb::Order;
+    use aspens::commands::trading::arborter_pb::Order;
     use prost::Message;
 
     const QUANTITY: &str = "100000000";

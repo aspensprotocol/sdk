@@ -1,14 +1,9 @@
-/// Generated protobuf bindings for the `arborter.v1` trading service.
-#[allow(missing_docs)]
-pub mod arborter_pb {
-    include!("../../../../proto/generated/xyz.aspens.arborter.v1.rs");
-}
-
 // `Display` impls + the inherent CLI-formatting helpers on the proto
 // types live next door in `display.rs` so this file can focus on the
 // call / signing logic.
 mod display;
 
+use super::arborter_pb;
 use crate::chain_client::named_chain_for;
 use crate::wallet::Wallet;
 use alloy::primitives::{Address, U256};

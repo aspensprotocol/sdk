@@ -15,13 +15,8 @@ use crate::evm::rpc::MidribV3;
 use crate::grpc::create_channel;
 use crate::wallet::{CurveType, Wallet};
 
-/// Generated protobuf bindings for the `arborter.v1` trading service.
-#[allow(missing_docs)]
-pub mod arborter_pb {
-    include!("../../../proto/generated/xyz.aspens.arborter.v1.rs");
-}
-use arborter_pb::WithdrawRequest;
-use arborter_pb::arborter_service_client::ArborterServiceClient;
+use super::arborter_pb::WithdrawRequest;
+use super::arborter_pb::arborter_service_client::ArborterServiceClient;
 
 /// Minimum gas balance required for transactions (0.0001 ETH = 100000 gwei)
 const MIN_GAS_BALANCE: u128 = 100_000_000_000_000; // 0.0001 ETH in wei

@@ -3,12 +3,13 @@
 //! generated `xyz.aspens.arborter_config.v1.rs`.
 //!
 //! tonic-prost-build emits cross-package type references relative to
-//! the generated module's own location. The arborter_config module
-//! lives at `crate::proto::config::xyz::aspens::arborter_config::v1`
-//! (four levels deep — see `aspens/src/lib.rs`), and from there it
-//! has to walk back up to `crate::attestation::v1::*`. With the
-//! current module layout that walk-up path is
-//! `super::super::super::attestation::v1::...`.
+//! the generated module's own location: from `arborter_config.v1` it
+//! walks up three levels to what it assumes is the root of one proto
+//! module tree, then back down into `attestation::v1::*`, giving
+//! `super::super::super::attestation::v1::...`. Nothing in this crate
+//! has that shape — the bindings are `include!`d at
+//! `crate::commands::config::config_pb`, and the attestation ones at
+//! `crate::attestation::v1`.
 //!
 //! That works, but it is *brittle*: any change to either module's
 //! nesting silently miscompiles or paints the wrong types into the
@@ -23,6 +24,8 @@
 //! Coupled to the layout in `aspens/src/lib.rs`. If the
 //! `pub mod attestation { pub mod v1 { ... } }` location changes,
 //! [`RELATIVE_PREFIX`] and [`ABSOLUTE_PREFIX`] must change in lock-step.
+//! Because the rewritten path is absolute, moving the *config* bindings'
+//! include site needs no change here — which is the point of the rewrite.
 
 /// The relative path tonic-prost-build emits today, leading into
 /// `attestation::v1::*` from the `arborter_config` generated module.
