@@ -13,7 +13,6 @@ use crate::chain_client::named_chain_for;
 use crate::wallet::Wallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{Provider, ProviderBuilder};
-use alloy::signers::local::PrivateKeySigner;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{Order, SendOrderRequest, SendOrderResponse};
 use eyre::Result;
@@ -332,14 +331,6 @@ pub fn parse_side(s: &str) -> Result<arborter_pb::Side> {
             other
         )),
     }
-}
-
-/// Derive the account address from a private key
-pub fn derive_address(privkey: &str) -> Result<(Address, String)> {
-    let signer = privkey.parse::<PrivateKeySigner>()?;
-    let address = signer.address();
-    let checksum = address.to_checksum(None);
-    Ok((address, checksum))
 }
 
 /// Send an order using a curve-agnostic wallet.
