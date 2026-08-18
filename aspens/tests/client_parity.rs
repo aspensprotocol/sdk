@@ -30,6 +30,14 @@ fn evm_eip712_constants_are_pinned() {
 
 // -- chain-agnostic order id ---------------------------------------------
 
+/// The RECIPE, pinned over synthetic arguments.
+///
+/// This says the eight fields are concatenated and hashed the way the arborter
+/// concatenates and hashes them. It says NOTHING about how the SDK assembles
+/// those eight from an order — which side is origin, which token is the input,
+/// what scale each amount is in — because the arguments here are placeholders
+/// handed straight to the primitive. `order_id_composition_parity` below covers
+/// the assembly; keep both.
 #[test]
 fn derive_order_id_snapshot() {
     // The single reference hash — must match arborter's
@@ -46,6 +54,226 @@ fn derive_order_id_snapshot() {
     );
     let expected_hex = "642e8b1deac921a7ddc00254b847ed1eb90169b1d3a70a34b541b66617b63843";
     assert_eq!(hex::encode(id), expected_hex);
+}
+
+/// The COMPOSITION, pinned against the vector the arborter and the browser SDK
+/// both pin — driven through the real assembly path.
+///
+/// The snapshot above cannot catch a client that hashes the base token where
+/// the quote belongs, resolves the origin chain from the wrong side of the
+/// market, normalises an amount to pair decimals instead of the token's, or
+/// reads a token address out of the `tokens` table instead of `market_id`.
+/// Every one of those produces a well-formed id that no venue issues, on an
+/// order the venue accepts without complaint. So this goes through
+/// `build_order_commitment` — the function a caller actually uses — and lets it
+/// pick all eight arguments itself.
+#[cfg(feature = "client")]
+mod order_id_composition_parity {
+    use std::collections::HashMap;
+
+    use aspens::Wallet;
+    use aspens::commands::config::config_pb::{
+        Chain, Configuration, GetConfigResponse, Market, Token, TradeContract,
+    };
+    use aspens::commands::trading::gasless::build_order_commitment;
+
+    /// **The cross-repo constant. Do not change it here alone.**
+    ///
+    /// The same limit BID is pinned to this digest in
+    /// `arborter/app/server/src/handlers/order_id.rs`
+    /// (`sdk_parity_known_good_vector`) and in `terminal-ui`'s
+    /// `packages/sdk-typescript/src/order-commitment.test.ts`. Three
+    /// independent implementations agree on it; changing one is changing the
+    /// wire contract, and the other two must move in the same breath or every
+    /// order placed by the odd one out is refused with nothing but an id to
+    /// diagnose it by.
+    const KNOWN_GOOD_ORDER_ID: &str =
+        "0xc6d8846de54b5b1b2513fa5fb8b535ea48bbe2835c17187e6564443aaa774f2d";
+
+    // The fixture's three decimal scales, mutually distinct on purpose: with
+    // base == quote == pair every denomination collapses to one integer and
+    // the vector stops telling a correct normalisation from a wrong one.
+    const PAIR: i32 = 12;
+    const BASE: u32 = 18;
+    const QUOTE: u32 = 6;
+
+    // A bid locks on the QUOTE chain and receives on the base chain, so the
+    // quote chain is the ORIGIN. Two different ids, so a transposition shows.
+    const BASE_CHAIN_ID: u32 = 990_001;
+    const QUOTE_CHAIN_ID: u32 = 990_002;
+
+    /// The token addresses as `market_id` spells them — the exact substrings
+    /// the arborter cuts and hashes.
+    const BASE_ADDR: &str = "0x00000000000000000000000000000000000000b1";
+    const QUOTE_ADDR: &str = "0x00000000000000000000000000000000000000c1";
+    /// The same two addresses as the `tokens` table spells them. Different
+    /// strings, deliberately: the id hashes the address TEXT, so a fixture
+    /// where both sources agree cannot tell the right source from the wrong
+    /// one — and reading `tokens` is exactly the bug this pins shut.
+    const BASE_ADDR_IN_TOKENS_TABLE: &str = "0x00000000000000000000000000000000000000B1";
+    const QUOTE_ADDR_IN_TOKENS_TABLE: &str = "0x00000000000000000000000000000000000000C1";
+
+    /// Anvil key #0, whose address is
+    /// `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266` — the address the arborter
+    /// vector hashes. A dev key, not a secret.
+    const TEST_EVM_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+    const NONCE: u64 = 1_723_000_000_000;
+    /// 1.5 base, in the market's 12 pair decimals.
+    const QUANTITY: &str = "1500000000000";
+    /// 2.0 quote per base, same 12 pair decimals.
+    const PRICE: &str = "2000000000000";
+
+    fn token(symbol: &str, address: &str, decimals: u32) -> (String, Token) {
+        (
+            symbol.to_string(),
+            Token {
+                name: symbol.to_string(),
+                symbol: symbol.to_string(),
+                address: address.to_string(),
+                token_id: None,
+                decimals,
+            },
+        )
+    }
+
+    fn chain(network: &str, chain_id: u32, tokens: HashMap<String, Token>) -> Chain {
+        Chain {
+            architecture: "evm".into(),
+            canonical_name: network.into(),
+            network: network.into(),
+            chain_id,
+            instance_signer_address: "0x0000000000000000000000000000000000000001".into(),
+            explorer_url: None,
+            rpc_url: "http://localhost".into(),
+            factory_address: "0xfactory".into(),
+            trade_contract: Some(TradeContract {
+                contract_id: None,
+                address: "0xtradecontract".into(),
+            }),
+            tokens,
+            finality: 0,
+            finality_confirmations: 0,
+        }
+    }
+
+    fn fixture() -> (GetConfigResponse, Market) {
+        let market = Market {
+            name: "BASE/QUOTE".into(),
+            base_chain_network: "base-net".into(),
+            quote_chain_network: "quote-net".into(),
+            base_chain_token_symbol: "BASE".into(),
+            quote_chain_token_symbol: "QUOTE".into(),
+            base_chain_token_decimals: BASE as i32,
+            quote_chain_token_decimals: QUOTE as i32,
+            pair_decimals: PAIR,
+            market_id: format!("base-net::{BASE_ADDR}::quote-net::{QUOTE_ADDR}"),
+        };
+        let config = GetConfigResponse {
+            config: Some(Configuration {
+                chains: vec![
+                    chain(
+                        "base-net",
+                        BASE_CHAIN_ID,
+                        HashMap::from([token("BASE", BASE_ADDR_IN_TOKENS_TABLE, BASE)]),
+                    ),
+                    chain(
+                        "quote-net",
+                        QUOTE_CHAIN_ID,
+                        HashMap::from([token("QUOTE", QUOTE_ADDR_IN_TOKENS_TABLE, QUOTE)]),
+                    ),
+                ],
+                markets: vec![market.clone()],
+            }),
+        };
+        (config, market)
+    }
+
+    fn commitment(market: &Market) -> aspens::commands::trading::gasless::OrderCommitment {
+        let (config, _) = fixture();
+        let wallet = Wallet::from_evm_hex(TEST_EVM_KEY).expect("anvil key #0 parses");
+        build_order_commitment(
+            &config,
+            market,
+            1, // SIDE_BID
+            &wallet,
+            QUANTITY,
+            Some(PRICE),
+            None, // a limit bid derives its budget; a stated one is refused
+            NONCE,
+        )
+        .expect("the fixture order resolves")
+    }
+
+    /// Guard the guards. Each premise the vector rests on, asserted before it
+    /// is relied on — a fixture that quietly loses one of these keeps passing
+    /// while testing less.
+    #[test]
+    fn the_fixture_can_distinguish_what_it_claims_to() {
+        assert_ne!(PAIR as u32, BASE);
+        assert_ne!(PAIR as u32, QUOTE);
+        assert_ne!(BASE, QUOTE);
+        assert_ne!(BASE_CHAIN_ID, QUOTE_CHAIN_ID);
+        assert_ne!(BASE_ADDR, QUOTE_ADDR);
+        // The two sources hold the same address in two spellings. Equal
+        // strings would make this vector blind to which one gets hashed.
+        assert_ne!(BASE_ADDR, BASE_ADDR_IN_TOKENS_TABLE);
+        assert_ne!(QUOTE_ADDR, QUOTE_ADDR_IN_TOKENS_TABLE);
+        assert!(BASE_ADDR.eq_ignore_ascii_case(BASE_ADDR_IN_TOKENS_TABLE));
+        assert!(QUOTE_ADDR.eq_ignore_ascii_case(QUOTE_ADDR_IN_TOKENS_TABLE));
+        assert_eq!(
+            Wallet::from_evm_hex(TEST_EVM_KEY).unwrap().address(),
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "the vector is bound to this signer's address"
+        );
+    }
+
+    /// The budget the id is hashed over, written out — so a scaling change is
+    /// caught here and not only as an opaque digest mismatch below.
+    #[test]
+    fn the_budget_is_the_product_in_quote_units() {
+        let (_, market) = fixture();
+        assert_eq!(
+            commitment(&market).input_amount,
+            3_000_000,
+            "1.5 base x 2.0 = 3.0 quote, at the QUOTE token's 6 decimals — not \
+             at pair's 12 and not at base's 18"
+        );
+    }
+
+    /// The vector itself.
+    #[test]
+    fn the_composed_order_id_matches_the_cross_repo_vector() {
+        let (_, market) = fixture();
+        assert_eq!(
+            commitment(&market).order_id,
+            KNOWN_GOOD_ORDER_ID,
+            "the SDK composed a different id than the arborter and terminal-ui \
+             derive for this order. Do not update this constant alone — see its \
+             doc comment."
+        );
+    }
+
+    /// And the token strings came out of `market_id`. Re-spell them there —
+    /// changing nothing else, and leaving the `tokens` rows alone — and the id
+    /// must move. A client reading `Token.address` would return the vector for
+    /// both markets, which is precisely the drift that cannot be seen from the
+    /// wire.
+    #[test]
+    fn the_id_follows_the_market_id_spelling_not_the_tokens_row() {
+        let (_, market) = fixture();
+        let mut recased = market.clone();
+        recased.market_id = format!(
+            "base-net::{BASE_ADDR_IN_TOKENS_TABLE}::quote-net::{QUOTE_ADDR_IN_TOKENS_TABLE}"
+        );
+        assert_ne!(
+            commitment(&recased).order_id,
+            commitment(&market).order_id,
+            "re-spelling market_id must move the id — if it does not, the token \
+             strings are being read from somewhere else"
+        );
+        assert_ne!(commitment(&recased).order_id, KNOWN_GOOD_ORDER_ID);
+    }
 }
 
 // -- Order wire encoding: what the envelope signature is taken over -------
