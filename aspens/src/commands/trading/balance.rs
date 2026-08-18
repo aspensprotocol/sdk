@@ -115,7 +115,7 @@ fn display_all_token_balances(
     );
 
     let mut table = Table::new();
-    table.load_preset(UTF8_BORDERS_ONLY);
+    table.load_style(UTF8_BORDERS_ONLY);
 
     // Set header: Token, Wallet, Deposited, Locked
     table.set_header(vec!["Token", "Wallet", "Deposited", "Locked"]);
