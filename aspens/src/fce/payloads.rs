@@ -38,7 +38,12 @@ pub struct PlaceOrderRequest {
     /// EIP-712 signature of the order (0x-hex).
     #[serde(rename = "signatureHash", with = "hexbytes")]
     pub signature_hash: Vec<u8>,
-    /// SDK-derived canonical order id (from `derive_order_id`).
+    /// SDK-derived canonical order id (from `derive_order_id`) — and, like
+    /// `amount_in` below, **inert on arrival**: the adapter forwards it into
+    /// `OrderAuthorization.order_id`, and the whole `OrderAuthorization`
+    /// message is gone from the arborter, which derives the id itself from the
+    /// signed `Order`. Still worth sending truthfully: it is what this caller
+    /// matches its own fill against.
     #[serde(rename = "orderId")]
     pub order_id: String,
     /// The order's budget in the asset it gives, u128 decimal — and now
@@ -48,8 +53,10 @@ pub struct PlaceOrderRequest {
     /// `types.go` still declares it and an omitted key would reach a deployed
     /// adapter as `""`; drop it here once infra syncs the proto.
     ///
-    /// Note what the wire cannot carry: `Order.quote_budget`. A market BID is
-    /// therefore refused before it is built — see
+    /// Note what the wire cannot carry: `Order.quote_budget` and `Order.nonce`.
+    /// A market BID — the one order that must sign a budget — is therefore
+    /// refused before it is built, while the nonce is signed as zero so the
+    /// adapter's rebuild matches. See
     /// [`crate::commands::trading::fce_actions::place_order`].
     #[serde(rename = "amountIn")]
     pub amount_in: String,

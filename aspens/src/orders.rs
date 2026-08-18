@@ -20,20 +20,27 @@ use sha2::{Digest, Sha256};
 ///
 /// Both EVM and Solana clients MUST use this exact derivation.
 ///
-/// **What actually checks it, today: nothing.** The arborter carries the same
-/// recipe (`chain_traits::market::derive_order_id`) but has no production call
-/// site for it — it takes `OrderAuthorization.order_id` verbatim and uses that
-/// id throughout match, settle and cancel. So the id is unauthenticated and
-/// predictable, and an attacker who predicts one can claim it first. Deriving
-/// it server-side, from the signed order, is what will close that; until then
-/// this recipe is a convention both clients keep, not one the venue enforces.
+/// **What checks it: the arborter, on every order.** It runs this recipe
+/// itself (`chain_traits::market::derive_order_id`) over the `Order` it
+/// verified the signature against, and uses the result throughout match,
+/// settle and cancel. A caller no longer supplies an id — the
+/// `OrderAuthorization` message that carried one was deleted — so what a
+/// client derives here is its own copy, useful only insofar as it agrees.
 ///
-/// That is precisely why it must not drift: the id is the key the ledger and
-/// `settleBatch` agree a fill belongs to, and the moment the arborter starts
-/// deriving it, a client that hashed anything else stops matching. Note what
-/// the recipe hashes — `input_amount` is the order's BUDGET, in the asset it
-/// gives (a market bid's is its stated `quote_budget`), and `output_amount` is
-/// zero for a market order, which has no price to expect anything with.
+/// Which is why it must not drift, and why the drift is nasty: every input is
+/// a field of the signed order (`client_nonce` is `Order.nonce`, added for
+/// exactly this reason), so a client hashing anything else still sends a
+/// perfectly valid, perfectly accepted order — it simply tracks an id the
+/// venue never issued, and the id is the key the ledger and `settleBatch`
+/// agree a fill belongs to. Nothing on the wire reports the split.
+///
+/// Note what the recipe hashes — `input_amount` is the order's BUDGET, in the
+/// asset it gives (a market bid's is its stated `quote_budget`), and
+/// `output_amount` is zero for a market order, which has no price to expect
+/// anything with. Note also what it hashes FIRST: the caller's own pubkey, so
+/// an order signed by one wallet cannot derive to another's id — pre-claiming
+/// someone else's id stops being expressible rather than being defended
+/// against.
 // The argument list mirrors arborter's hashing recipe one-to-one; bundling
 // it into a struct here would just push the unpacking to every caller and
 // drift more easily from the arborter side. Kept flat on purpose.

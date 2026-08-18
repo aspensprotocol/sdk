@@ -487,6 +487,19 @@ pub async fn delete_token(
 // ============================================================================
 
 /// Parameters for setting a market
+///
+/// No token decimals here. They were removed from `SetMarketRequest` (fields 7
+/// and 8): a token's decimals belong to the token, their one home is the
+/// `tokens` table, and a second copy on the market could disagree with nothing
+/// to reconcile it. Register the token first with [`set_token`]; the arborter
+/// reads the decimals from it.
+///
+/// The token ADDRESSES stay, and are now load-bearing in a way they were not:
+/// the arborter matches them against the `tokens` row **byte-for-byte,
+/// including case**, and rejects the market if they differ. EIP-55 checksummed
+/// and lowercase spellings of one address are different byte strings. Nothing
+/// on this path normalises case, deliberately — pass the same spelling to
+/// [`set_token`] and here.
 #[derive(Debug, Clone)]
 pub struct SetMarketParams {
     /// Network name of the base-token chain (e.g. `"base-sepolia"`).
@@ -501,15 +514,39 @@ pub struct SetMarketParams {
     pub base_chain_token_address: String,
     /// On-chain contract / mint address of the quote token.
     pub quote_chain_token_address: String,
-    /// Native decimals of the base token.
-    pub base_chain_token_decimals: i32,
-    /// Native decimals of the quote token.
-    pub quote_chain_token_decimals: i32,
     /// Pair decimals used for order quantities and prices on this market.
+    ///
+    /// Not a duplicate of any token's decimals: pair decimals are the
+    /// matching engine's scale for this market's quantities and prices, they
+    /// belong to the market, and nothing else knows them.
     pub pair_decimals: i32,
 }
 
+/// Build the `SetMarketRequest` wire message from [`SetMarketParams`].
+///
+/// Split out of [`set_market`] so the one property that is easy to break and
+/// impossible to see is testable without a server: **every string crosses
+/// unchanged**. The arborter compares the token addresses here against the
+/// `tokens` row byte-for-byte, so a well-meant `to_lowercase()` or EIP-55
+/// re-checksum anywhere on this path turns a correct market into a rejected
+/// one — or, worse on a stack that predates the check, into a market keyed to
+/// an address nothing else uses.
+fn set_market_request(params: SetMarketParams) -> SetMarketRequest {
+    SetMarketRequest {
+        base_chain_network: params.base_chain_network,
+        quote_chain_network: params.quote_chain_network,
+        base_chain_token_symbol: params.base_chain_token_symbol,
+        quote_chain_token_symbol: params.quote_chain_token_symbol,
+        base_chain_token_address: params.base_chain_token_address,
+        quote_chain_token_address: params.quote_chain_token_address,
+        pair_decimals: params.pair_decimals,
+    }
+}
+
 /// Set a market (requires auth)
+///
+/// Register both tokens with [`set_token`] first — the market takes its
+/// decimals from them, and its addresses must match theirs exactly.
 ///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
@@ -523,20 +560,7 @@ pub async fn set_market(
     let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
-    let request = authenticated_request(
-        &jwt,
-        SetMarketRequest {
-            base_chain_network: params.base_chain_network,
-            quote_chain_network: params.quote_chain_network,
-            base_chain_token_symbol: params.base_chain_token_symbol,
-            quote_chain_token_symbol: params.quote_chain_token_symbol,
-            base_chain_token_address: params.base_chain_token_address,
-            quote_chain_token_address: params.quote_chain_token_address,
-            base_chain_token_decimals: params.base_chain_token_decimals,
-            quote_chain_token_decimals: params.quote_chain_token_decimals,
-            pair_decimals: params.pair_decimals,
-        },
-    );
+    let request = authenticated_request(&jwt, set_market_request(params));
     let response = client.set_market(request).await?;
 
     Ok(response.into_inner())
@@ -588,3 +612,59 @@ pub async fn get_version(url: String) -> Result<VersionInfo> {
 pub use config_pb::Chain;
 pub use config_pb::Token;
 pub use config_pb::TradeContract;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An EIP-55 checksummed address and its lowercase form: the same account,
+    /// two different byte strings. `set-token` stores whichever spelling it was
+    /// given, and the arborter now compares a market's addresses against that
+    /// row byte-for-byte — so the SDK must transmit exactly what it was handed.
+    const CHECKSUMMED: &str = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
+    /// Deliberately a DIFFERENT address, not the same one re-cased: two fields
+    /// that happened to be equal would let a mutant swapping base for quote
+    /// produce identical output.
+    const LOWERCASE_OTHER: &str = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+
+    fn params() -> SetMarketParams {
+        SetMarketParams {
+            base_chain_network: "base-net".into(),
+            quote_chain_network: "quote-net".into(),
+            base_chain_token_symbol: "WETH".into(),
+            quote_chain_token_symbol: "USDC".into(),
+            base_chain_token_address: CHECKSUMMED.into(),
+            quote_chain_token_address: LOWERCASE_OTHER.into(),
+            pair_decimals: 12,
+        }
+    }
+
+    /// Case is preserved on BOTH legs, in both directions — a checksummed
+    /// address stays checksummed and a lowercase one stays lowercase. A
+    /// normaliser on either leg fails one of these whichever way it normalises.
+    #[test]
+    fn set_market_transmits_token_addresses_byte_for_byte() {
+        let req = set_market_request(params());
+        assert_eq!(req.base_chain_token_address, CHECKSUMMED);
+        assert_eq!(req.quote_chain_token_address, LOWERCASE_OTHER);
+        // Stated as the property, not just the values: no case folding at all.
+        assert_ne!(
+            req.base_chain_token_address,
+            CHECKSUMMED.to_lowercase(),
+            "the checksummed base address must not be lower-cased in transit"
+        );
+    }
+
+    /// The two legs must not be crossed. The addresses above are distinct
+    /// accounts, and the symbols and networks differ too, so a swap is visible
+    /// rather than absorbed.
+    #[test]
+    fn set_market_does_not_cross_the_base_and_quote_legs() {
+        let req = set_market_request(params());
+        assert_eq!(req.base_chain_network, "base-net");
+        assert_eq!(req.quote_chain_network, "quote-net");
+        assert_eq!(req.base_chain_token_symbol, "WETH");
+        assert_eq!(req.quote_chain_token_symbol, "USDC");
+        assert_eq!(req.pair_decimals, 12);
+    }
+}

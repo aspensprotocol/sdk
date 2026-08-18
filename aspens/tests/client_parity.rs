@@ -72,9 +72,18 @@ mod order_wire {
     /// 7.5 quote at 6 decimals — the quote token's OWN base units.
     const BUDGET: &str = "7500000";
 
+    /// A nonce that needs a multi-byte varint (six bytes), so a truncating or
+    /// single-byte encoding fails rather than coincides. Realistic, too: it is
+    /// millis-since-epoch, which is what `gasless::client_nonce` produces.
+    const NONCE: u64 = 1_700_000_000_042;
+
     /// A market BID: side BID, no price. The one cell that must state a
     /// budget, and so the only order that puts field 11 on the wire.
     fn market_bid(quote_budget: Option<&str>) -> Order {
+        market_bid_with_nonce(quote_budget, 0)
+    }
+
+    fn market_bid_with_nonce(quote_budget: Option<&str>, nonce: u64) -> Order {
         Order {
             side: 1, // SIDE_BID
             quantity: QUANTITY.to_string(),
@@ -87,6 +96,7 @@ mod order_wire {
             post_only: false,
             hidden: false,
             quote_budget: quote_budget.map(str::to_string),
+            nonce,
         }
     }
 
@@ -96,6 +106,23 @@ mod order_wire {
             .encode(&mut buf)
             .expect("encoding an Order cannot fail");
         buf
+    }
+
+    /// One varint (wire type 0) field, hand-encoded — base-128, low group
+    /// first, continuation bit on every byte but the last. Written out rather
+    /// than borrowed from prost so the expectation is independent of the code
+    /// under test.
+    fn varint_field(field_number: u8, mut value: u64) -> Vec<u8> {
+        let mut out = vec![field_number << 3];
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                return out;
+            }
+            out.push(byte | 0x80);
+        }
     }
 
     /// One length-delimited (wire type 2) string field, hand-encoded.
@@ -170,5 +197,36 @@ mod order_wire {
         let decoded = Order::decode(&*bytes).expect("round-trips");
         assert_eq!(decoded.quantity, QUANTITY);
         assert_eq!(decoded.quote_budget.as_deref(), Some(BUDGET));
+    }
+
+    /// `nonce` was appended as field 12, varint. The arborter now hashes it
+    /// into the canonical order id, reading it off these very bytes — so if
+    /// the two sides ever disagree about its number or wire type, the id the
+    /// client tracks and the id the venue issues diverge for an order whose
+    /// signature verifies fine. Hand-built expectation, same rationale as the
+    /// budget above.
+    #[test]
+    fn set_nonce_encodes_as_field_12_varint() {
+        let mut want = expected_market_bid_bytes(Some(BUDGET));
+        want.extend(varint_field(12, NONCE));
+        assert_eq!(encode(&market_bid_with_nonce(Some(BUDGET), NONCE)), want);
+
+        // And it decodes back to the same u64 — a truncation to u32 or i32
+        // would survive the append check on a small value but not this one.
+        let decoded =
+            Order::decode(&*encode(&market_bid_with_nonce(Some(BUDGET), NONCE))).expect("decodes");
+        assert_eq!(decoded.nonce, NONCE);
+    }
+
+    /// nonce = 0 emits nothing, so the FCE direct-action path — whose wire
+    /// has no nonce field, and whose adapter therefore rebuilds `Order` with
+    /// the default — signs bytes the arborter can reproduce. It also means
+    /// every signature cut before field 12 existed is still valid.
+    #[test]
+    fn unset_nonce_emits_nothing() {
+        assert_eq!(
+            encode(&market_bid_with_nonce(Some(BUDGET), 0)),
+            expected_market_bid_bytes(Some(BUDGET)),
+        );
     }
 }

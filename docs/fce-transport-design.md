@@ -126,10 +126,11 @@ encoder must match (empty bytes → `"0x"`).
   "executionType": "DIRECT",       // optional: DIRECT | DISCRETIONARY
   "postOnly": false,               // optional
   "signatureHash": "0x<eip712-sig>",
-  "orderId": "0x<sdk-derived>",
-  "amountIn": "5"                  // the order's budget; now inert at the
-                                   // arborter (OrderAuthorization.amount_in
-                                   // was deleted), kept for the adapter
+  "orderId": "0x<sdk-derived>",    // also inert now, same reason as amountIn
+  "amountIn": "5"                  // the order's budget; both fields are now
+                                   // inert at the arborter (the adapter
+                                   // forwards them into OrderAuthorization,
+                                   // which was deleted), kept for the adapter
 }
 
 // NOTE: this wire has no `quoteBudget`, and `Order.quote_budget` is what a
@@ -137,6 +138,14 @@ encoder must match (empty bytes → `"0x"`).
 // fields above, so an order carrying a budget would hash differently there
 // and fail signature verification. The SDK refuses a market BID over FCE
 // rather than send one; a limit buy is unaffected.
+
+// NOTE: nor does it have a `nonce`, and `Order.nonce` (field 12) is now hashed
+// into the canonical order id. Same rebuild problem, different answer: the SDK
+// signs nonce = 0 over FCE (`FCE_ORDER_NONCE`), the proto3 default, which is
+// wire-skipped and so is exactly what the adapter's rebuild produces. The cost
+// is that two identical orders from one wallet derive one id over this
+// transport, and the second is refused as a replay. Adding `nonce` to
+// `types.go` and to the adapter's `pb.Order` removes that.
 
 // CANCEL_ORDER   — { orderId, marketId, signatureHash, ... } (mirror CancelOrderRequest)
 // WITHDRAW       — { "network":"flare-coston2", "token":"0x..", "account":"0x..",

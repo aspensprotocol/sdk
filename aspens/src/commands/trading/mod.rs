@@ -8,7 +8,10 @@ pub mod balance;
 pub mod cancel_order;
 /// Deposit tokens into the trading contract so they're available to trade.
 pub mod deposit;
-/// Build the gasless cross-chain order envelope used by `send_order`.
+/// Resolve an order's budget and derive its canonical id — the client's own
+/// copy of the id the arborter derives from the signed order. Nothing here
+/// goes on the wire. (The module name is a leftover from the retired
+/// on-chain-lock "gasless" flow.)
 pub mod gasless;
 /// Build, sign, and submit a buy/sell order envelope.
 pub mod send_order;

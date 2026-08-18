@@ -126,13 +126,16 @@ pub struct SetMarketRequest {
     /// The quote chain token address
     #[prost(string, tag = "6")]
     pub quote_chain_token_address: ::prost::alloc::string::String,
-    /// The base chain token decimals
-    #[prost(int32, tag = "7")]
-    pub base_chain_token_decimals: i32,
-    /// The quote chain token decimals
-    #[prost(int32, tag = "8")]
-    pub quote_chain_token_decimals: i32,
-    /// The pair decimals (this is chosen by the stack admin)
+    /// NOTE: `base_chain_token_decimals` (7) and `quote_chain_token_decimals` (8)
+    /// were removed. A token's decimals are a property of the TOKEN, and their one
+    /// home is the `tokens` table, which `GetConfig` already serves. Carrying a
+    /// second copy on the market let the two disagree with nothing to reconcile
+    /// them — harmless while the server only mis-scaled amounts, but a silent
+    /// total outage once the order id is derived from amounts computed through
+    /// them. Set the token first; the market reads its decimals from it.
+    ///
+    /// The pair decimals below are NOT a duplicate: they belong to the market, not
+    /// to either token, and nothing else knows them.
     #[prost(int32, tag = "9")]
     pub pair_decimals: i32,
 }

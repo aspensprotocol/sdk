@@ -1,7 +1,7 @@
 //! Trading actions over the FCE direct-action transport.
 //!
 //! Builds the **same signed envelopes** as the gRPC commands — reusing
-//! `lookup_market`, `convert_to_pair_decimals`, `build_gasless_authorization`,
+//! `lookup_market`, `convert_to_pair_decimals`, `build_order_commitment`,
 //! and the shared `sign_encoded` — then submits them through the
 //! ext-proxy ([`crate::fce::FceClient`]) instead of arborter gRPC. Signing is
 //! byte-identical to the gRPC path (the cross-repo parity invariant, CLAUDE.md):
@@ -15,6 +15,12 @@
 //! adapter would rebuild differently. See
 //! `check_order_expressible_over_fce` below (private: rustdoc refuses an
 //! intra-doc link from public docs into a private item).
+//!
+//! `Order.nonce` is the same shape of problem with a different answer: the
+//! wire has no field for it, so every order sent this way signs
+//! `FCE_ORDER_NONCE` — zero, the proto3 default, wire-skipped on encode and
+//! therefore exactly what the adapter's rebuild produces. See that constant
+//! for what it costs.
 //!
 //! Reads (`book_state`/`my_state`/`export_history`) are one-shot snapshots.
 
@@ -30,7 +36,7 @@ use crate::fce::{
     Outcome, PlaceOrderResponse, WithdrawVoucher,
 };
 
-use super::gasless::build_gasless_authorization;
+use super::gasless::build_order_commitment;
 use super::send_order::arborter_pb::{Order, OrderToCancel, Side};
 use super::send_order::{convert_to_pair_decimals, lookup_market};
 use super::stream_orderbook::TopOfBook;
@@ -49,6 +55,24 @@ fn side_str(side: i32) -> Result<&'static str> {
         _ => Err(eyre!("side must be BID or ASK")),
     }
 }
+
+/// The only `Order.nonce` this transport can sign: zero.
+///
+/// The direct-action JSON has no nonce field, and the adapter rebuilds the
+/// arborter `Order` from the JSON it does have (infra
+/// `stacks/fcc/extension/internal/arborter/grpc.go`) — its `Order` does not
+/// even carry the field yet. Zero is the proto3 default for a non-optional
+/// `uint64` and is skipped on encode, so signing it produces byte-identical
+/// bytes to the ones the adapter rebuilds. Any other value would be signed
+/// here and absent there, and the arborter would recover a different address
+/// and reject the order for a bad signature, saying nothing about a nonce.
+///
+/// What it costs: the id is derived from the order's content, the signer's
+/// address and this nonce, so over FCE two identical orders from one wallet —
+/// same market, side, quantity and price — derive the same id, and the second
+/// is refused as a replay. Vary the quantity, or send it over gRPC, until the
+/// adapter carries a nonce.
+pub(crate) const FCE_ORDER_NONCE: u64 = 0;
 
 /// Refuse the orders this transport cannot express.
 ///
@@ -152,10 +176,13 @@ pub async fn place_order(
         // refused above. Setting it would change the signed bytes without
         // changing what the adapter rebuilds.
         quote_budget: None,
+        // Zero for the same reason, and it must match the nonce the commitment
+        // below is derived over — see `FCE_ORDER_NONCE`.
+        nonce: FCE_ORDER_NONCE,
     };
     let signature_hash = super::sign_encoded(&order, signing_wallet).await?;
 
-    let commitment = build_gasless_authorization(
+    let commitment = build_order_commitment(
         &config,
         market,
         side_i,
@@ -163,6 +190,7 @@ pub async fn place_order(
         &quantity_raw,
         price_raw.as_deref(),
         None,
+        order.nonce,
     )?;
 
     let req = fce::PlaceOrderRequest {
@@ -175,7 +203,11 @@ pub async fn place_order(
         execution_type: None,
         post_only: if post_only { Some(true) } else { None },
         signature_hash,
-        order_id: commitment.authorization.order_id,
+        // Also inert on arrival, and for the same reason as `amount_in` below:
+        // the adapter forwards it into `OrderAuthorization.order_id`, and the
+        // arborter now derives its own id from the signed order. Keep sending
+        // the real one — it is what this caller will match a fill against.
+        order_id: commitment.order_id,
         // The adapter's JSON still has this field (infra
         // `stacks/fcc/extension/pkg/types/types.go`), and it forwards it into
         // `OrderAuthorization.amount_in` — a proto field the arborter has since
