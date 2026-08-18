@@ -40,6 +40,15 @@
 //! cells, matching the arborter's `quote_budget_for_cell`. It rides inside
 //! `Order`, so the envelope signature covers it.
 //!
+//! # Where the id's token strings come from
+//!
+//! **`Order.market_id`, cut into its four `::`-separated segments — never the
+//! `tokens` table.** The id hashes each token as its address STRING, so the
+//! spelling is the value, and `market_id` is the one spelling that is inside
+//! the signed message and is therefore what the server hashes. The private
+//! `parse_market_id` below carries the full argument, including which of the
+//! id's other inputs are NOT a second source and why.
+//!
 //! # Usage sketch
 //!
 //! ```ignore
@@ -273,27 +282,36 @@ fn resolve_order<'a>(
     price_raw: Option<&str>,
     quote_budget_raw: Option<&str>,
 ) -> Result<OrderResolution<'a>> {
+    // The two token strings the id is hashed over come out of `market_id`,
+    // and out of nothing else. See `parse_market_id` for why.
+    let [_, base_token_address, _, quote_token_address] = parse_market_id(&market.market_id)?;
+
     // Arborter handler convention: Bid = buying base, locks on quote
     // chain. Ask = selling base, locks on base chain.
-    let (origin_net, origin_sym, dest_net, dest_sym) = match side {
-        1 => (
-            &market.quote_chain_network,
-            &market.quote_chain_token_symbol,
-            &market.base_chain_network,
-            &market.base_chain_token_symbol,
-        ),
-        2 => (
-            &market.base_chain_network,
-            &market.base_chain_token_symbol,
-            &market.quote_chain_network,
-            &market.quote_chain_token_symbol,
-        ),
-        other => {
-            return Err(eyre!(
-                "unsupported side {other} — expected 1 (Bid) or 2 (Ask)"
-            ));
-        }
-    };
+    let (origin_net, origin_sym, dest_net, dest_sym, input_token_address, output_token_address) =
+        match side {
+            1 => (
+                &market.quote_chain_network,
+                &market.quote_chain_token_symbol,
+                &market.base_chain_network,
+                &market.base_chain_token_symbol,
+                quote_token_address,
+                base_token_address,
+            ),
+            2 => (
+                &market.base_chain_network,
+                &market.base_chain_token_symbol,
+                &market.quote_chain_network,
+                &market.quote_chain_token_symbol,
+                base_token_address,
+                quote_token_address,
+            ),
+            other => {
+                return Err(eyre!(
+                    "unsupported side {other} — expected 1 (Bid) or 2 (Ask)"
+                ));
+            }
+        };
 
     let origin_chain = config
         .get_chain(origin_net)
@@ -301,6 +319,12 @@ fn resolve_order<'a>(
     let destination_chain = config
         .get_chain(dest_net)
         .ok_or_else(|| eyre!("destination chain {dest_net:?} not found in config"))?;
+    // The `tokens` rows are consulted for DECIMALS only — never for the
+    // address. Decimals are not a second source: the arborter reads a market's
+    // token decimals through the very same `(network, symbol)` key
+    // (`get_market_by_id` LEFT JOINs `tokens` on it), so both sides read one
+    // column. The address is the field that has two homes, and only one of
+    // them is signed.
     let input_token = config
         .get_token(origin_net, origin_sym)
         .ok_or_else(|| eyre!("token {origin_sym} on {origin_net} not found"))?;
@@ -380,11 +404,67 @@ fn resolve_order<'a>(
     Ok(OrderResolution {
         origin_chain,
         destination_chain,
-        input_token_address: input_token.address.clone(),
-        output_token_address: output_token.address.clone(),
+        input_token_address: input_token_address.to_string(),
+        output_token_address: output_token_address.to_string(),
         amount_in,
         amount_out,
     })
+}
+
+/// Split a `market_id` into `[base_network, base_token_address,
+/// quote_network, quote_token_address]`.
+///
+/// # Why the id's token strings must come from here
+///
+/// The order id hashes each token as its **address STRING** — the UTF-8 bytes
+/// of the text, not the decoded address — so `0xAbC…` and `0xabc…` are two
+/// different preimages and therefore two different ids for one order. Which
+/// spelling the client hashes is thus load-bearing, and there are two places a
+/// spelling can be read from:
+///
+/// * `market_id`, which is a field of the signed `Order`. The arborter cuts
+///   its preimage out of exactly this substring, and the browser SDK's
+///   `buildOrderCommitment` does the same.
+/// * the `tokens` table, served by `GetConfig` as `Token.address`. A
+///   *different* row, with its own lifetime.
+///
+/// Those two agree only while byte-identical. Registering a market now asserts
+/// they are (the arborter's `assert_token_address` refuses a `SetMarket` whose
+/// stated address differs from the `tokens` row, case included), but nothing
+/// re-checks a market afterwards: re-register the token under another spelling
+/// and the market's id keeps the old one. Reading `Token.address` would then
+/// derive an id no venue ever issues, and the failure is silent — the order is
+/// accepted, the two sides track different ids, and nothing on the wire says
+/// so. Reading `market_id` cannot drift, because it *is* what the server
+/// hashes.
+///
+/// Only the addresses are contested. The two network segments are the same
+/// strings as `Market.base_chain_network` / `.quote_chain_network` by
+/// construction — `insert_new_market` builds the id out of those very columns
+/// — so they are left where the rest of this module already reads them.
+///
+/// Mirrors the arborter's `trading::parse_market_id`, including that segments
+/// past the fourth are ignored.
+fn parse_market_id(market_id: &str) -> Result<[&str; 4]> {
+    let mut segments = market_id.split("::");
+    let malformed = || {
+        eyre!(
+            "market_id {market_id:?} is not \
+             base_network::base_token_address::quote_network::quote_token_address — \
+             the order id is hashed over the two token addresses in it, so there is \
+             nothing to fall back to"
+        )
+    };
+    let base_network = segments.next().ok_or_else(malformed)?;
+    let base_token_address = segments.next().ok_or_else(malformed)?;
+    let quote_network = segments.next().ok_or_else(malformed)?;
+    let quote_token_address = segments.next().ok_or_else(malformed)?;
+    Ok([
+        base_network,
+        base_token_address,
+        quote_network,
+        quote_token_address,
+    ])
 }
 
 fn wallet_pubkey_bytes(wallet: &Wallet) -> Vec<u8> {
@@ -471,8 +551,142 @@ pub(crate) mod tests {
     // rebuilds the order; any drift here is the WFLR/USDC class of bug
     // we hit in cross-chain testing.
 
+    /// The base token's address as `market_id` spells it — the spelling the
+    /// arborter hashes, and so the one the id must be derived over.
+    pub(crate) const BASE_ADDR_IN_MARKET_ID: &str = "0xbase";
+    /// The same address as the `tokens` table spells it. Deliberately a
+    /// DIFFERENT string (case only, which is the divergence that actually
+    /// occurs): a fixture where both sources hold one string cannot tell a
+    /// correct source from a wrong one, and every token-address test in this
+    /// module would pass while reading the wrong row.
+    pub(crate) const BASE_ADDR_IN_TOKENS_TABLE: &str = "0xBASE";
+    /// Quote side of the same split. See [`BASE_ADDR_IN_MARKET_ID`].
+    pub(crate) const QUOTE_ADDR_IN_MARKET_ID: &str = "0xquote";
+    /// Quote side of the same split. See [`BASE_ADDR_IN_TOKENS_TABLE`].
+    pub(crate) const QUOTE_ADDR_IN_TOKENS_TABLE: &str = "0xQUOTE";
+
+    /// Guard the guard: the two spellings must be the same address written
+    /// two ways. Equal strings would make every assertion below vacuous;
+    /// different addresses would make them test the wrong thing.
+    #[test]
+    fn the_fixture_spells_each_address_two_different_ways() {
+        for (in_id, in_tokens) in [
+            (BASE_ADDR_IN_MARKET_ID, BASE_ADDR_IN_TOKENS_TABLE),
+            (QUOTE_ADDR_IN_MARKET_ID, QUOTE_ADDR_IN_TOKENS_TABLE),
+        ] {
+            assert_ne!(
+                in_id, in_tokens,
+                "the two sources must hold different strings or no test can \
+                 distinguish them"
+            );
+            assert!(
+                in_id.eq_ignore_ascii_case(in_tokens),
+                "they must still be the same address, differing only in case"
+            );
+        }
+        let (config, market) = config_with_market(6, 6, 6);
+        assert_eq!(
+            market.market_id,
+            format!("base-net::{BASE_ADDR_IN_MARKET_ID}::quote-net::{QUOTE_ADDR_IN_MARKET_ID}")
+        );
+        assert_eq!(
+            config.get_token("base-net", "BASE").unwrap().address,
+            BASE_ADDR_IN_TOKENS_TABLE
+        );
+        assert_eq!(
+            config.get_token("quote-net", "QUOTE").unwrap().address,
+            QUOTE_ADDR_IN_TOKENS_TABLE
+        );
+    }
+
+    /// The id hashes each token's address as a STRING, so the spelling is the
+    /// value. It must come from `market_id` — part of the signed `Order`, and
+    /// the exact substring the arborter cuts its own preimage from — not from
+    /// the `tokens` row, which is a separate record that can be re-registered
+    /// under another spelling after the market exists.
+    ///
+    /// Both sides, because the orientation is what decides WHICH address is
+    /// the input: a bid gives quote, an ask gives base.
+    #[test]
+    fn the_token_strings_come_from_market_id_not_the_tokens_table() {
+        let (config, market) = config_with_market(BASE_DEC, QUOTE_DEC, PAIR_DEC);
+
+        let bid = resolve_order(&config, &market, 1, "100000000", Some("200000000"), None).unwrap();
+        assert_eq!(bid.input_token_address, QUOTE_ADDR_IN_MARKET_ID);
+        assert_eq!(bid.output_token_address, BASE_ADDR_IN_MARKET_ID);
+
+        let ask = resolve_order(&config, &market, 2, "100000000", Some("200000000"), None).unwrap();
+        assert_eq!(ask.input_token_address, BASE_ADDR_IN_MARKET_ID);
+        assert_eq!(ask.output_token_address, QUOTE_ADDR_IN_MARKET_ID);
+
+        // Stated as a NEGATIVE too: reading the `tokens` row would produce
+        // these strings instead, and hashing them yields an id the arborter
+        // never issues for an order it accepts without complaint.
+        assert_ne!(bid.input_token_address, QUOTE_ADDR_IN_TOKENS_TABLE);
+        assert_ne!(ask.input_token_address, BASE_ADDR_IN_TOKENS_TABLE);
+    }
+
+    /// And it reaches the digest, not just the resolution: two markets that
+    /// differ ONLY in how `market_id` spells a token derive different ids.
+    #[test]
+    fn the_market_id_spelling_reaches_the_derived_order_id() {
+        let (config, market) = config_with_market(BASE_DEC, QUOTE_DEC, PAIR_DEC);
+        let mut recased = market.clone();
+        recased.market_id = format!(
+            "base-net::{BASE_ADDR_IN_TOKENS_TABLE}::quote-net::{QUOTE_ADDR_IN_TOKENS_TABLE}"
+        );
+
+        let wallet = Wallet::from_evm_hex(TEST_EVM_KEY).unwrap();
+        let id_for = |m: &Market| {
+            build_order_commitment(
+                &config,
+                m,
+                1,
+                &wallet,
+                "100000000",
+                Some("200000000"),
+                None,
+                1_700_000_000_042,
+            )
+            .unwrap()
+            .order_id
+        };
+        assert_ne!(
+            id_for(&market),
+            id_for(&recased),
+            "the address STRING is the preimage, so a re-cased market_id is a \
+             different id — and a client that hashed the `tokens` row instead \
+             would return the same id for both"
+        );
+    }
+
+    /// A `market_id` that cannot be cut into four is refused here rather than
+    /// hashed into an id over an empty or partial address.
+    #[test]
+    fn a_short_market_id_is_refused() {
+        let (config, market) = config_with_market(BASE_DEC, QUOTE_DEC, PAIR_DEC);
+        for malformed in [
+            "",
+            "base-net",
+            "base-net::0xbase",
+            "base-net::0xbase::quote-net",
+        ] {
+            let mut broken = market.clone();
+            broken.market_id = malformed.to_string();
+            let err = resolve_order(&config, &broken, 1, "100000000", Some("200000000"), None)
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("is not"),
+                "market_id {malformed:?} should be refused as malformed; got: {err}"
+            );
+        }
+    }
+
     /// Shared with `send_order`'s tests: one fixture, so a market that
     /// exercises the budget rule is described once.
+    ///
+    /// The `tokens` rows and the `market_id` spell each address DIFFERENTLY
+    /// on purpose — see [`BASE_ADDR_IN_TOKENS_TABLE`].
     pub(crate) fn config_with_market(
         base_dec: u32,
         quote_dec: u32,
@@ -487,7 +701,7 @@ pub(crate) mod tests {
             crate::commands::config::config_pb::Token {
                 name: "Base".into(),
                 symbol: "BASE".into(),
-                address: "0xbase".into(),
+                address: BASE_ADDR_IN_TOKENS_TABLE.into(),
                 token_id: None,
                 decimals: base_dec,
             },
@@ -498,7 +712,7 @@ pub(crate) mod tests {
             crate::commands::config::config_pb::Token {
                 name: "Quote".into(),
                 symbol: "QUOTE".into(),
-                address: "0xquote".into(),
+                address: QUOTE_ADDR_IN_TOKENS_TABLE.into(),
                 token_id: None,
                 decimals: quote_dec,
             },
@@ -552,7 +766,9 @@ pub(crate) mod tests {
             base_chain_token_decimals: base_dec as i32,
             quote_chain_token_decimals: quote_dec as i32,
             pair_decimals: pair_dec,
-            market_id: "base-net::0xbase::quote-net::0xquote".into(),
+            market_id: format!(
+                "base-net::{BASE_ADDR_IN_MARKET_ID}::quote-net::{QUOTE_ADDR_IN_MARKET_ID}"
+            ),
         };
         let config = GetConfigResponse {
             config: Some(Configuration {

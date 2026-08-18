@@ -99,6 +99,15 @@ Trading is off-chain in the TEE; the chain only sees deposits, net settlement
   arborter reads them from the `tokens` table. It also matches the market's
   token addresses against that table **byte-for-byte, case included** — and
   nothing on the SDK's admin path normalises case, deliberately.
+- **The order id's token strings are cut out of `Order.market_id`**, and never
+  read from `Token.address`. The id hashes each token as its address STRING,
+  so `0xAbC…` and `0xabc…` are two ids for one order; `market_id` is the only
+  spelling inside the signed message, so it is the only one the arborter can
+  hash. `SetMarket` asserts the two agree at registration, but nothing
+  re-checks afterwards — re-register the token under another spelling and the
+  market keeps the old one. `aspens/tests/client_parity.rs` pins the whole
+  composition against a vector shared with the arborter and terminal-ui;
+  changing it means changing all three.
 - The live EVM contract is **MidribV3** (`artifacts/MidribV3.json`); MidribV3
   has no on-chain locked balance, so EVM "locked" reads as 0.
 - Settlement (`settleBatch` / Solana `settle_batch`) is arborter-signed and
