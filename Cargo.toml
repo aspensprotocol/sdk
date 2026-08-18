@@ -18,7 +18,7 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Blockchain & Ethereum
-alloy = { version = "2.0.5", default-features = false, features = ["contract", "network", "providers", "reqwest", "reqwest-rustls-tls", "rpc-types", "signer-local", "signers", "sol-types"] }
+alloy = { version = "2.4.1", default-features = false, features = ["contract", "network", "providers", "reqwest", "reqwest-rustls-tls", "rpc-types", "signer-local", "signers", "sol-types"] }
 # Direct sub-crate deps for lean signing builds (no provider / transport /
 # rpc-client machinery). The `alloy` umbrella stays behind the `client`
 # feature for call sites that need RPC.
@@ -29,12 +29,29 @@ alloy-chains = "0.2.37"
 alloy-contract = "2.4.1"
 alloy-sol-types = { version = "1.6.1", features = ["json"] }
 
-# Solana
+# Solana — held at 3.x as a family. solana-sdk 4.1.0 and solana-client 4.2.1
+# are both stable, but no stable 4.x pair both resolves AND compiles:
+#
+#   * solana-client 4.2.x constrains solana-transaction to >=4.1.4,<4.2.0 and
+#     solana-pubkey to >=4.2.0,<4.3.0, while solana-sdk 4.1.0 requires
+#     solana-transaction ^4.2.0 and solana-pubkey ^4.3.0 — disjoint on both,
+#     so cargo cannot resolve the pair at all.
+#   * solana-client 4.1.0/4.1.1/4.1.2 resolve, but each pulls two incompatible
+#     wincode majors into one graph: solana-transaction-status-client-types
+#     4.1.x requires wincode ^0.5.3 while solana-message 4.5.0 -> solana-address
+#     2.7.0 requires wincode ^0.6.0. The duplicated `SchemaWrite` trait then
+#     fails to compile. solana-address cannot be pinned back to the 2.6.1
+#     (wincode 0.5) line because solana-message 4.5.0 requires ^2.7.0.
+#   * solana-client 4.0.0 does not resolve against solana-sdk 4.1 either.
+#
+# That incoherence is inside the published solana-client 4.x releases, not
+# something this manifest can work around. Revisit when a stable solana-client
+# ships with a single wincode major and bounds that admit solana-sdk 4.x.
+# solana-client's newest release overall, 4.3.0-beta.0, is a pre-release and is
+# out of scope on a money path regardless.
 solana-sdk = "3"
-# solana-sdk 4.x is out, but solana-client 4.x is still beta and the mixed
-# solana-transaction 3/4 types fail to implement SerializableTransaction.
-# Move both together once solana-client 4.0 goes stable.
 solana-client = "3.1"
+# No 4.x line exists for solana-keypair; 3.1.2 is the latest stable.
 solana-keypair = "3.1"
 bs58 = "0.5"
 ed25519-dalek = "2"
@@ -75,7 +92,7 @@ futures = "0.3"
 # Serialization
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0"
-toml = "1.1.2"
+toml = "1.1.4"
 
 # CLI (only for binaries)
 clap = { version = "4.6.6", features = ["derive"] }
