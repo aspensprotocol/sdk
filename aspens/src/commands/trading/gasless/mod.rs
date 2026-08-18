@@ -192,7 +192,7 @@ struct OrderResolution<'a> {
 /// Mirrors `arborter/app/chain-traits/src/convert_decimals.rs::normalize_decimals`
 /// so the SDK and arborter agree on the scale of every amount that flows
 /// through the EIP-712 / Ed25519 digest.
-fn normalize(amount: u128, from_decimals: u32, to_decimals: u32) -> Result<u128> {
+pub(crate) fn normalize(amount: u128, from_decimals: u32, to_decimals: u32) -> Result<u128> {
     use std::cmp::Ordering;
     match from_decimals.cmp(&to_decimals) {
         Ordering::Equal => Ok(amount),
