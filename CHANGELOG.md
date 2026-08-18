@@ -9,6 +9,40 @@ change before 1.0.
 
 ## [Unreleased]
 
+### Added
+
+- **`Order.nonce` (proto field 12)** — caller-chosen, inside the signed order.
+  `gasless::client_nonce()` supplies the SDK's choice (millis since epoch) and
+  `send_order::prepare_order` binds one value to both the signed `Order` and
+  the id derivation, which is the whole point: the arborter now derives the
+  canonical order id itself, from the message it verified, so every input to
+  the recipe has to be signed.
+
+### Changed
+
+- **BREAKING (wire): `OrderAuthorization` is gone**, along with
+  `SendOrderRequest.authorization`. The arborter derives both things it carried
+  — the order's budget and its canonical id — from the signed `Order`; a caller
+  cannot choose an id any more. `gasless::build_gasless_authorization` is
+  renamed **`gasless::build_order_commitment`**, takes the nonce as its final
+  argument, and returns `OrderCommitment { order_id, input_amount, nonce }`
+  instead of a proto payload. Nothing it produces is transmitted; it is the
+  caller's own copy, for tracking a fill, and `send_order` logs it.
+- **BREAKING (wire): `SetMarketRequest` lost `base_chain_token_decimals` and
+  `quote_chain_token_decimals`** (fields 7 and 8), and so did
+  `admin::SetMarketParams` and `aspens-admin set-market`'s `--base-decimals` /
+  `--quote-decimals` flags. A token's decimals live in the `tokens` table;
+  register the token first. The arborter also now rejects a market whose token
+  addresses differ from the `tokens` row **byte-for-byte, case included** —
+  nothing on this path normalises case, so pass `set-token` and `set-market`
+  the same spelling.
+- **FCE direct-action orders sign `nonce = 0`** (`FCE_ORDER_NONCE`). That wire
+  has no nonce field and the adapter rebuilds `Order` without one, so any other
+  value would be verified against different bytes and rejected as a bad
+  signature. Consequence until the adapter carries a nonce: over FCE, two
+  identical orders from one wallet derive the same id and the second is refused
+  as a replay.
+
 ## [0.6.2] — 2026-06-18
 
 Release-tooling patch — **no library changes** (the `aspens` crate is identical

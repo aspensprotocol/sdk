@@ -1,15 +1,27 @@
-//! Build the `OrderAuthorization` proto payload for a `SendOrderRequest`.
+//! Resolve an order's budget and derive its canonical id.
 //!
 //! Stateless — no gRPC, no arborter round-trip, no chain RPC. Pure data.
 //!
 //! Under the optimistic shadow ledger, order entry never touches the chain:
 //! the arborter authenticates the order via the **outer envelope** signature
-//! (`aspens::evm::sign_send_order_envelope`) and consumes exactly one field
-//! from this payload — the canonical `order_id`
-//! (`aspens::orders::derive_order_id`). The legacy gasless on-chain-lock
-//! signing (EVM EIP-712 `GaslessCrossChainOrder` / Solana
+//! (`aspens::evm::sign_send_order_envelope`) alone. The legacy gasless
+//! on-chain-lock signing (EVM EIP-712 `GaslessCrossChainOrder` / Solana
 //! `OpenForSignedPayload`) is gone with the on-chain order machinery, so this
 //! helper no longer signs a lock or dispatches per chain architecture.
+//!
+//! # Nothing here goes on the wire any more
+//!
+//! The id this module derives is **not sent**. The `OrderAuthorization`
+//! message that used to carry it — and `SendOrderRequest.authorization` with
+//! it — was deleted: the arborter now derives the id itself from the signed
+//! `Order`, so a caller cannot choose one. What is derived here is the
+//! caller's own copy, for tracking a fill it has not yet seen an id for, and
+//! it matches the server's only while every input to the recipe is one the
+//! server can read off the message it verified. `nonce` is the input that had
+//! to move: it is now `Order.nonce`, signed, and it is passed in here rather
+//! than minted here so that one value reaches both places. See
+//! [`crate::commands::trading::send_order`]'s `prepare_order`, which binds it
+//! once.
 //!
 //! # The one rule
 //!
@@ -31,13 +43,14 @@
 //! # Usage sketch
 //!
 //! ```ignore
-//! use aspens::commands::trading::gasless::build_gasless_authorization;
+//! use aspens::commands::trading::gasless::{build_order_commitment, client_nonce};
 //!
-//! let commitment = build_gasless_authorization(
+//! let nonce = client_nonce()?;
+//! let commitment = build_order_commitment(
 //!     &config, market, side, &wallet, &quantity_raw, price_raw.as_deref(),
-//!     quote_budget_raw.as_deref(),
+//!     quote_budget_raw.as_deref(), nonce,
 //! )?;
-//! request.authorization = Some(commitment.authorization);
+//! let order = Order { /* ... */ nonce, ..Default::default() };
 //! ```
 //!
 //! See also `aspens::orders::derive_order_id`.
@@ -52,41 +65,50 @@ use crate::commands::config::config_pb::{Chain, GetConfigResponse, Market};
 use crate::orders::derive_order_id;
 use crate::wallet::{CurveType, Wallet};
 
-use super::send_order::arborter_pb::OrderAuthorization;
-
-/// What [`build_gasless_authorization`] produces: the wire payload plus the
-/// budget it was derived over.
+/// What [`build_order_commitment`] produces: the caller's own copy of the
+/// canonical order id, the budget it was derived over, and the nonce that went
+/// into it.
 ///
-/// `input_amount` is **not** on the gRPC wire — `OrderAuthorization.amount_in`
-/// was deleted, field number and all, because it sat in a sibling of `Order`
-/// that the envelope signature never covered. It is still the id's
-/// `input_amount`, and the FCE direct-action JSON still carries it (see
-/// [`crate::commands::trading::fce_actions`]), so it is returned rather than
-/// recomputed by callers that need it.
+/// None of it is sent to the arborter — `OrderAuthorization` is gone, field
+/// numbers and all, and the arborter derives the id and the budget from the
+/// signed `Order`. These are the caller's numbers, kept so it can recognise
+/// its own order and so the FCE direct-action JSON (which still declares
+/// `orderId` / `amountIn` for a not-yet-resynced adapter) has something to
+/// fill in. See [`crate::commands::trading::fce_actions`].
 #[derive(Debug, Clone)]
 pub struct OrderCommitment {
-    /// The payload for `SendOrderRequest.authorization`.
-    pub authorization: OrderAuthorization,
+    /// The canonical 32-byte order id, `0x`-prefixed hex — the same value the
+    /// arborter derives from the signed `Order`, provided `nonce` below is the
+    /// one that order carries.
+    pub order_id: String,
     /// The order's budget — how much of the asset it GIVES it commits — in
     /// that token's native base units (NOT pair decimals). Quote for a bid,
     /// base for an ask; for a market bid it is the stated `quote_budget`
     /// verbatim.
     pub input_amount: u128,
+    /// The nonce hashed into `order_id`. **Must equal `Order.nonce` on the
+    /// order that gets signed** — it is echoed back here so a caller can bind
+    /// the two rather than mint the value twice.
+    pub nonce: u64,
 }
 
-/// Build an `OrderAuthorization` for the given order.
+/// Derive the canonical order id for the given order, and the budget it
+/// commits.
 ///
-/// Resolves the order's chains/tokens/budget and derives the canonical
-/// `order_id`. The returned payload carries the single field the arborter
-/// still consumes, `order_id`; the budget it was derived over comes back
-/// alongside it in [`OrderCommitment::input_amount`]. Order authentication is
-/// via the outer envelope signature, not a per-order on-chain lock signature.
+/// Resolves the order's chains/tokens/budget and hashes them, with `nonce`,
+/// into the id. Nothing here is transmitted: the arborter runs the same recipe
+/// over the `Order` it verified. That is exactly why `nonce` is a parameter —
+/// the value must also be set as `Order.nonce`, and minting it inside would
+/// give the caller no way to sign the same one.
 ///
 /// `quote_budget_raw` is the market-BID budget in the QUOTE token's native
 /// base units (decimal `u128`, the same string that goes into
 /// `Order.quote_budget`). It is required for a market BID and rejected on
 /// every other cell — see the module header.
-pub fn build_gasless_authorization(
+// The argument list mirrors what the id recipe consumes; see the same note on
+// `crate::orders::derive_order_id`.
+#[allow(clippy::too_many_arguments)]
+pub fn build_order_commitment(
     config: &GetConfigResponse,
     market: &Market,
     side: i32,
@@ -94,6 +116,7 @@ pub fn build_gasless_authorization(
     quantity_raw: &str,
     price_raw: Option<&str>,
     quote_budget_raw: Option<&str>,
+    nonce: u64,
 ) -> Result<OrderCommitment> {
     let OrderResolution {
         origin_chain,
@@ -111,11 +134,6 @@ pub fn build_gasless_authorization(
         quote_budget_raw,
     )?;
 
-    // Client nonce: millis-since-epoch. Folded into `derive_order_id` purely
-    // to keep the derived id unique across a wallet's orders (millis gives
-    // 1000× collision headroom over a unix-seconds scheme).
-    let nonce = unix_millis()?;
-
     let order_id_bytes = derive_order_id(
         wallet_pubkey_bytes(wallet).as_slice(),
         nonce,
@@ -129,10 +147,9 @@ pub fn build_gasless_authorization(
     let order_id_hex = format!("0x{}", hex::encode(order_id_bytes));
 
     Ok(OrderCommitment {
-        authorization: OrderAuthorization {
-            order_id: order_id_hex,
-        },
+        order_id: order_id_hex,
         input_amount: amount_in,
+        nonce,
     })
 }
 
@@ -387,7 +404,19 @@ fn wallet_pubkey_bytes(wallet: &Wallet) -> Vec<u8> {
     }
 }
 
-fn unix_millis() -> Result<u64> {
+/// The SDK's choice of `Order.nonce`: millis since the Unix epoch.
+///
+/// Any `u64` is a legal nonce — it exists only to separate a wallet's
+/// otherwise identical orders, since the id is derived from the order's
+/// content plus the signer's address. Millis gives 1000x the collision
+/// headroom of a unix-seconds scheme; two orders that do land on the same
+/// millisecond with every other field equal derive the same id and the second
+/// is refused as a replay, which is the intended behaviour of a reused nonce,
+/// not a corruption.
+///
+/// Call it once per order and put the value in **both** `Order.nonce` and
+/// [`build_order_commitment`] — see `send_order::prepare_order`.
+pub fn client_nonce() -> Result<u64> {
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| eyre!("system clock before epoch: {e}"))?
@@ -678,8 +707,8 @@ pub(crate) mod tests {
 
     /// The budget is what the order id is hashed over, so two market bids
     /// that differ ONLY in budget must derive different ids. This is the
-    /// property the arborter will rely on when it starts deriving the id
-    /// server-side: same signed order in, same id out.
+    /// property the arborter relies on now that it derives the id itself:
+    /// same signed order in, same id out.
     #[test]
     fn market_bid_budget_reaches_the_order_id() {
         let (config, market) = config_with_market(BASE_DEC, QUOTE_DEC, PAIR_DEC);
@@ -697,5 +726,116 @@ pub(crate) mod tests {
             )
         };
         assert_ne!(id_for("7500000"), id_for("7500001"));
+    }
+
+    // ----- the nonce reaches the id ------------------------------------
+
+    /// Anvil key #0. Any fixed key does; the id just has to be stable across
+    /// the two calls being compared.
+    const TEST_EVM_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+    fn commit_with_nonce(nonce: u64) -> OrderCommitment {
+        let (config, market) = config_with_market(BASE_DEC, QUOTE_DEC, PAIR_DEC);
+        let wallet = Wallet::from_evm_hex(TEST_EVM_KEY).unwrap();
+        build_order_commitment(
+            &config,
+            &market,
+            1, // limit bid
+            &wallet,
+            "100000000",       // 1.0 base at pair 8
+            Some("200000000"), // price 2.0 at pair 8
+            None,
+            nonce,
+        )
+        .unwrap()
+    }
+
+    /// The nonce is an input to the id, so two orders identical in every
+    /// other respect must derive different ids. This is what makes
+    /// `Order.nonce` worth signing: the arborter reproduces the id from the
+    /// message, and a caller that changed nothing but the nonce still gets a
+    /// distinct order rather than a replay.
+    ///
+    /// Both nonces are non-zero and neither is the other's byte-reversal, so
+    /// a mutant that ignores the argument, or one that hashes a constant,
+    /// fails here instead of coinciding.
+    #[test]
+    fn the_nonce_changes_the_derived_order_id() {
+        let a = commit_with_nonce(1_700_000_000_001);
+        let b = commit_with_nonce(1_700_000_000_002);
+        assert_ne!(
+            a.order_id, b.order_id,
+            "the nonce must reach derive_order_id, or a wallet's repeat orders \
+             collide on one id"
+        );
+        // Everything else about the two orders is equal — so the id is the
+        // only thing the nonce moved.
+        assert_eq!(a.input_amount, b.input_amount);
+    }
+
+    /// The nonce comes back on the commitment so the caller can put the SAME
+    /// value in `Order.nonce`. If it were re-minted, or echoed as a default,
+    /// the client's id and the arborter's would differ with nothing on the
+    /// wire to show it.
+    #[test]
+    fn the_commitment_echoes_the_nonce_it_hashed() {
+        // Not 0 and not 1: a mutant returning either a default or a counter
+        // is visible.
+        let nonce = 1_700_000_000_042;
+        assert_eq!(commit_with_nonce(nonce).nonce, nonce);
+    }
+
+    // ----- the id's arithmetic is a cross-repo contract ----------------
+
+    /// A limit bid's budget is `quantity x price` normalised in ONE step,
+    /// from `2 x pair_decimals` straight to the quote token's decimals — and
+    /// the arborter deliberately implements that same single-floor
+    /// arithmetic. The value below is therefore a cross-repo pin, not an
+    /// internal detail: the id is hashed over it, and a client that computes a
+    /// different integer derives an id the venue never issues, which is
+    /// refused with nothing to diagnose it by.
+    ///
+    /// base 18 / quote 6 / pair 8 — three different scales, so a mutant that
+    /// normalises to the wrong one lands on a different integer.
+    #[test]
+    fn limit_bid_budget_is_quantity_times_price_in_quote_units() {
+        let (config, market) = config_with_market(BASE_DEC, QUOTE_DEC, PAIR_DEC);
+        // qty 1.0 (10^8 at pair 8) x price 2.0 (2*10^8 at pair 8) = 2*10^16
+        // at pair*2 = 16 decimals. One step to quote's 6: / 10^10 = 2_000_000.
+        let r = resolve_order(&config, &market, 1, "100000000", Some("200000000"), None).unwrap();
+        assert_eq!(
+            r.amount_in, 2_000_000,
+            "2.0 quote at 6 decimals, not 2.0 at pair or base decimals"
+        );
+        // Output leg: 1.0 base, pair 8 -> base 18.
+        assert_eq!(r.amount_out, 1_000_000_000_000_000_000);
+    }
+
+    /// **Do not make this floor twice.** Chained division alone cannot tell
+    /// the two apart — `floor(floor(x/a)/b) == floor(x/(a*b))` for positive
+    /// integers — which is why every market this venue runs (quote decimals
+    /// <= pair decimals) sees one answer and the question looks academic. It
+    /// stops being academic the moment the second step is a MULTIPLY, i.e.
+    /// when quote decimals EXCEED pair decimals: flooring first throws away
+    /// digits the multiply then re-pads with zeros.
+    ///
+    /// The fixture below is that market (quote 8, pair 6), and the number it
+    /// pins is what the SDK and the arborter both produce today. A two-floor
+    /// "fix" — defensible in isolation, since the reservation sizing does
+    /// floor twice — would return 123_456_800 here and break every order on
+    /// such a market silently: same signed bytes, two different ids. Changing
+    /// the recipe requires both repos to move together.
+    #[test]
+    fn limit_bid_budget_floors_once_where_that_is_observable() {
+        // base 18 / quote 8 / pair 6 — quote > pair, the divergent shape.
+        let (config, market) = config_with_market(18, 8, 6);
+        // qty 1.234567, price 1.000001 (both at pair 6).
+        // product = 1_234_568_234_567 at pair*2 = 12 decimals.
+        let r = resolve_order(&config, &market, 1, "1234567", Some("1000001"), None).unwrap();
+        assert_eq!(
+            r.amount_in, 123_456_823,
+            "one floor, 12 -> 8 decimals. Two floors (12 -> 6 -> 8) would give \
+             123_456_800 — a different order id for the same signed order"
+        );
     }
 }

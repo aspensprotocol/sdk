@@ -93,39 +93,23 @@ pub struct SendOrderRequest {
     /// The order to send
     #[prost(message, optional, tag = "1")]
     pub order: ::core::option::Option<Order>,
-    /// Valid EIP-712 signature hash of this order
+    /// Valid signature over the encoded `Order` (EIP-191 on EVM, Ed25519 on
+    /// Solana). This is the ONLY thing that authenticates order entry, and it now
+    /// covers every input the arborter needs — which is what let the sibling
+    /// `OrderAuthorization` message go away entirely.
+    ///
+    /// NOTE: `authorization` (field 3) and its `OrderAuthorization` message were
+    /// removed. It ended up holding exactly two things, and both were wrong to
+    /// accept from a caller: `amount_in`, which set an encumbrance while sitting
+    /// OUTSIDE the signature, and `order_id`, which the arborter used verbatim.
+    ///
+    /// Both are now derived server-side from the signed `Order` — the budget from
+    /// `(side, quantity, price, quote_budget)`, the id from those plus the signer's
+    /// own address and `nonce`. A caller can still compute its own id with the same
+    /// recipe (every input is in the message it signed), and learns the short form
+    /// from `SendOrderResponse.order_id`; it simply cannot choose one any more.
     #[prost(bytes = "vec", tag = "2")]
     pub signature_hash: ::prost::alloc::vec::Vec<u8>,
-    /// Order authorization carrying the SDK-derived canonical order id. Required.
-    /// For message-typed fields proto3 tracks
-    /// presence by default, so the generated Rust API is
-    /// `Option<OrderAuthorization>`; the arborter handler enforces presence at
-    /// the request boundary.
-    #[prost(message, optional, tag = "3")]
-    pub authorization: ::core::option::Option<OrderAuthorization>,
-}
-/// SDK-derived order authorization. Under the optimistic shadow ledger, order
-/// entry never touches the chain — the arborter authenticates the order via the
-/// outer envelope signature (`SendOrderRequest.signature_hash`) and consumes
-/// only the single field below. The legacy gasless on-chain-lock fields
-/// (user_signature / deadline / nonce / open_deadline / amount_out) were removed
-/// with the on-chain order machinery; the message and its `SendOrderRequest`
-/// field were renamed from `GaslessAuthorization` / `gasless` to match.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct OrderAuthorization {
-    /// The canonical on-chain order id (32-byte hex, 0x-prefixed), derived by the
-    /// SDK (`aspens::orders::derive_order_id`). The arborter uses it verbatim as
-    /// the order's id throughout match / settle, so it MUST match the SDK's
-    /// derivation exactly.
-    ///
-    /// NOTE: `amount_in` (field 2) was removed. It declared the collateral the
-    /// caller committed, but it lived HERE — in a sibling of `Order` — so
-    /// `signature_hash` never covered it, and the arborter now derives the
-    /// requirement from the signed order itself and reserves that. The one figure
-    /// that genuinely cannot be derived, a market BID's budget, moved INTO `Order`
-    /// as `quote_budget` so that it is signed. Field 2 is free for reuse.
-    #[prost(string, tag = "1")]
-    pub order_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Order {
@@ -200,6 +184,23 @@ pub struct Order {
     /// `OrderAuthorization.amount_in` was unsigned.
     #[prost(string, optional, tag = "11")]
     pub quote_budget: ::core::option::Option<::prost::alloc::string::String>,
+    /// Caller-chosen nonce, folded into the order id so one wallet's otherwise
+    /// identical orders get distinct ids. Millis-since-epoch is the SDK's choice;
+    /// any value works, and the caller may reuse one deliberately — a repeat
+    /// derives the same id and is refused as a replay.
+    ///
+    /// It lives HERE, inside the signed `Order`, and that is the whole point. The
+    /// arborter derives the canonical order id itself from this message and stops
+    /// trusting a caller-supplied one, which is only possible if every input to
+    /// the derivation is signed. While the nonce sat outside, the id depended on a
+    /// value the server never saw and the signature never covered.
+    ///
+    /// What that buys, beyond tidiness: the derivation hashes the caller's own
+    /// address, so an order signed by an attacker cannot derive to a victim's id.
+    /// Pre-claiming someone else's id — refusing their order by reserving its id
+    /// first — stops being expressible rather than being defended against.
+    #[prost(uint64, tag = "12")]
+    pub nonce: u64,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Trade {

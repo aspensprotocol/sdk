@@ -182,6 +182,11 @@ enum Commands {
     // Market Commands
     // ========================================================================
     /// Set a market
+    ///
+    /// Register both tokens with `set-token` FIRST. The market no longer
+    /// carries token decimals — the arborter reads them from the `tokens`
+    /// table — and it matches the addresses below against that table
+    /// byte-for-byte, case included, rejecting the market when they differ.
     SetMarket {
         /// Base chain network (e.g., "base-sepolia")
         #[arg(long)]
@@ -199,23 +204,15 @@ enum Commands {
         #[arg(long)]
         quote_symbol: String,
 
-        /// Base token address
+        /// Base token address — must match the `set-token` row exactly, case included
         #[arg(long)]
         base_address: String,
 
-        /// Quote token address
+        /// Quote token address — must match the `set-token` row exactly, case included
         #[arg(long)]
         quote_address: String,
 
-        /// Base token decimals
-        #[arg(long)]
-        base_decimals: i32,
-
-        /// Quote token decimals
-        #[arg(long)]
-        quote_decimals: i32,
-
-        /// Pair decimals for trading
+        /// Pair decimals for trading (the market's own scale, not a token's)
         #[arg(long)]
         pair_decimals: i32,
     },
@@ -632,8 +629,6 @@ async fn run() -> Result<()> {
             quote_symbol,
             base_address,
             quote_address,
-            base_decimals,
-            quote_decimals,
             pair_decimals,
         } => {
             let jwt = get_jwt()?;
@@ -650,8 +645,6 @@ async fn run() -> Result<()> {
                 quote_chain_token_symbol: quote_symbol.clone(),
                 base_chain_token_address: base_address,
                 quote_chain_token_address: quote_address,
-                base_chain_token_decimals: base_decimals,
-                quote_chain_token_decimals: quote_decimals,
                 pair_decimals,
             };
 
@@ -667,8 +660,10 @@ async fn run() -> Result<()> {
                     "Failed to set market '{}'\n\n\
                      Hints:\n\
                      - Verify both chains '{}' and '{}' exist\n\
-                     - Check that tokens '{}' and '{}' are configured on their respective chains\n\
-                     - Ensure token addresses and decimals are correct",
+                     - Check that tokens '{}' and '{}' are configured on their respective chains \
+                       (run `set-token` first — the market takes its decimals from there)\n\
+                     - Check each address matches its `set-token` row EXACTLY, case included: \
+                       a checksummed and a lowercase spelling are different strings here",
                     market_name,
                     base_network,
                     quote_network,

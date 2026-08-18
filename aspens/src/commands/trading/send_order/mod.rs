@@ -24,18 +24,20 @@ use crate::evm::rpc::MidribV3;
 use crate::grpc::create_channel;
 
 /// The two things the send path derives from one set of inputs: the `Order`
-/// that gets signed, and the authorization derived over the same budget.
+/// that gets signed, and the caller's own copy of the id derived over it.
 ///
 /// They are built together, in [`prepare_order`], because they must agree.
-/// The budget the id is hashed over and the budget the arborter reserves come
-/// from the same resolution of the same numbers — build them apart and the
-/// only symptom of a mismatch is an order the venue reads differently from
-/// the one the user believed they signed.
+/// The commitment is no longer transmitted — the arborter derives the id and
+/// the budget from the signed `Order` — so agreement is not a courtesy any
+/// more: `order.nonce` is an input to the recipe, and a `PreparedOrder` whose
+/// two halves disagree about it is one where the caller tracks an id the venue
+/// never issues, with nothing on the wire to reveal the split.
 #[cfg_attr(test, derive(Debug))]
 pub(crate) struct PreparedOrder {
     /// Exactly the bytes the envelope signature is taken over, once encoded.
     pub order: Order,
-    /// `order_id` for the request, plus the budget it was derived over.
+    /// The locally derived `order_id`, the budget it was derived over, and the
+    /// nonce — which is `order.nonce` above, by construction.
     pub commitment: crate::commands::trading::gasless::OrderCommitment,
 }
 
@@ -55,10 +57,16 @@ pub(crate) fn prepare_order(
     hidden: bool,
     quote_budget_raw: Option<String>,
 ) -> Result<PreparedOrder> {
+    // ONE nonce, bound to two uses: hashed into the order id below, and signed
+    // as `Order.nonce` further down. The arborter re-derives the id from the
+    // order it verified, so these must be the same `u64` — mint it twice and
+    // the two ids differ with nothing on the wire to say so.
+    let nonce = super::gasless::client_nonce()?;
+
     // The budget the arborter will reserve, and the id derived over it. This
     // is also where a budget on the wrong cell (or a missing one on a market
     // bid) is refused, before anything is signed.
-    let commitment = super::gasless::build_gasless_authorization(
+    let commitment = super::gasless::build_order_commitment(
         config,
         market,
         side,
@@ -66,6 +74,7 @@ pub(crate) fn prepare_order(
         &quantity_raw,
         price_raw.as_deref(),
         quote_budget_raw.as_deref(),
+        nonce,
     )?;
 
     // The order carries the original pair-decimal values.
@@ -91,6 +100,10 @@ pub(crate) fn prepare_order(
         post_only,
         hidden,
         quote_budget: quote_budget_raw,
+        // The same `u64` the id was hashed over, three lines up. It is signed
+        // here so the arborter can reproduce that hash from the message it
+        // verified — which is the whole reason a caller no longer sends an id.
+        nonce,
     };
 
     Ok(PreparedOrder { order, commitment })
@@ -101,7 +114,6 @@ async fn call_send_order(
     url: String,
     order_for_sending: Order,
     wallet: &Wallet,
-    authorization: Option<arborter_pb::OrderAuthorization>,
 ) -> Result<SendOrderResponse> {
     // Create a channel to connect to the gRPC server (with TLS support for HTTPS)
     let channel = create_channel(&url).await?;
@@ -116,11 +128,14 @@ async fn call_send_order(
     // length with no truncation.
     let signature_bytes = super::sign_encoded(&order_for_sending, wallet).await?;
 
-    // Create the request with the original order and signature
+    // Create the request with the original order and signature. That pair is
+    // the whole request now: `authorization` (and its `OrderAuthorization`
+    // message) is gone, because both fields it carried — the budget and the
+    // order id — sat outside the signature and are now derived by the arborter
+    // from the order below.
     let request = SendOrderRequest {
         order: Some(order_for_sending),
         signature_hash: signature_bytes,
-        authorization,
     };
 
     // Create a tonic request
@@ -517,13 +532,13 @@ pub async fn send_order_with_wallets(
         signing_wallet.curve()
     );
 
-    // Build what gets signed and the authorization that accompanies it. Under
-    // the optimistic ledger the arborter authenticates via the outer envelope
-    // signature and reads only `order_id` from the authorization — there is no
-    // per-order on-chain lock signature, and no declared amount either
-    // (`OrderAuthorization.amount_in` was deleted: it sat outside the signed
-    // `Order`, so nothing bound the caller to it). The budget it commits is
-    // signed, inside the order.
+    // Build what gets signed, plus the caller's own copy of the derived id.
+    // Under the optimistic ledger the arborter authenticates via the outer
+    // envelope signature alone — there is no per-order on-chain lock
+    // signature, and nothing accompanies the order on the wire. Both numbers
+    // that used to ride alongside it, the declared amount and the order id,
+    // are derived by the arborter from the signed `Order`; the commitment
+    // below is kept locally, for tracking.
     let prepared = prepare_order(
         &config,
         market,
@@ -538,13 +553,19 @@ pub async fn send_order_with_wallets(
         quote_budget_raw,
     )?;
 
-    let result = call_send_order(
-        url,
-        prepared.order,
-        signing_wallet,
-        Some(prepared.commitment.authorization),
-    )
-    .await;
+    // The canonical id is not sent, and the response carries only the
+    // arborter's short u64 handle — so this log line is the caller's one link
+    // between the two. The arborter derives the same 32 bytes from the order
+    // signed below, and that is the id the ledger and `settleBatch` agree a
+    // fill belongs to.
+    tracing::info!(
+        "Derived order id {} (nonce {}, budget {} in the token it gives)",
+        prepared.commitment.order_id,
+        prepared.commitment.nonce,
+        prepared.commitment.input_amount,
+    );
+
+    let result = call_send_order(url, prepared.order, signing_wallet).await;
 
     // Enhance balance errors with actual balance info (EVM only — Solana balance
     // queries via Alloy don't apply). Use the EVM-side wallet's address since
@@ -742,6 +763,7 @@ mod tests {
             post_only: false,
             hidden: false,
             quote_budget: None,
+            nonce: 0,
         };
 
         let response = SendOrderResponse {
@@ -920,6 +942,56 @@ mod tests {
         assert_eq!(p.commitment.input_amount, 2_000_000);
     }
 
+    /// The nonce has to land in the same two places, and this is the one
+    /// function that puts it there. The arborter re-derives the id from the
+    /// signed `Order`, so `order.nonce` and the nonce the commitment hashed
+    /// must be one value: mint it twice and the client tracks an id the venue
+    /// never issued, on an order the venue accepts without complaint.
+    #[test]
+    fn prepare_binds_one_nonce_to_the_order_and_the_id() {
+        let p = prepared(1, Some("200000000"), None).expect("limit bid");
+        assert_eq!(
+            p.order.nonce, p.commitment.nonce,
+            "the signed nonce and the hashed nonce must be the same u64"
+        );
+        // A real nonce, not a default left over from the proto — the SDK's is
+        // millis since epoch, so anything plausible is far past this.
+        assert!(
+            p.order.nonce > 1_600_000_000_000,
+            "expected millis-since-epoch, got {}",
+            p.order.nonce
+        );
+        // And it survives encoding — this is what actually gets signed, and
+        // what the arborter reads the nonce back off.
+        let mut buf = Vec::new();
+        prost::Message::encode(&p.order, &mut buf).unwrap();
+        let decoded = <Order as prost::Message>::decode(&*buf).unwrap();
+        assert_eq!(decoded.nonce, p.commitment.nonce);
+    }
+
+    /// Two calls must not share a nonce, or a wallet's repeated orders
+    /// collide on one derived id and the second is refused as a replay. The
+    /// millisecond clock is what separates them, so this also fails if the
+    /// nonce is ever hardcoded.
+    #[test]
+    fn prepare_does_not_reuse_a_nonce_across_orders() {
+        let first = prepared(1, Some("200000000"), None).expect("limit bid");
+        // The clock has millisecond resolution; spin until it ticks rather
+        // than sleeping, so the test neither flakes nor stalls.
+        let start = std::time::Instant::now();
+        let second = loop {
+            let p = prepared(1, Some("200000000"), None).expect("limit bid");
+            if p.order.nonce != first.order.nonce {
+                break p;
+            }
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(2),
+                "nonce never advanced in 2s — it is not reading the clock"
+            );
+        };
+        assert_ne!(first.commitment.order_id, second.commitment.order_id);
+    }
+
     /// The refusals are enforced on the path that actually signs, not only in
     /// the resolver: a budget on a limit order, and a market bid with none.
     #[test]
@@ -973,6 +1045,7 @@ mod order_flag_wire_pinning_tests {
             post_only: false,
             hidden: false,
             quote_budget: None,
+            nonce: 0,
         }
     }
 
@@ -1015,5 +1088,70 @@ mod order_flag_wire_pinning_tests {
     #[test]
     fn hidden_wire_pinned() {
         assert_bool_flag_wire_pinned(10, |o, v| o.hidden = v);
+    }
+
+    /// `Order.nonce` (field 12), the same two invariants as the bool flags —
+    /// but it matters more here, because two transports disagree about it.
+    ///
+    ///   1. **nonce = 0 is wire-skipped.** The FCE direct-action wire has no
+    ///      nonce field, so the adapter rebuilds `Order` with the default and
+    ///      the arborter verifies THOSE bytes. `fce_actions::FCE_ORDER_NONCE`
+    ///      is zero for exactly this reason, and it only works while a zero
+    ///      nonce encodes to nothing.
+    ///   2. **a non-zero nonce reaches the wire.** The arborter re-derives the
+    ///      order id from this field; drop it on encode and the client's id and
+    ///      the venue's diverge with no error anywhere.
+    #[test]
+    fn nonce_wire_pinned() {
+        let plain = sample_order(); // nonce = 0
+        assert_eq!(plain.nonce, 0, "fixture must start from the default");
+        let mut nonced = sample_order();
+        // 300 needs a two-byte varint (0xac 0x02), so a truncating or
+        // single-byte encode fails here rather than passing on a small value.
+        nonced.nonce = 300;
+
+        let mut buf_plain = Vec::new();
+        plain.encode(&mut buf_plain).unwrap();
+        let mut buf_nonced = Vec::new();
+        nonced.encode(&mut buf_nonced).unwrap();
+
+        // Field 12, varint wire type 0 → tag byte 12 << 3 = 0x60.
+        let mut expected = buf_plain.clone();
+        expected.extend_from_slice(&[0x60, 0xac, 0x02]);
+        assert_eq!(
+            buf_nonced, expected,
+            "nonce=300 must encode as the plain bytes + appended [0x60, 0xac, 0x02]"
+        );
+
+        assert_eq!(Order::decode(&*buf_plain).unwrap(), plain);
+        assert_eq!(Order::decode(&*buf_nonced).unwrap(), nonced);
+    }
+
+    /// The concrete claim `FCE_ORDER_NONCE` rests on: an order carrying the
+    /// FCE nonce encodes to the same bytes as one built without the field at
+    /// all — which is what the adapter, whose vendored `Order` has no nonce,
+    /// hands the arborter to verify.
+    #[test]
+    #[cfg(feature = "fce")]
+    fn fce_nonce_encodes_to_the_adapters_rebuild() {
+        use crate::commands::trading::fce_actions::FCE_ORDER_NONCE;
+
+        let mut signed_here = sample_order();
+        signed_here.nonce = FCE_ORDER_NONCE;
+        // The adapter's vendored `Order` has no nonce field, so whatever it
+        // builds leaves this at the proto default — pin that, don't inherit it
+        // from the fixture.
+        let mut rebuilt_there = sample_order();
+        rebuilt_there.nonce = 0;
+
+        let mut a = Vec::new();
+        signed_here.encode(&mut a).unwrap();
+        let mut b = Vec::new();
+        rebuilt_there.encode(&mut b).unwrap();
+        assert_eq!(
+            a, b,
+            "FCE_ORDER_NONCE must be the value that vanishes on encode, or every \
+             order sent over FCE fails the arborter's signature check"
+        );
     }
 }
