@@ -1136,7 +1136,7 @@ async fn run() -> Result<()> {
                 });
 
                 let mut table = Table::new();
-                table.load_preset(UTF8_BORDERS_ONLY);
+                table.load_style(UTF8_BORDERS_ONLY);
                 table.set_header(vec![
                     "Address",
                     "Role",
@@ -1160,7 +1160,7 @@ async fn run() -> Result<()> {
                     header.push(sym.clone());
                 }
                 let mut table = Table::new();
-                table.load_preset(UTF8_BORDERS_ONLY);
+                table.load_style(UTF8_BORDERS_ONLY);
                 table.set_header(&header);
 
                 println!("── {} (chain_id: {}) ──", chain.network, chain.chain_id);
