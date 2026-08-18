@@ -1,13 +1,7 @@
-/// Generated protobuf bindings for the `arborter.v1` trading service.
-#[allow(missing_docs)]
-pub mod arborter_pb {
-    include!("../../../proto/generated/xyz.aspens.arborter.v1.rs");
-}
-
 use std::fmt;
 
-use arborter_pb::arborter_service_client::ArborterServiceClient;
-use arborter_pb::{CancelOrderRequest, CancelOrderResponse, OrderToCancel, Side};
+use super::arborter_pb::arborter_service_client::ArborterServiceClient;
+use super::arborter_pb::{CancelOrderRequest, CancelOrderResponse, OrderToCancel, Side};
 use eyre::Result;
 use prost::Message;
 

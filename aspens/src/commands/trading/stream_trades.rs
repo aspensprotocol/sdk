@@ -1,17 +1,12 @@
-/// Generated protobuf bindings for the `arborter.v1` trading service.
-#[allow(missing_docs)]
-pub mod arborter_pb {
-    include!("../../../proto/generated/xyz.aspens.arborter.v1.rs");
-}
-
 use std::fmt;
 
-use arborter_pb::arborter_service_client::ArborterServiceClient;
-use arborter_pb::{Trade, TradeRequest, TradeRole};
+use super::arborter_pb::arborter_service_client::ArborterServiceClient;
+use super::arborter_pb::{Trade, TradeRequest, TradeRole};
 use eyre::Result;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
+use super::{format_timestamp, truncate_address};
 use crate::grpc::create_channel;
 
 impl fmt::Display for Trade {
@@ -158,54 +153,9 @@ pub fn format_trade(trade: &Trade) -> String {
     )
 }
 
-/// Format a timestamp for display
-fn format_timestamp(timestamp: u64) -> String {
-    use std::time::{Duration, UNIX_EPOCH};
-
-    let duration = Duration::from_millis(timestamp);
-    let datetime = UNIX_EPOCH + duration;
-
-    // Try to format as human-readable, fallback to raw timestamp
-    match datetime.duration_since(UNIX_EPOCH) {
-        Ok(d) => {
-            let secs = d.as_secs();
-            let hours = (secs / 3600) % 24;
-            let minutes = (secs / 60) % 60;
-            let seconds = secs % 60;
-            format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
-        }
-        Err(_) => format!("{}", timestamp),
-    }
-}
-
-/// Truncate an address for display
-fn truncate_address(address: &str) -> String {
-    if address.len() > 12 {
-        format!("{}...{}", &address[..6], &address[address.len() - 4..])
-    } else {
-        address.to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_truncate_address() {
-        assert_eq!(
-            truncate_address("0x1234567890abcdef1234567890abcdef12345678"),
-            "0x1234...5678"
-        );
-        assert_eq!(truncate_address("short"), "short");
-    }
-
-    #[test]
-    fn test_format_timestamp() {
-        // Test that it doesn't panic
-        let _ = format_timestamp(0);
-        let _ = format_timestamp(1000000000000);
-    }
 
     #[test]
     fn test_stream_trades_options_default() {

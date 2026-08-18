@@ -132,7 +132,7 @@ cargo add aspens
 Or add it manually to your `Cargo.toml`:
 ```toml
 [dependencies]
-aspens = "0.6"
+aspens = "0.7"
 ```
 
 Full client (gRPC + trading commands + RPC submission):
@@ -158,7 +158,7 @@ cargo add aspens --no-default-features --features evm,solana
 ```
 ```toml
 [dependencies]
-aspens = { version = "0.6", default-features = false, features = ["evm", "solana"] }
+aspens = { version = "0.7", default-features = false, features = ["evm", "solana"] }
 ```
 ```rust
 use aspens::orders::{derive_order_id, GaslessLockParams};
@@ -276,10 +276,10 @@ default-on. Consumers can trim down to just what they need:
 | `client` | Full runtime: `AspensClient`, trading commands, gRPC (`tonic`/`prost`), async runtime (`tokio`), RPC submission (`solana-client`, `alloy-contract`, `alloy-provider`). | Keep for the CLI/REPL/admin experience or anything that talks to the Aspens stack. Drop it for browser / embedded / offline-signing. |
 
 Common configurations:
-- **Default** (everything): `aspens = "0.6"`
-- **Lean EVM signing**: `aspens = { version = "0.6", default-features = false, features = ["evm"] }`
-- **Lean Solana signing**: `aspens = { version = "0.6", default-features = false, features = ["solana"] }`
-- **Both chains, no client runtime**: `aspens = { version = "0.6", default-features = false, features = ["evm", "solana"] }`
+- **Default** (everything): `aspens = "0.7"`
+- **Lean EVM signing**: `aspens = { version = "0.7", default-features = false, features = ["evm"] }`
+- **Lean Solana signing**: `aspens = { version = "0.7", default-features = false, features = ["solana"] }`
+- **Both chains, no client runtime**: `aspens = { version = "0.7", default-features = false, features = ["evm", "solana"] }`
 
 The `aspens-cli`, `aspens-repl`, and `aspens-admin` binaries all depend
 on the default feature set.
@@ -401,9 +401,13 @@ workspace is pre-1.0, so the conventions in effect today are:
   Notable changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
 - **Internal modules** — `aspens::grpc` (and any module marked
   `#[doc(hidden)]` or `pub(crate)`) are implementation details and may
-  change in any release. Generated proto bindings under
-  `aspens::proto::*` and `aspens::attestation::*` track the upstream
-  `protos/` repo and follow its compatibility, not the SDK's.
+  change in any release. Generated proto bindings — `aspens::attestation::*`
+  and the `*_pb` modules beside each command group
+  (`commands::config::config_pb`, `commands::trading::arborter_pb`,
+  `commands::auth::auth_pb`) — track the upstream `protos/` repo and follow
+  its compatibility, not the SDK's. Each generated file is compiled exactly
+  once; a second `include!` of one would mint a parallel, incompatible set of
+  types rather than an alias.
 - **CLI / REPL / Admin binaries** — version-bumped together with the
   library. Flag and command renames are called out in `CHANGELOG.md`.
 

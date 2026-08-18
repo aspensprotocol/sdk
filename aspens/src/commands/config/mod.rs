@@ -365,65 +365,6 @@ pub fn format_attestation_report(report: &AttestationReport) -> String {
     output
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    #[ignore = "requires example config files"]
-    fn test_json_config_parsing() {
-        let config = GetConfigResponse::from_file("../example/config.json").unwrap();
-        verify_config(&config);
-    }
-
-    #[test]
-    #[ignore = "requires example config files"]
-    fn test_toml_config_parsing() {
-        let config = GetConfigResponse::from_file("../example/config.toml").unwrap();
-        verify_config(&config);
-    }
-
-    #[tokio::test]
-    #[ignore = "requires example config files and running server"]
-    async fn test_download_config_to_file() -> Result<()> {
-        let config = GetConfigResponse::from_file("../example/config.toml").unwrap();
-
-        let anvil1 = config.get_chain("anvil-1").unwrap();
-        let temp_dir = tempdir()?;
-        let config_path = temp_dir.path().join("config.json");
-
-        download_config_to_file(anvil1.rpc_url.clone(), &config_path).await?;
-
-        // Verify file exists and contains valid JSON
-        let contents = fs::read_to_string(&config_path)?;
-        let _: GetConfigResponse = serde_json::from_str(&contents)?;
-
-        Ok(())
-    }
-
-    fn verify_config(config: &GetConfigResponse) {
-        // Test chain retrieval
-        let anvil1 = config.get_chain("anvil-1").unwrap();
-        assert_eq!(anvil1.chain_id, 84531);
-        assert_eq!(anvil1.rpc_url, "http://localhost:8545");
-
-        // Test token retrieval
-        let usdc = config.get_token("anvil-1", "USDC").unwrap();
-        assert_eq!(usdc.symbol, "USDC");
-        assert_eq!(usdc.name, "USD Coin");
-        assert_eq!(usdc.decimals, 6);
-
-        // Test market retrieval
-        let market = config.get_market("A1USDC-A2USDT").unwrap();
-        assert_eq!(market.base_chain_network, "anvil-1");
-        assert_eq!(market.base_chain_token_symbol, "USDC");
-        assert_eq!(market.quote_chain_network, "anvil-2");
-        assert_eq!(market.quote_chain_token_symbol, "USDT");
-
-        // Test market lookup by tokens
-        let market = config.get_market_by_tokens("anvil-1", "USDC", "anvil-2", "USDT");
-        assert!(market.is_some());
-        assert_eq!(market.unwrap().name, "Anvil-1 USDC - Anvil-2 USDT");
-    }
-}
+// No unit tests here: the three that existed were `#[ignore]`d against
+// `../example/config.{json,toml}`, fixtures deleted from the repo in
+// 718534e (2025-05-30), so they could not run even with `--ignored`.

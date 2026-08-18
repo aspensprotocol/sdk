@@ -1,19 +1,13 @@
-/// Generated protobuf bindings for the `arborter.v1` trading service.
-#[allow(missing_docs)]
-pub mod arborter_pb {
-    include!("../../../../proto/generated/xyz.aspens.arborter.v1.rs");
-}
-
 // `Display` impls + the inherent CLI-formatting helpers on the proto
 // types live next door in `display.rs` so this file can focus on the
 // call / signing logic.
 mod display;
 
+use super::arborter_pb;
 use crate::chain_client::named_chain_for;
 use crate::wallet::Wallet;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{Provider, ProviderBuilder};
-use alloy::signers::local::PrivateKeySigner;
 use arborter_pb::arborter_service_client::ArborterServiceClient;
 use arborter_pb::{Order, SendOrderRequest, SendOrderResponse};
 use eyre::Result;
@@ -334,14 +328,6 @@ pub fn parse_side(s: &str) -> Result<arborter_pb::Side> {
     }
 }
 
-/// Derive the account address from a private key
-pub fn derive_address(privkey: &str) -> Result<(Address, String)> {
-    let signer = privkey.parse::<PrivateKeySigner>()?;
-    let address = signer.address();
-    let checksum = address.to_checksum(None);
-    Ok((address, checksum))
-}
-
 /// Send an order using a curve-agnostic wallet.
 ///
 /// Thin wrapper over [`send_order_with_wallets`] for the common case where
@@ -643,20 +629,36 @@ async fn enhance_balance_error(
 
     let deposited_formatted = format_balance_for_display(deposited_balance, token_decimals);
 
+    // The figure has to end up in the TOKEN's native decimals, because that is
+    // what `deposited_balance` is in and what `format_balance_for_display` is
+    // told below. Both sides used to skip that conversion and hand a
+    // PAIR-decimal number straight to a native-decimal comparison: on any market
+    // where the two differ (the WFLR/USDC shape the rest of this file guards
+    // against) the check and the printed "Required:" were wrong by orders of
+    // magnitude, so this could invent an "insufficient balance" that was not, or
+    // hide one that was. It decorates an error and cannot place a bad order —
+    // but a wrong number in an error message is how someone diagnoses the wrong
+    // thing for an afternoon.
+    //
+    // `normalize` is the same conversion the signing path uses, so this figure
+    // and the one actually committed agree by construction rather than by two
+    // implementations happening to match. The multiply is checked: `qty * prc`
+    // was unchecked, which panics in debug and wraps in release — inside an
+    // error handler, which is the worst place to find out.
     let required_amount = if side == 1 {
-        // BUY: need quantity * price
-        if let Some(p) = price_raw {
-            let qty: u128 = quantity_raw.parse().unwrap_or(0);
-            let prc: u128 = p.parse().unwrap_or(0);
-            let pair_dec_factor = 10_u128.pow(pair_decimals);
-            Some(U256::from(qty * prc / pair_dec_factor))
-        } else {
-            None
-        }
+        // BUY: gives quote, needs quantity x price.
+        let p = price_raw?;
+        let qty: u128 = quantity_raw.parse().ok()?;
+        let prc: u128 = p.parse().ok()?;
+        let in_pair2 = qty.checked_mul(prc)?;
+        let in_token =
+            super::gasless::normalize(in_pair2, pair_decimals * 2, token_decimals).ok()?;
+        Some(U256::from(in_token))
     } else {
-        // SELL: need quantity
-        let qty: u128 = quantity_raw.parse().unwrap_or(0);
-        Some(U256::from(qty))
+        // SELL: gives base, needs quantity.
+        let qty: u128 = quantity_raw.parse().ok()?;
+        let in_token = super::gasless::normalize(qty, pair_decimals, token_decimals).ok()?;
+        Some(U256::from(in_token))
     };
 
     // Only enhance if we can confirm the balance is actually insufficient

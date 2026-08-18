@@ -2,8 +2,14 @@
 //!
 //! This crate provides the core building blocks for interacting with the
 //! Aspens Market Stack: a chain-agnostic [`Wallet`] abstraction, a
-//! [`ChainClient`] RPC dispatcher (EVM via Alloy, Solana via
-//! `solana-client`), the [`AspensClient`] gRPC entry point, and the
+//  NOTE: `ChainClient` / `AspensClient` appear below as code spans, not
+//  intra-doc links. Both are behind `feature = "client"`, and these are the
+//  CRATE-level docs, which are compiled under every feature combination —
+//  including the lean `--no-default-features --features evm,solana` build this
+//  very section describes. A link here is a hard error under `-D warnings`
+//  exactly when someone documents the lean build.
+//! `ChainClient` RPC dispatcher (EVM via Alloy, Solana via
+//! `solana-client`), the `AspensClient` gRPC entry point, and the
 //! signing helpers in [`evm`], [`solana`], and [`orders`] that produce
 //! the exact bytes the arborter validates.
 //!
@@ -14,8 +20,8 @@
 //! - **`solana`** (default) — stateless Solana helpers in [`solana`]
 //!   (PDA derivations, instruction builders, borsh payload encoder).
 //!   Pulls `solana-sdk`, `bs58`, `ed25519-dalek`, and `borsh`.
-//! - **`client`** (default) — full gRPC + RPC runtime: [`AspensClient`],
-//!   the [`commands`] modules, [`chain_client`], the [`executor`]
+//! - **`client`** (default) — full gRPC + RPC runtime: `AspensClient`,
+//!   the `commands` modules, `chain_client`, the `executor`
 //!   abstraction, and Solana RPC submission. Pulls `tonic`, `prost`,
 //!   `tokio`, `solana-client`, and the proto-generated bindings.
 //!
@@ -72,21 +78,15 @@ pub mod attestation {
     }
 }
 
-/// Generated protobuf bindings for the arborter config and auth services.
-#[cfg(feature = "client")]
-pub mod proto {
-    /// Arborter config service protobuf bindings.
-    #[allow(missing_docs)]
-    pub mod config {
-        include!("../proto/generated/xyz.aspens.arborter_config.v1.rs");
-    }
-    /// Arborter auth service protobuf bindings (admin feature only).
-    #[cfg(feature = "admin")]
-    #[allow(missing_docs)]
-    pub mod auth {
-        include!("../proto/generated/xyz.aspens.arborter_auth.v1.rs");
-    }
-}
+// The `arborter_config.v1` and `arborter_auth.v1` bindings are NOT included
+// here. Each generated file is compiled exactly once, next to the command
+// module that wraps its service — `commands::config::config_pb` and
+// `commands::auth::auth_pb`. A second `include!` would not alias those types,
+// it would mint a parallel set that shares the wire format and nothing else,
+// so a `GetConfigResponse` from `AspensClient` would refuse to typecheck
+// against the one spelled here. `attestation::v1` above is the sole crate-root
+// binding, because `build.rs` rewrites the generated cross-package references
+// in `arborter_config.v1` to that absolute path.
 
 // Re-export commonly used types
 #[cfg(feature = "client")]

@@ -1,10 +1,8 @@
 use aspens::commands::config::config_pb::GetConfigResponse;
+use aspens::commands::trading::arborter_pb::{SendOrderResponse, Side};
 #[cfg(feature = "fce")]
 use aspens::commands::trading::fce_actions;
-use aspens::commands::trading::send_order::{
-    arborter_pb::{SendOrderResponse, Side},
-    origin_network_for_side, parse_side,
-};
+use aspens::commands::trading::send_order::{origin_network_for_side, parse_side};
 use aspens::commands::trading::{
     balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
 };

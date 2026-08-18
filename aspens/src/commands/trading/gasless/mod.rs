@@ -83,7 +83,15 @@ use crate::wallet::{CurveType, Wallet};
 /// signed `Order`. These are the caller's numbers, kept so it can recognise
 /// its own order and so the FCE direct-action JSON (which still declares
 /// `orderId` / `amountIn` for a not-yet-resynced adapter) has something to
-/// fill in. See [`crate::commands::trading::fce_actions`].
+/// fill in. See `commands::trading::fce_actions`.
+//
+// Deliberately a code span, not an intra-doc link: this module is always
+// compiled, `fce_actions` is behind `feature = "fce"`, and a link from
+// ungated docs into a gated item is a hard error under `-D warnings` whenever
+// that feature is off. CI only runs the doc job with `--all-features`, so the
+// link resolved there and broke for anyone running a plain `cargo doc` — a red
+// the pipeline could not see. `fce/payloads.rs`'s link to the same module is
+// fine because that file is itself `fce`-gated.
 #[derive(Debug, Clone)]
 pub struct OrderCommitment {
     /// The canonical 32-byte order id, `0x`-prefixed hex — the same value the
@@ -192,7 +200,7 @@ struct OrderResolution<'a> {
 /// Mirrors `arborter/app/chain-traits/src/convert_decimals.rs::normalize_decimals`
 /// so the SDK and arborter agree on the scale of every amount that flows
 /// through the EIP-712 / Ed25519 digest.
-fn normalize(amount: u128, from_decimals: u32, to_decimals: u32) -> Result<u128> {
+pub(crate) fn normalize(amount: u128, from_decimals: u32, to_decimals: u32) -> Result<u128> {
     use std::cmp::Ordering;
     match from_decimals.cmp(&to_decimals) {
         Ordering::Equal => Ok(amount),

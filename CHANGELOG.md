@@ -9,6 +9,8 @@ change before 1.0.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-08-18
+
 ### Added
 
 - **`Order.nonce` (proto field 12)** — caller-chosen, inside the signed order.
@@ -42,6 +44,26 @@ change before 1.0.
   signature. Consequence until the adapter carries a nonce: over FCE, two
   identical orders from one wallet derive the same id and the second is refused
   as a replay.
+- **BREAKING (source): the generated proto bindings are compiled once each, and
+  moved to a single home per service.** `xyz.aspens.arborter.v1.rs` was
+  `include!`d by five `trading/` modules and the other two files twice each; an
+  `include!` is a textual expansion, so those were parallel sets of types that
+  share a wire format and nothing else — the `Order` you signed in `send_order`
+  would not typecheck against the `Order` from `cancel_order`. The canonical
+  paths are now **`commands::trading::arborter_pb`** (was
+  `commands::trading::send_order::arborter_pb`, and four unreachable siblings),
+  `commands::config::config_pb`, and `commands::auth::auth_pb`;
+  `aspens::attestation::v1` is unchanged. No wire bytes, field numbers, or
+  encodings move — `tests/client_parity.rs` passes against the same vector.
+
+### Removed
+
+- **BREAKING (source): `aspens::proto`**, with its `config` and `auth`
+  submodules. They were duplicate compilations of the same two generated files
+  with zero callers, and their only observable effect was to put a second,
+  incompatible `GetConfigResponse` in the public API next to the one
+  `AspensClient` actually returns. Use `aspens::commands::config::config_pb`
+  and `aspens::commands::auth::auth_pb`.
 
 ## [0.6.2] — 2026-06-18
 
@@ -372,7 +394,8 @@ Pre-0.4.1 history is recorded in git only. The 0.4.x line introduced
 Solana support, the Wallet enum, and feature gates (`evm`, `solana`,
 `client`) for lean-signing consumers.
 
-[Unreleased]: https://github.com/aspensprotocol/sdk/compare/0.6.2...HEAD
+[Unreleased]: https://github.com/aspensprotocol/sdk/compare/0.7.0...HEAD
+[0.7.0]: https://github.com/aspensprotocol/sdk/compare/0.6.2...0.7.0
 [0.6.2]: https://github.com/aspensprotocol/sdk/compare/0.6.1...0.6.2
 [0.6.1]: https://github.com/aspensprotocol/sdk/compare/0.6.0...0.6.1
 [0.6.0]: https://github.com/aspensprotocol/sdk/compare/0.5.0...0.6.0

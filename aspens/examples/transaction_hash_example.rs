@@ -3,7 +3,7 @@
 // This example shows how transaction hashes are now included in the response
 // when sending orders through the CLI or REPL.
 
-use aspens::commands::trading::send_order::arborter_pb::{SendOrderResponse, TransactionHash};
+use aspens::commands::trading::arborter_pb::{SendOrderResponse, TransactionHash};
 
 fn main() {
     // Simulate a SendOrderResponse with transaction hashes
