@@ -79,14 +79,37 @@ pub async fn call_cancel_order_with_wallet(
     let request = tonic::Request::new(request);
 
     // Call the cancel_order endpoint
-    let response = client.cancel_order(request).await?;
-
-    // Get the response data
-    let response_data = response.into_inner();
+    let response_data = classify_cancel_result(client.cancel_order(request).await)?;
 
     tracing::info!("Cancel response received: {}", response_data);
 
     Ok(response_data)
+}
+
+/// Classify the outcome of a `cancel_order` RPC call.
+///
+/// Matching moved inside the arborter's single-writer actor: a cancel of an
+/// order no longer live in the book — replayed, or racing a fill that just
+/// landed — now answers gRPC `NOT_FOUND` instead of the old server's
+/// `order_canceled: true` on a replay. The order is gone and its collateral
+/// released either way, so this is an outcome to report, not a failure to
+/// propagate. `order_canceled: false` never occurs on the arborter's `Ok`
+/// path (it only ever replies `Ok` with `order_canceled: true`), so a
+/// caller can distinguish "already gone" from a real cancel by that field
+/// alone, with no string-matching required. Any other status is a genuine
+/// error and passes through unchanged.
+fn classify_cancel_result(
+    result: Result<tonic::Response<CancelOrderResponse>, tonic::Status>,
+) -> Result<CancelOrderResponse, tonic::Status> {
+    match result {
+        Ok(response) => Ok(response.into_inner()),
+        Err(status) if status.code() == tonic::Code::NotFound => Ok(CancelOrderResponse {
+            order_canceled: false,
+            transaction_hashes: Vec::new(),
+            current_orderbook: Vec::new(),
+        }),
+        Err(status) => Err(status),
+    }
 }
 
 /// Resolve the `(side, token_address)` pair a cancel must carry: a BID locked
@@ -279,5 +302,47 @@ mod resolve_side_and_token_tests {
         let err = resolve_side_and_token(&config, &market, "buy")
             .expect_err("a missing token must not resolve");
         assert!(err.to_string().contains("QUOTE"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod classify_cancel_result_tests {
+    use super::*;
+
+    /// Matching moved inside the arborter's single-writer actor: a cancel of
+    /// an order no longer live in the book — replayed, or racing a fill that
+    /// just landed — now answers gRPC NOT_FOUND. That's an outcome, not a
+    /// failure: the order is gone and its collateral released either way.
+    #[test]
+    fn a_not_found_cancel_reports_already_gone_not_failure() {
+        let result = classify_cancel_result(Err(tonic::Status::not_found("order not found")));
+        let response =
+            result.expect("NOT_FOUND must classify as an outcome, not a propagated error");
+        assert!(
+            !response.order_canceled,
+            "already-gone must not read as a successful cancel"
+        );
+        assert!(response.transaction_hashes.is_empty());
+    }
+
+    /// Control: a different status code must still be a real error — the
+    /// classification must not swallow failures generally.
+    #[test]
+    fn a_different_status_code_is_still_an_error() {
+        let result = classify_cancel_result(Err(tonic::Status::internal("boom")));
+        let status = result.expect_err("an internal error must not classify as success");
+        assert_eq!(status.code(), tonic::Code::Internal);
+    }
+
+    /// The success path passes the response through unchanged.
+    #[test]
+    fn a_successful_cancel_passes_through_unchanged() {
+        let response = CancelOrderResponse {
+            order_canceled: true,
+            transaction_hashes: Vec::new(),
+            current_orderbook: Vec::new(),
+        };
+        let result = classify_cancel_result(Ok(tonic::Response::new(response)));
+        assert!(result.expect("ok passes through").order_canceled);
     }
 }

@@ -1095,7 +1095,15 @@ async fn run() -> Result<()> {
             if result.order_canceled {
                 info!("Order {} canceled successfully", order_id);
             } else {
-                info!("Order {} was not found or already canceled", order_id);
+                // The arborter answered NOT_FOUND: the order is no longer
+                // live in the book (replayed cancel, or racing a fill that
+                // just landed). `cancel_order::call_cancel_order_with_wallet`
+                // classifies that as this outcome rather than an error — the
+                // order is gone and its collateral released either way.
+                info!(
+                    "Order {} already gone (filled or previously cancelled)",
+                    order_id
+                );
             }
 
             // Log transaction hashes if available
