@@ -161,28 +161,37 @@ cargo add aspens --no-default-features --features evm,solana
 aspens = { version = "0.7", default-features = false, features = ["evm", "solana"] }
 ```
 ```rust
-use aspens::orders::{derive_order_id, GaslessLockParams};
-use aspens::evm::gasless_lock_signing_hash;
-use aspens::solana::{gasless_lock_signing_message, OpenOrderArgs};
+use aspens::orders::derive_order_id;
+use aspens::evm::envelope_signing_digest;
+use aspens::solana::withdrawal_voucher_signing_message;
 
-// Build the canonical order id from a few intent fields:
+// The canonical order id, derived from the intent fields. The server derives
+// the same id from the signed order, so it is never sent alongside it.
 let order_id = derive_order_id(
     &user_pubkey_bytes, nonce, origin_chain, dest_chain,
-    &input_token_bytes, &output_token_bytes, amount_in, amount_out,
+    &input_token_bytes, &output_token_bytes, input_amount, output_amount,
 );
 
-// EVM: produce the EIP-712 digest a wallet must sign for a gasless lock.
-let digest = gasless_lock_signing_hash(&params, arborter, settler, chain_id)?;
+// EVM: the EIP-191 digest recovered against for the outer order envelope.
+let digest = envelope_signing_digest(&encoded_send_order_request);
 
-// Solana: produce the borsh payload for Ed25519 signing of a gasless open.
-let msg = gasless_lock_signing_message(&instance, &user, deadline, &order)?;
+// Solana: the exact bytes the arborter signed for a withdrawal voucher, which
+// go in the paired Ed25519 verify instruction.
+let msg = withdrawal_voucher_signing_message(
+    &instance, &account, &mint, amount, nonce, deadline,
+)?;
 ```
 
+Under the optimistic shadow ledger, orders never lock on-chain, so there is no
+per-order EIP-712 lock signature: a client signs the outer envelope over the
+encoded request, and that is all. The gasless on-chain-lock helpers
+(`GaslessLockParams`, `gasless_lock_signing_hash`, Permit2, the ERC-7683 settler
+bindings) were removed with the on-chain order model.
+
 The pure modules:
-- **`aspens::orders`** — chain-agnostic `derive_order_id`, `GaslessLockParams`.
-- **`aspens::evm`** — sol! bindings for `MidribV2` / `IAllowanceTransfer` /
-  `MidribDataTypes`, EIP-712 domain consts, gasless-order builder and hasher,
-  EIP-191 envelope signer.
+- **`aspens::orders`** — chain-agnostic `derive_order_id`, destination-token parsing.
+- **`aspens::evm`** — MidribV3 `sol!` bindings, the EIP-191 envelope digest,
+  native-token sentinel helpers.
 - **`aspens::solana`** — PDA derivations, instruction builders, borsh payload
   encoder, Ed25519 precompile ix, well-known program ids.
 
@@ -212,9 +221,8 @@ cargo run --bin aspens-cli -- buy-market USDC/USDT 100 --quote-budget 250
 Pass `--post-only` to `buy-limit` / `sell-limit` to guarantee your order
 adds liquidity rather than taking it. If the price would cross the
 opposing side of the book at submission, arborter returns
-`FAILED_PRECONDITION` and **does not** lock funds on-chain — no gas is
-spent and your gasless signature stays unused, so you can resubmit at a
-different price.
+`FAILED_PRECONDITION` and the order is never booked, so no collateral is
+committed and you can resubmit at a different price.
 
 ```bash
 # Post a maker-only bid at 100. If the best ask is ≤ 100, the order
@@ -308,10 +316,10 @@ just clean                 # Clean build artifacts
 - **Executor pattern** - Async/sync execution strategies
 - **gRPC client** - Protocol buffer communication with an Aspens Market Stack
 - **Client-side order helpers** (`aspens::orders` / `aspens::evm` / `aspens::solana`) — stateless
-  builders for the gRPC order payload: `derive_order_id`, EIP-712 gasless-lock hasher (EVM),
-  borsh `OpenForSignedPayload` encoder (Solana), PDA derivations, Ed25519 precompile ix.
+  builders for the gRPC order payload: `derive_order_id`, the EIP-191 envelope digest (EVM),
+  PDA derivations, borsh voucher payloads, Ed25519 precompile ix (Solana).
   Available without the `client` feature for browser / embedded callers.
-- **EVM integration** - Midrib V2 ABI bindings (shared JSON artifacts with arborter), Alloy signer, Permit2
+- **EVM integration** - MidribV3 ABI bindings (shared JSON artifacts with arborter), Alloy signer
 - **Solana integration** - Midrib Anchor program: Anchor discriminators, PDA seeds, SPL token flow
 
 ### CLI Binary (`aspens-cli/`)
@@ -377,7 +385,7 @@ If any of these checks fails, **do not add the token**. Common safe examples: US
 
 The on-chain `midrib` program uses the **legacy SPL Token program**, not Token-2022. Mints owned by the Token-2022 program (`TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`) will fail deserialization at every entry point — by design, since Token-2022's transfer-fee, interest-bearing, and confidential-transfer extensions would all break the program's `deposited += amount` accounting.
 
-For gasless `open_for` flows the user signs an `OpenForSignedPayload` with an `args.deadline` slot. Pick this tight — `current_slot + 600` (~4 minutes at 400ms slots) is a sensible default. The on-chain `UsedNonce` tombstone guarantees a signed payload is single-use regardless of deadline, but a tight deadline limits the window between user-signs and arborter-submits.
+Withdrawal vouchers carry an `args.deadline` slot. The on-chain tombstone PDA makes a voucher single-use regardless of deadline, but keeping the deadline tight (`current_slot + 600`, roughly 4 minutes at 400ms slots) limits the window between the arborter signing and the holder submitting.
 
 
 

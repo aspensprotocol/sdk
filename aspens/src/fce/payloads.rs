@@ -1,5 +1,5 @@
 //! Direct-action request/response payloads — the JSON that rides in
-//! `DirectInstruction.message` (design §3), pinned field-for-field against the
+//! `DirectInstruction.message`, pinned field-for-field against the
 //! adapter's `extension/pkg/types/types.go`.
 //!
 //! Field names are camelCase; **all amounts are u128 decimal strings** (never

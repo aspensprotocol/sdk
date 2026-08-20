@@ -1,7 +1,6 @@
 //! Relying-party reconstruction of the signer's attestation `REPORTDATA` and the
 //! pubkey manifest it binds, so a verifier can recompute the value and require it
-//! to equal a *verified* TD Quote's REPORTDATA (ATTESTATION_QUOTE_DESIGN.md
-//! §4.4/§4.7).
+//! to equal a *verified* TD Quote's REPORTDATA.
 //!
 //! This MUST stay byte-for-byte identical to the signer's producer side:
 //! `signer/src/handlers/reportdata.rs` (the SHA-512 assembly) and

@@ -23,8 +23,8 @@ Aspens SDK — a Rust Cargo workspace for cross-chain trading. Crates:
 - **Protocol buffers are internal.** The `proto/` types are an implementation
   detail; the public API exposes clean Rust types. Don't leak `prost` types.
 - **`*_with_wallet` (and `*_with_wallets`) is the only public trading/auth
-  shape.** The earlier `privkey: String` wrappers were retired in Phase 4 —
-  callers go through `Wallet` (`aspens/src/wallet.rs`, the EVM/Solana curve
+  shape.** The earlier `privkey: String` wrappers are gone — callers go
+  through `Wallet` (`aspens/src/wallet.rs`, the EVM/Solana curve
   enum). Don't reintroduce string-key entry points.
 
 ## Feature gating (non-obvious; preserve the dependency separation)

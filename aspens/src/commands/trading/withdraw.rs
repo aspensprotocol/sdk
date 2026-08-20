@@ -429,7 +429,7 @@ async fn solana_withdraw(
     // Submit, with a bounded retry on a transient `InsufficientBalance` (custom
     // program error 0x1771 / 6001). The arborter only issues a voucher once it has
     // CONFIRMED a sufficient settled balance — including after a drain-on-demand
-    // (§9) that force-settles the chain right before returning the voucher. In
+    // that force-settles the chain right before returning the voucher. In
     // that case the on-chain settle may not yet be visible to this tx's
     // `deposited >= amount` check, so the first submit can fail preflight. A
     // failed-at-simulation tx never executes (no `used_nonce` tombstone is

@@ -1,10 +1,14 @@
 # FCE transport — wire-format design (feature `fce`)
 
-Status: design. Pins the FCE direct-action wire format so the SDK can drive
-actions through the Flare Confidential Extension proxy instead of dialing
-arborter gRPC directly. All byte formats below are pinned against the Go
-sources they must interoperate with; the exact citations are in
-[§7 Conformance](#7-conformance).
+**Status: implemented and shipped** as the `fce` feature (`aspens/src/fce/`), and
+matching the module layout in [§8](#8-module-layout-rust). Broader FCE work is
+parked — FCE is one deployment mode, not the venue — so treat this as the frozen
+description of a working transport rather than an active workstream.
+
+It pins the FCE direct-action wire format so the SDK can drive actions through the
+Flare Confidential Extension proxy instead of dialing arborter gRPC directly. All
+byte formats below are pinned against the Go sources they must interoperate with;
+the exact citations are in [§7 Conformance](#7-conformance).
 
 ## 0. Scope & the feature flag
 

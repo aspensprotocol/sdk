@@ -1,5 +1,5 @@
-//! FCE extension-proxy client — `POST /direct` + poll `/action/result/{id}`
-//! (design §4/§5), pinned against `extension/tools/cmd/send-direct`.
+//! FCE extension-proxy client — `POST /direct` + poll `/action/result/{id}`,
+//! pinned against `extension/tools/cmd/send-direct`.
 //!
 //! Requires a tokio runtime at call time (reqwest async), same as
 //! `tdx_verify::collateral`. The `fce` feature pulls only `reqwest`; the caller

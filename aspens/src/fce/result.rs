@@ -1,4 +1,4 @@
-//! FCE action results (design §5), pinned against `tee-node@v0.0.22`
+//! FCE action results, pinned against `tee-node@v0.0.22`
 //! `pkg/types/actions.go`.
 //!
 //! `ActionResult.Data` is go-ethereum `hexutil.Bytes` — i.e. `0x`-hex, NOT

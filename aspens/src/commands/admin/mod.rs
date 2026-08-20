@@ -295,7 +295,7 @@ pub async fn set_trade_contract(
     Ok(response.into_inner())
 }
 
-/// Set an instance's operator fee — recipient + bps (requires auth, fees Phase 4).
+/// Set an instance's operator fee — recipient + bps (requires auth).
 ///
 /// The arborter submits the on-chain `setOperatorFee` as the instance's
 /// `operator_admin` (the arborter signer, while unrotated). Returns the on-chain
@@ -330,7 +330,7 @@ pub async fn set_operator_fee(
     Ok(response.into_inner())
 }
 
-/// Rotate an instance's `operator_admin` key (requires auth, fees Phase 4).
+/// Rotate an instance's `operator_admin` key (requires auth).
 ///
 /// Signed by the current admin (the arborter, while unrotated). After this the
 /// new admin — not the arborter — gates operator-fee changes. Returns the
