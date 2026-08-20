@@ -89,9 +89,9 @@ pub mod seeds {
     pub const BALANCE_SEED: &[u8] = b"balance";
     /// Seed for the per-instance SPL token vault authority / account.
     pub const INSTANCE_VAULT_SEED: &[u8] = b"instance_vault";
-    /// Seed for the single-use withdrawal-voucher tombstone (Track A §8),
-    /// distinct from `USED_NONCE_SEED` so order and withdrawal nonces never
-    /// collide.
+    /// Seed for the single-use withdrawal-voucher tombstone. Distinct from the
+    /// program's `SETTLE_NONCE_SEED` so settlement and withdrawal nonce spaces
+    /// never collide.
     pub const WITHDRAW_NONCE_SEED: &[u8] = b"withdraw_nonce";
     /// Seed for the per-(instance, mint) FeeAccrual PDA — running total of
     /// settle-time fees awaiting `sweep_fees`.
@@ -311,7 +311,7 @@ pub fn deposit_ix(
     })
 }
 
-// -- Withdrawal voucher (Track A §8) --------------------------------------
+// -- Withdrawal voucher ---------------------------------------------------
 
 /// Derive the single-use withdrawal-voucher tombstone PDA
 /// (`[WITHDRAW_NONCE_SEED, instance, account, nonce]`). Mirrors the program's

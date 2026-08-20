@@ -5,7 +5,7 @@
 //! for order entry is the **outer envelope** over the encoded `SendOrderRequest`
 //! (the counterpart to the arborter's `is_signature_valid`). The legacy gasless
 //! on-chain-lock signing (EIP-712 `GaslessCrossChainOrder` / Permit2) is gone
-//! with MidribV2's order machinery.
+//! with the on-chain order machinery.
 //!
 //! # Typical usage
 //!

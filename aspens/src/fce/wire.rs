@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub const OP_TYPE_ASPENS: &str = "ASPENS";
 
 /// Direct-action OPCommands (off-chain). `DEPOSIT` is the on-chain instruction
-/// channel, not a direct action — see the design doc §6.
+/// channel, not a direct action — see `sdk/docs/fce-transport-design.md`.
 pub const OP_WITHDRAW: &str = "WITHDRAW";
 pub const OP_PLACE_ORDER: &str = "PLACE_ORDER";
 pub const OP_CANCEL_ORDER: &str = "CANCEL_ORDER";
@@ -38,7 +38,7 @@ pub fn to_bytes32(s: &str) -> [u8; 32] {
 
 /// The on-wire object the ext-proxy `/direct` endpoint accepts (the proxy wraps
 /// it into a tee-node `Action`; see `send-direct`). `message` carries the
-/// UTF-8 bytes of the payload JSON (design §3).
+/// UTF-8 bytes of the payload JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DirectInstruction {
     #[serde(rename = "opType", with = "hex32")]
@@ -142,7 +142,7 @@ mod tests {
         format!("0x{}", hex::encode(to_bytes32(s)))
     }
 
-    // Golden vectors — MUST match `teeutils.ToHash` byte-for-byte (design §1).
+    // Golden vectors — MUST match `teeutils.ToHash` byte-for-byte.
     #[test]
     fn to_bytes32_golden_vectors() {
         assert_eq!(
@@ -186,7 +186,7 @@ mod tests {
     }
 
     // The DirectInstruction JSON must be exactly {opType, opCommand, message}
-    // with 0x-hex values; `message` = 0x + hex(payload JSON) (design §2).
+    // with 0x-hex values; `message` = 0x + hex(payload JSON).
     #[test]
     fn direct_instruction_json_shape() {
         let payload = br#"{"marketId":"m1"}"#.to_vec();

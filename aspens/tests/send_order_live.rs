@@ -10,7 +10,7 @@
 //! 1. **Arborter gRPC** reachable at `$ASPENS_MARKET_STACK_URL`.
 //! 2. Arborter admin-initialized with:
 //!    - the chains + tokens + markets you intend to trade on
-//!    - factory + MidribV2 instance deployed per chain (fee_bps set)
+//!    - factory + MidribV3 instance deployed per chain (fee_bps set)
 //!    - per-chain signer key loaded (`just init-test-env` territory)
 //! 3. **Solana side** (if the trade origin is Solana):
 //!    - `solana-test-validator` running
@@ -18,7 +18,7 @@
 //!    - mock-signer running at `/tmp/signer/mock-signer.sock`
 //! 4. **EVM side** (if the trade origin is EVM):
 //!    - anvil or a devnet reachable at the configured `rpc_url`
-//!    - `MidribFactory` + `MidribV2` deployed + `createInstance` called
+//!    - `MidribFactory` + `MidribV3` deployed + `createInstance` called
 //! 5. **Trader wallet** already has **deposited** balance on the
 //!    origin chain's `tradeBalance` (EVM) or `UserBalance` PDA (Solana)
 //!    — gasless flow locks from deposited, it doesn't deposit for you.

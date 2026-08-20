@@ -169,7 +169,7 @@ because of the source-breaking removals below.
 
 ### Added
 
-- **TEE-voucher withdrawal flow** (Track A §8) for both chains,
+- **TEE-voucher withdrawal flow** for both chains,
   replacing the removed permissionless on-chain `withdraw`. The SDK now
   authenticates the canonical request bytes, calls the gRPC `Withdraw`
   RPC to receive the TEE-signed `WithdrawalVoucher`, and submits it

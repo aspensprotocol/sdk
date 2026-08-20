@@ -1,5 +1,5 @@
-//! TDX attestation verification — the relying-party side of
-//! `ATTESTATION_QUOTE_DESIGN.md` §4.7.
+//! TDX attestation verification — the relying-party side of the signer's
+//! attestation design (`signer/ATTESTATION_QUOTE_DESIGN.md`).
 //!
 //! The signer produces a single Intel-signed **TD Quote** whose REPORTDATA binds
 //! its tx-pubkey manifest, the running image digests, and caller-supplied data
@@ -62,8 +62,7 @@ pub struct VerifiedQuote {
 
 /// Operator-pinned expected measurements (claim 2). `None` = not pinned (skipped);
 /// a pinned value must match the quote exactly. Pinning `MRTD` and the `RTMR`s is
-/// effectively mandatory — without it, any genuine TDX TD would pass (design §4.7
-/// step 3).
+/// effectively mandatory — without it, any genuine TDX TD would pass.
 #[derive(Clone, Default)]
 pub struct MeasurementPolicy {
     pub mr_td: Option<Measurement>,
