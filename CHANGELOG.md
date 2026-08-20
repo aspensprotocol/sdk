@@ -9,7 +9,7 @@ change before 1.0.
 
 ## [Unreleased]
 
-## [0.7.0] — 2026-08-18
+## [0.7.0] — 2026-08-20
 
 ### Added
 
@@ -64,6 +64,10 @@ change before 1.0.
   incompatible `GetConfigResponse` in the public API next to the one
   `AspensClient` actually returns. Use `aspens::commands::config::config_pb`
   and `aspens::commands::auth::auth_pb`.
+
+## [0.6.3] — 2026-06-19
+
+- [changes](https://github.com/aspensprotocol/sdk/compare/0.6.2...v0.6.3)
 
 ## [0.6.2] — 2026-06-18
 
@@ -395,7 +399,8 @@ Solana support, the Wallet enum, and feature gates (`evm`, `solana`,
 `client`) for lean-signing consumers.
 
 [Unreleased]: https://github.com/aspensprotocol/sdk/compare/0.7.0...HEAD
-[0.7.0]: https://github.com/aspensprotocol/sdk/compare/0.6.2...0.7.0
+[0.7.0]: https://github.com/aspensprotocol/sdk/compare/0.6.3...0.7.0
+[0.6.3]: https://github.com/aspensprotocol/sdk/compare/0.6.2...0.6.3
 [0.6.2]: https://github.com/aspensprotocol/sdk/compare/0.6.1...0.6.2
 [0.6.1]: https://github.com/aspensprotocol/sdk/compare/0.6.0...0.6.1
 [0.6.0]: https://github.com/aspensprotocol/sdk/compare/0.5.0...0.6.0
