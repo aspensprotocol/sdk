@@ -118,14 +118,16 @@ struct OrderFlags {
 /// off-chain until settlement, so there is nothing to link to an explorer. The
 /// hash list is simply empty there rather than fabricated.
 struct SentOrder {
-    order_id: u64,
+    /// `0x`-prefixed hex, pre-formatted here so every downstream `{}` print
+    /// site stays unchanged from when this carried a `u64`.
+    order_id: String,
     tx_hashes: Vec<String>,
 }
 
 impl From<SendOrderResponse> for SentOrder {
     fn from(r: SendOrderResponse) -> Self {
         Self {
-            order_id: r.order_id,
+            order_id: format!("0x{}", hex::encode(&r.order_id)),
             tx_hashes: r.get_formatted_transaction_hashes(),
         }
     }
@@ -165,7 +167,7 @@ fn check_flags_supported_over_fce(flags: OrderFlags) -> Result<()> {
 /// expressed there at all — refuse rather than silently submitting a
 /// normal (non-discretionary) order the caller didn't ask for.
 #[cfg(feature = "fce")]
-fn check_match_order_ids_supported_over_fce(match_order_ids: &[u64]) -> Result<()> {
+fn check_match_order_ids_supported_over_fce(match_order_ids: &[[u8; 32]]) -> Result<()> {
     if !match_order_ids.is_empty() {
         eyre::bail!("discretionary orders are not supported over the FCE transport");
     }
@@ -187,7 +189,7 @@ async fn dispatch_send_order(
     price: Option<String>,
     flags: OrderFlags,
     quote_budget: Option<String>,
-    match_order_ids: Vec<u64>,
+    match_order_ids: Vec<[u8; 32]>,
 ) -> Result<SentOrder> {
     // Reject flags this transport can't express BEFORE any network work — an
     // unsupported argument should not cost a config round-trip to discover, and
@@ -521,9 +523,11 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         hidden: bool,
         /// Dealroom: fill ONLY against these resting order ids (repeatable).
-        /// Requires a limit price; the remainder is canceled, never rested (IOC).
+        /// Each is `0x` + 64 hex characters (32 bytes), exactly as returned
+        /// in `SendOrderResponse.order_id`. Requires a limit price; the
+        /// remainder is canceled, never rested (IOC).
         #[arg(long = "match-order-id")]
-        match_order_ids: Vec<u64>,
+        match_order_ids: Vec<String>,
     },
     /// Send a market SELL order (executes at best available price)
     SellMarket {
@@ -551,7 +555,7 @@ enum Commands {
         hidden: bool,
         /// Dealroom: see `buy-limit --match-order-id`.
         #[arg(long = "match-order-id")]
-        match_order_ids: Vec<u64>,
+        match_order_ids: Vec<String>,
     },
     /// Marketable BUY: snapshot the resting book, cap slippage off the
     /// best ask, submit as a buy-limit. Turns "take the top of book with a
@@ -595,8 +599,9 @@ enum Commands {
         market: String,
         /// Order side: "buy" or "sell"
         side: String,
-        /// The internal order ID to cancel
-        order_id: u64,
+        /// The order's canonical id to cancel: `0x` + 64 hex characters (32
+        /// bytes), exactly as returned in `SendOrderResponse.order_id`.
+        order_id: String,
     },
     /// Fetch the current balances for all supported tokens across all chains
     Balance,
@@ -931,6 +936,10 @@ async fn run() -> Result<()> {
                 "Sending limit BUY order for {amount} at price {price} on market {market} \
                  (post_only={post_only}, hidden={hidden}, match_order_ids={match_order_ids:?})"
             );
+            let match_order_ids = match_order_ids
+                .iter()
+                .map(|s| aspens_cliutil::parse_order_id("match-order-id", s))
+                .collect::<Result<Vec<_>>>()?;
             let result = dispatch_send_order(
                 &executor,
                 &client,
@@ -988,6 +997,10 @@ async fn run() -> Result<()> {
                 "Sending limit SELL order for {amount} at price {price} on market {market} \
                  (post_only={post_only}, hidden={hidden}, match_order_ids={match_order_ids:?})"
             );
+            let match_order_ids = match_order_ids
+                .iter()
+                .map(|s| aspens_cliutil::parse_order_id("match-order-id", s))
+                .collect::<Result<Vec<_>>>()?;
             let result = dispatch_send_order(
                 &executor,
                 &client,
@@ -1081,14 +1094,16 @@ async fn run() -> Result<()> {
             side,
             order_id,
         } => {
-            info!("Canceling order {order_id} ({side}) on market {market}");
+            let order_id = aspens_cliutil::parse_order_id("order_id", &order_id)?;
+            let order_id_hex = format!("0x{}", hex::encode(order_id));
+            info!("Canceling order {order_id_hex} ({side}) on market {market}");
 
             let stack_url = client.stack_url().to_string();
             let config = client
                 .get_config()
                 .await
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
-            let context = format!("cancel order {} on {}", order_id, market);
+            let context = format!("cancel order {} on {}", order_id_hex, market);
             let origin = origin_network_for_side(&config, &market, parse_side(&side)?)
                 .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
             let wallet = load_trader_wallet_for_network(&config, origin)
@@ -1112,9 +1127,9 @@ async fn run() -> Result<()> {
                     .map_err(|e| eyre::eyre!(format_error(&e, &context)))?
                     .canceled;
                 if canceled {
-                    info!("Order {} canceled successfully", order_id);
+                    info!("Order {} canceled successfully", order_id_hex);
                 } else {
-                    info!("Order {} was not found or already canceled", order_id);
+                    info!("Order {} was not found or already canceled", order_id_hex);
                 }
                 // No transaction hashes over FCE — cancels are off-chain.
                 return Ok(());
@@ -1130,7 +1145,7 @@ async fn run() -> Result<()> {
                 .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
 
             if result.order_canceled {
-                info!("Order {} canceled successfully", order_id);
+                info!("Order {} canceled successfully", order_id_hex);
             } else {
                 // The arborter answered NOT_FOUND: the order is no longer
                 // live in the book (replayed cancel, or racing a fill that
@@ -1139,7 +1154,7 @@ async fn run() -> Result<()> {
                 // order is gone and its collateral released either way.
                 info!(
                     "Order {} already gone (filled or previously cancelled)",
-                    order_id
+                    order_id_hex
                 );
             }
 

@@ -23,8 +23,13 @@ impl fmt::Display for Trade {
         };
         write!(
             f,
-            "[{}] {} @ {} (buyer: {}, seller: {}) order_hit: #{}",
-            self.timestamp, self.qty, self.price, buyer_str, seller_str, self.order_hit
+            "[{}] {} @ {} (buyer: {}, seller: {}) order_hit: #0x{}",
+            self.timestamp,
+            self.qty,
+            self.price,
+            buyer_str,
+            seller_str,
+            hex::encode(&self.order_hit)
         )
     }
 }
@@ -140,14 +145,17 @@ pub fn format_trade(trade: &Trade) -> String {
         _ => "???  ",
     };
 
+    // As in `format_orderbook_entry`: the id is now a full 32-byte handle,
+    // so it's truncated for the column rather than right-aligned as a number.
+    let order_hit_hex = truncate_address(&format!("0x{}", hex::encode(&trade.order_hit)));
     format!(
-        "{} | Price: {:>12} | Qty: {:>12} | Buyer: {} | Seller: {} | Order: {:>8} | Maker: {} ↔ Taker: {}",
+        "{} | Price: {:>12} | Qty: {:>12} | Buyer: {} | Seller: {} | Order: {} | Maker: {} ↔ Taker: {}",
         format_timestamp(trade.timestamp),
         trade.price,
         trade.qty,
         buyer_str,
         seller_str,
-        trade.order_hit,
+        order_hit_hex,
         truncate_address(&trade.maker_base_address),
         truncate_address(&trade.taker_base_address)
     )

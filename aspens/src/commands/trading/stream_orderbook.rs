@@ -26,9 +26,9 @@ impl fmt::Display for OrderbookEntry {
         };
         write!(
             f,
-            "[{}] #{} {} {} @ {} (maker: {}) [{}]",
+            "[{}] #0x{} {} {} @ {} (maker: {}) [{}]",
             self.timestamp,
-            self.order_id,
+            hex::encode(&self.order_id),
             side_str,
             self.quantity,
             self.price,
@@ -300,10 +300,14 @@ pub fn format_orderbook_entry(entry: &OrderbookEntry) -> String {
         _ => "UNKNOWN  ",
     };
 
+    // The wire id is now the full 32-byte handle, not a small integer, so
+    // there is no fixed width to right-align it into — truncate it the same
+    // way addresses are truncated, for a readable fixed-width column.
+    let order_id_hex = truncate_address(&format!("0x{}", hex::encode(&entry.order_id)));
     format!(
-        "{} | ID: {:>8} | {} | Price: {:>12} | Qty: {:>12} | {} | Maker: {}",
+        "{} | ID: {} | {} | Price: {:>12} | Qty: {:>12} | {} | Maker: {}",
         state_str,
-        entry.order_id,
+        order_id_hex,
         side_str,
         entry.price,
         entry.quantity,

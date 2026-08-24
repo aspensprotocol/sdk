@@ -71,8 +71,8 @@ mod tests {
     // A result envelope as the proxy returns it — data is 0x-hex of the JSON.
     #[test]
     fn decodes_hex_data_to_json() {
-        // json = {"orderId":7,"orderInBook":true,"fills":0}
-        let json = br#"{"orderId":7,"orderInBook":true,"fills":0}"#;
+        // json = {"orderId":"0x07","orderInBook":true,"fills":0}
+        let json = br#"{"orderId":"0x07","orderInBook":true,"fills":0}"#;
         let envelope = serde_json::json!({
             "result": {
                 "id": "0x".to_string() + &"00".repeat(32),
@@ -90,7 +90,7 @@ mod tests {
         let resp: ActionResponse = serde_json::from_value(envelope).unwrap();
         assert!(resp.result.ok());
         let po: super::super::payloads::PlaceOrderResponse = resp.result.decode().unwrap();
-        assert_eq!(po.order_id, 7);
+        assert_eq!(po.order_id, "0x07");
         assert!(po.order_in_book);
     }
 

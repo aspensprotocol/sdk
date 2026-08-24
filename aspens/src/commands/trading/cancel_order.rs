@@ -40,7 +40,7 @@ pub async fn call_cancel_order_with_wallet(
     market_id: String,
     side: i32,
     token_address: String,
-    order_id: u64,
+    order_id: [u8; 32],
     wallet: &Wallet,
 ) -> Result<CancelOrderResponse> {
     // Create a channel to connect to the gRPC server
@@ -54,7 +54,7 @@ pub async fn call_cancel_order_with_wallet(
         market_id,
         side,
         token_address,
-        order_id,
+        order_id: order_id.to_vec(),
     };
 
     // Serialize for signing
@@ -161,14 +161,15 @@ pub(crate) fn resolve_side_and_token(
 /// * `url` - The Aspens Market Stack URL
 /// * `market_id` - The market identifier from config
 /// * `side` - Order side ("buy" or "sell")
-/// * `order_id` - The internal order ID to cancel
+/// * `order_id` - The order's 32-byte canonical id to cancel, exactly as
+///   returned in `SendOrderResponse.order_id`
 /// * `wallet` - The user's wallet (EVM or Solana)
 /// * `config` - The configuration response from the server
 pub async fn call_cancel_order_from_config_with_wallet(
     url: String,
     market_id: String,
     side: String,
-    order_id: u64,
+    order_id: [u8; 32],
     wallet: &Wallet,
     config: GetConfigResponse,
 ) -> Result<CancelOrderResponse> {
@@ -178,10 +179,10 @@ pub async fn call_cancel_order_from_config_with_wallet(
     let (side_value, token_address) = resolve_side_and_token(&config, market, &side)?;
 
     tracing::info!(
-        "Canceling order: market={}, side={}, order_id={}, token_address={}",
+        "Canceling order: market={}, side={}, order_id=0x{}, token_address={}",
         market.name,
         side,
-        order_id,
+        hex::encode(order_id),
         token_address
     );
 

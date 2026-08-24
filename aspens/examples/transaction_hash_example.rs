@@ -24,7 +24,7 @@ fn main() {
             },
         ],
         current_orderbook: vec![],
-        order_id: 0,
+        order_id: vec![],
     };
 
     println!("=== CLI Output Example ===");

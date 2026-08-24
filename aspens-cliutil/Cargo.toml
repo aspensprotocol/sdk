@@ -11,3 +11,4 @@ publish = false
 # Library — needs the client runtime to see `commands::config::config_pb`.
 aspens = { path = "../aspens", default-features = false, features = ["client", "trader", "evm", "solana", "formatting"] }
 eyre.workspace = true
+hex.workspace = true

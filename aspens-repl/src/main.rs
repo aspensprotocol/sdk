@@ -227,9 +227,11 @@ enum ReplCommand {
         #[arg(long, default_value_t = false)]
         hidden: bool,
         /// Dealroom: fill ONLY against these resting order ids (repeatable).
-        /// Requires a limit price; the remainder is canceled, never rested (IOC).
+        /// Each is `0x` + 64 hex characters (32 bytes), exactly as returned
+        /// in `SendOrderResponse.order_id`. Requires a limit price; the
+        /// remainder is canceled, never rested (IOC).
         #[arg(long = "match-order-id")]
-        match_order_ids: Vec<u64>,
+        match_order_ids: Vec<String>,
     },
     /// Send a market SELL order (executes at best available price)
     SellMarket {
@@ -257,7 +259,7 @@ enum ReplCommand {
         hidden: bool,
         /// Dealroom: see `buy-limit --match-order-id`.
         #[arg(long = "match-order-id")]
-        match_order_ids: Vec<u64>,
+        match_order_ids: Vec<String>,
     },
     /// Cancel an existing order by its ID
     CancelOrder {
@@ -265,8 +267,9 @@ enum ReplCommand {
         market: String,
         /// Order side: "buy" or "sell"
         side: String,
-        /// The internal order ID to cancel
-        order_id: u64,
+        /// The order's canonical id to cancel: `0x` + 64 hex characters (32
+        /// bytes), exactly as returned in `SendOrderResponse.order_id`.
+        order_id: String,
     },
     /// Fetch the current balances for all supported tokens across all chains
     Balance,
@@ -572,8 +575,8 @@ fn main() {
             match res {
                 Ok(result) => {
                     info!(
-                        "Market buy order sent successfully (order_id: {})",
-                        result.order_id
+                        "Market buy order sent successfully (order_id: 0x{})",
+                        hex::encode(&result.order_id)
                     );
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
@@ -601,6 +604,18 @@ fn main() {
                 "Sending limit BUY order for {amount} at price {price} on market {market} \
                  (post_only={post_only}, hidden={hidden}, match_order_ids={match_order_ids:?})"
             );
+
+            let match_order_ids: Vec<[u8; 32]> = match match_order_ids
+                .iter()
+                .map(|s| aspens_cliutil::parse_order_id("match-order-id", s))
+                .collect()
+            {
+                Ok(ids) => ids,
+                Err(e) => {
+                    print_error(&format_error(&e, "parse --match-order-id"));
+                    return;
+                }
+            };
 
             // Fetch configuration from server
             let config = match app_state.get_config_sync() {
@@ -639,8 +654,8 @@ fn main() {
             match res {
                 Ok(result) => {
                     info!(
-                        "Limit buy order sent successfully (order_id: {})",
-                        result.order_id
+                        "Limit buy order sent successfully (order_id: 0x{})",
+                        hex::encode(&result.order_id)
                     );
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
@@ -702,8 +717,8 @@ fn main() {
             match res {
                 Ok(result) => {
                     info!(
-                        "Market sell order sent successfully (order_id: {})",
-                        result.order_id
+                        "Market sell order sent successfully (order_id: 0x{})",
+                        hex::encode(&result.order_id)
                     );
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
@@ -731,6 +746,18 @@ fn main() {
                 "Sending limit SELL order for {amount} at price {price} on market {market} \
                  (post_only={post_only}, hidden={hidden}, match_order_ids={match_order_ids:?})"
             );
+
+            let match_order_ids: Vec<[u8; 32]> = match match_order_ids
+                .iter()
+                .map(|s| aspens_cliutil::parse_order_id("match-order-id", s))
+                .collect()
+            {
+                Ok(ids) => ids,
+                Err(e) => {
+                    print_error(&format_error(&e, "parse --match-order-id"));
+                    return;
+                }
+            };
 
             // Fetch configuration from server
             let config = match app_state.get_config_sync() {
@@ -769,8 +796,8 @@ fn main() {
             match res {
                 Ok(result) => {
                     info!(
-                        "Limit sell order sent successfully (order_id: {})",
-                        result.order_id
+                        "Limit sell order sent successfully (order_id: 0x{})",
+                        hex::encode(&result.order_id)
                     );
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
@@ -794,9 +821,17 @@ fn main() {
             side,
             order_id,
         } => {
+            let order_id = match aspens_cliutil::parse_order_id("order_id", &order_id) {
+                Ok(id) => id,
+                Err(e) => {
+                    print_error(&format_error(&e, "parse order_id"));
+                    return;
+                }
+            };
+            let order_id_hex = format!("0x{}", hex::encode(order_id));
             info!(
                 "Canceling order {} ({}) on market {}",
-                order_id, side, market
+                order_id_hex, side, market
             );
 
             // Fetch configuration from server
@@ -825,9 +860,9 @@ fn main() {
             match res {
                 Ok(result) => {
                     if result.order_canceled {
-                        info!("Order {} canceled successfully", order_id);
+                        info!("Order {} canceled successfully", order_id_hex);
                     } else {
-                        info!("Order {} was not found or already canceled", order_id);
+                        info!("Order {} was not found or already canceled", order_id_hex);
                     }
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
@@ -839,7 +874,7 @@ fn main() {
                 }
                 Err(e) => print_error(&format_error(
                     &e,
-                    &format!("cancel order {} on {}", order_id, market),
+                    &format!("cancel order {} on {}", order_id_hex, market),
                 )),
             }
         }

@@ -71,8 +71,8 @@ impl fmt::Display for SendOrderResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "SendOrderResponse {{\n  order_id: {},\n  order_in_book: {},\n  order: {},\n  trades: [{}],\n  transaction_hashes: [{}]\n}}",
-            self.order_id,
+            "SendOrderResponse {{\n  order_id: 0x{},\n  order_in_book: {},\n  order: {},\n  trades: [{}],\n  transaction_hashes: [{}]\n}}",
+            hex::encode(&self.order_id),
             self.order_in_book,
             self.order
                 .as_ref()

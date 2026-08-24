@@ -94,7 +94,10 @@ fn main() -> Result<()> {
         )
         .await
     })?;
-    println!("Order placed (order_id: {})", result.order_id);
+    println!(
+        "Order placed (order_id: 0x{})",
+        hex::encode(result.order_id)
+    );
 
     // ── 5. Withdraw ─────────────────────────────────────────────────────
     // Withdraw 500 units of USDC back to your wallet.

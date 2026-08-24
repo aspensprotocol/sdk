@@ -64,9 +64,13 @@ pub struct PlaceOrderRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaceOrderResponse {
+    /// The order's canonical 32-byte id, `0x`-prefixed hex — the adapter's
+    /// rendering of the same `SendOrderResponse.order_id` the gRPC path
+    /// returns. A plain JSON string field (no numeric adapter needed): unlike
+    /// the old u64 handle, hex text carries no floating-point precision risk
+    /// on the wire.
     #[serde(rename = "orderId")]
-    #[serde(with = "crate::fce::wire::u64_string")]
-    pub order_id: u64,
+    pub order_id: String,
     #[serde(rename = "orderInBook")]
     pub order_in_book: bool,
     pub fills: i64,
@@ -82,10 +86,10 @@ pub struct CancelOrderRequest {
     pub side: String,
     #[serde(rename = "tokenAddress")]
     pub token_address: String,
-    /// arborter-internal order id.
+    /// The order's canonical 32-byte id, `0x`-prefixed hex (matches
+    /// `SendOrderResponse.order_id` / `OrderToCancel.order_id`).
     #[serde(rename = "orderId")]
-    #[serde(with = "crate::fce::wire::u64_string")]
-    pub order_id: u64,
+    pub order_id: String,
     #[serde(rename = "signatureHash", with = "hexbytes")]
     pub signature_hash: Vec<u8>,
 }
@@ -156,9 +160,9 @@ pub struct GetMyStateResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenOrder {
+    /// The order's canonical 32-byte id, `0x`-prefixed hex.
     #[serde(rename = "orderId")]
-    #[serde(with = "crate::fce::wire::u64_string")]
-    pub order_id: u64,
+    pub order_id: String,
     #[serde(rename = "marketId")]
     pub market_id: String,
     pub side: String,
@@ -210,9 +214,10 @@ pub struct TradeRecord {
     pub timestamp: u64,
     pub price: String,
     pub quantity: String,
+    /// The order this trade matched: the full 32-byte canonical order id,
+    /// `0x`-prefixed hex, matching `SendOrderResponse.order_id`.
     #[serde(rename = "orderHit")]
-    #[serde(with = "crate::fce::wire::u64_string")]
-    pub order_hit: u64,
+    pub order_hit: String,
     /// `"MAKER"` | `"TAKER"` | `""` — which side bought, and which sold.
     ///
     /// Side is NOT derivable without these, and neither is fill attribution
@@ -251,7 +256,7 @@ mod trade_record_tests {
             "timestamp": 1785870359683,
             "price": "1000000",
             "quantity": "2000000",
-            "orderHit": 2262015529707170898,
+            "orderHit": "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
             "buyerIs": "TAKER",
             "sellerIs": "MAKER",
             "makerBaseAddress": "0xmb",
@@ -270,7 +275,7 @@ mod trade_record_tests {
     /// fields degrade to empty rather than failing the whole response.
     #[test]
     fn tolerates_an_adapter_that_omits_the_new_fields() {
-        let json = r#"{"timestamp":1,"price":"1","quantity":"1","orderHit":2}"#;
+        let json = r#"{"timestamp":1,"price":"1","quantity":"1","orderHit":"0x02"}"#;
         let t: TradeRecord = serde_json::from_str(json).expect("decode");
         assert_eq!(t.buyer_is, "");
         assert_eq!(t.maker_base_address, "");
