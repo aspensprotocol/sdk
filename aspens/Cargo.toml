@@ -141,6 +141,9 @@ tempfile.workspace = true
 # Unconditional dev-dep so async unit tests (e.g. sign_message) run under
 # every feature config, including lean-signing builds.
 tokio = { workspace = true, features = ["macros", "rt"] }
+# Examples format the 32-byte hex order id; `hex` is already a normal
+# dependency of the lib, this just makes it reachable from `examples/`.
+hex.workspace = true
 
 # Examples depend on the full client runtime; skipped automatically when
 # building with `--no-default-features --features evm,solana`.

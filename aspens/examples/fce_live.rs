@@ -54,7 +54,16 @@ async fn main() -> Result<()> {
             let wallet = load_trader_wallet(CurveType::Secp256k1)?;
             let side = args.get(1).ok_or_else(|| eyre!("need side"))?;
             let token = args.get(2).ok_or_else(|| eyre!("need token addr"))?;
-            let oid: u64 = args.get(3).ok_or_else(|| eyre!("need order id"))?.parse()?;
+            let oid_str = args.get(3).ok_or_else(|| eyre!("need order id"))?;
+            let oid_body = oid_str.strip_prefix("0x").unwrap_or(oid_str);
+            let oid_bytes =
+                hex::decode(oid_body).map_err(|e| eyre!("order id '{oid_str}' is not hex: {e}"))?;
+            let oid: [u8; 32] = oid_bytes.try_into().map_err(|v: Vec<u8>| {
+                eyre!(
+                    "order_id must be exactly 32 bytes, got {} (from '{oid_str}')",
+                    v.len()
+                )
+            })?;
             let out =
                 fce_actions::cancel_order(&client, &wallet, &market_id(), side, token, oid).await?;
             println!("status={} log={}", out.status, out.log);

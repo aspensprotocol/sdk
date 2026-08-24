@@ -50,7 +50,7 @@ pub(crate) fn prepare_order(
     post_only: bool,
     hidden: bool,
     quote_budget_raw: Option<String>,
-    match_order_ids: Vec<u64>,
+    match_order_ids: Vec<[u8; 32]>,
 ) -> Result<PreparedOrder> {
     // ONE nonce, bound to two uses: hashed into the order id below, and signed
     // as `Order.nonce` further down. The arborter re-derives the id from the
@@ -102,7 +102,7 @@ pub(crate) fn prepare_order(
         } else {
             arborter_pb::ExecutionType::Discretionary as i32
         },
-        matching_order_ids: match_order_ids,
+        matching_order_ids: match_order_ids.iter().map(|id| id.to_vec()).collect(),
         post_only,
         hidden,
         quote_budget: quote_budget_raw,
@@ -386,7 +386,7 @@ pub async fn send_order_with_wallet(
     post_only: bool,
     hidden: bool,
     quote_budget: Option<String>,
-    match_order_ids: Vec<u64>,
+    match_order_ids: Vec<[u8; 32]>,
 ) -> Result<SendOrderResponse> {
     send_order_with_wallets(
         url,
@@ -457,7 +457,7 @@ pub async fn send_order_with_wallets(
     post_only: bool,
     hidden: bool,
     quote_budget: Option<String>,
-    match_order_ids: Vec<u64>,
+    match_order_ids: Vec<[u8; 32]>,
 ) -> Result<SendOrderResponse> {
     if wallets.is_empty() {
         return Err(eyre::eyre!(
@@ -571,11 +571,11 @@ pub async fn send_order_with_wallets(
         match_order_ids,
     )?;
 
-    // The canonical id is not sent, and the response carries only the
-    // arborter's short u64 handle — so this log line is the caller's one link
-    // between the two. The arborter derives the same 32 bytes from the order
-    // signed below, and that is the id the ledger and `settleBatch` agree a
-    // fill belongs to.
+    // The commitment above is this caller's own copy of the id, derived
+    // locally; the response below carries the arborter's own derivation of
+    // the same 32 bytes, computed from the order signed just after this log
+    // line. Logging both is the caller's one link between "what I computed"
+    // and "what the venue assigned" until the response returns.
     tracing::info!(
         "Derived order id {} (nonce {}, budget {} in the token it gives)",
         prepared.commitment.order_id,
@@ -725,7 +725,7 @@ mod tests {
     #[test]
     fn test_send_order_response_order_id() {
         let response = SendOrderResponse {
-            order_id: 12345,
+            order_id: vec![0xaa, 0xbb, 0xcc],
             order_in_book: true,
             order: None,
             trades: vec![],
@@ -733,13 +733,13 @@ mod tests {
             current_orderbook: vec![],
         };
 
-        assert_eq!(response.order_id, 12345);
+        assert_eq!(response.order_id, vec![0xaa, 0xbb, 0xcc]);
     }
 
     #[test]
-    fn test_send_order_response_order_id_zero() {
+    fn test_send_order_response_order_id_empty() {
         let response = SendOrderResponse {
-            order_id: 0,
+            order_id: vec![],
             order_in_book: false,
             order: None,
             trades: vec![],
@@ -747,13 +747,14 @@ mod tests {
             current_orderbook: vec![],
         };
 
-        assert_eq!(response.order_id, 0);
+        assert!(response.order_id.is_empty());
     }
 
     #[test]
-    fn test_send_order_response_order_id_max() {
+    fn test_send_order_response_order_id_full_32_bytes() {
+        let id = vec![0xff; 32];
         let response = SendOrderResponse {
-            order_id: u64::MAX,
+            order_id: id.clone(),
             order_in_book: true,
             order: None,
             trades: vec![],
@@ -761,13 +762,13 @@ mod tests {
             current_orderbook: vec![],
         };
 
-        assert_eq!(response.order_id, u64::MAX);
+        assert_eq!(response.order_id, id);
     }
 
     #[test]
     fn test_send_order_response_display_includes_order_id() {
         let response = SendOrderResponse {
-            order_id: 98765,
+            order_id: vec![0x01, 0x23, 0x45, 0x67],
             order_in_book: true,
             order: None,
             trades: vec![],
@@ -777,8 +778,8 @@ mod tests {
 
         let display_str = format!("{}", response);
         assert!(
-            display_str.contains("order_id: 98765"),
-            "Display output should contain order_id: {}",
+            display_str.contains("order_id: 0x01234567"),
+            "Display output should contain the hex order_id: {}",
             display_str
         );
     }
@@ -801,7 +802,7 @@ mod tests {
         };
 
         let response = SendOrderResponse {
-            order_id: 42,
+            order_id: vec![0x2a],
             order_in_book: true,
             order: Some(order),
             trades: vec![],
@@ -809,7 +810,7 @@ mod tests {
             current_orderbook: vec![],
         };
 
-        assert_eq!(response.order_id, 42);
+        assert_eq!(response.order_id, vec![0x2a]);
         assert!(response.order.is_some());
         assert!(response.order_in_book);
     }
@@ -1183,8 +1184,16 @@ mod order_flag_wire_pinning_tests {
     /// A dealroom order signs what it names: non-empty match ids must flip
     /// execution_type to DISCRETIONARY and ride field 8 — and the encoded bytes
     /// must differ from the same order without them (the signature covers both).
+    ///
+    /// The two fixture ids are full 32 bytes, deliberately NOT sharing a byte
+    /// pattern (one built from an ascending run, the other descending), so a
+    /// bug that only copied a prefix or a single byte would still show up as
+    /// a mismatch below rather than an accidental pass.
     #[test]
     fn match_order_ids_set_discretionary_and_change_the_signed_bytes() {
+        let id_a: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let id_b: [u8; 32] = std::array::from_fn(|i| 255 - i as u8);
+
         let plain = sample_order();
         assert_eq!(
             plain.execution_type, 0,
@@ -1197,7 +1206,7 @@ mod order_flag_wire_pinning_tests {
 
         let mut discretionary = sample_order();
         discretionary.execution_type = arborter_pb::ExecutionType::Discretionary as i32;
-        discretionary.matching_order_ids = vec![42, 7];
+        discretionary.matching_order_ids = vec![id_a.to_vec(), id_b.to_vec()];
 
         let mut buf_plain = Vec::new();
         plain.encode(&mut buf_plain).unwrap();
@@ -1223,7 +1232,10 @@ mod order_flag_wire_pinning_tests {
             decoded_discretionary.execution_type,
             arborter_pb::ExecutionType::Discretionary as i32
         );
-        assert_eq!(decoded_discretionary.matching_order_ids, vec![42, 7]);
+        assert_eq!(
+            decoded_discretionary.matching_order_ids,
+            vec![id_a.to_vec(), id_b.to_vec()]
+        );
     }
 
     /// `Order.nonce` (field 12), the same two invariants as the bool flags —

@@ -11,9 +11,11 @@
 
 mod amount;
 mod error;
+mod order_id;
 
 pub use amount::resolve_token_amount;
 pub use error::format_error;
+pub use order_id::parse_order_id;
 
 /// Per-binary parameters used to customize hint messages from the
 /// shared CLI helpers.

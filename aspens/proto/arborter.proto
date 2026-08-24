@@ -126,9 +126,11 @@ message Order {
   // See that field and `ExecutionType` for the full contract.
   ExecutionType execution_type = 7;
   // DISCRETIONARY only: 1..=16 resting order ids to fill against, tried in
-  // the given sequence. Each is a `SendOrderResponse.order_id` value the
-  // maker shared with this caller out-of-band — there is no other way to
-  // learn one, and a hidden maker's id works the same as a visible one's.
+  // the given sequence. Each is the full 32-byte canonical order id from
+  // that resting order's `SendOrderResponse.order_id`, carried here as raw
+  // bytes — the maker shares it as `0x`-prefixed hex with this caller
+  // out-of-band for the dealroom flow; there is no other way to learn one,
+  // and a hidden maker's id works the same as a visible one's.
   //
   // Fills happen ONLY against these named ids, in this order, and NEVER
   // against any other resting order — no sweep of top-of-book alongside
@@ -146,7 +148,7 @@ message Order {
   // self-match, no partial fill of the rest of the list first). The list
   // must be non-empty and at most 16 ids long; empty (the default) is what
   // every DIRECT order carries.
-  repeated uint64 matching_order_ids = 8;
+  repeated bytes matching_order_ids = 8;
   // Post-only: if true, the order MUST rest on the book. If it would
   // cross any opposing confirmed order at submission time the request
   // is rejected with FAILED_PRECONDITION and no on-chain lock is
@@ -265,8 +267,11 @@ message Trade {
   TradeRole buyer_is = 10;
   // Who is the seller in this trade (MAKER or TAKER)
   TradeRole seller_is = 11;
-  // The order_id that created this trade.
-  uint64 order_hit = 12;
+  // Which order this trade matched: the full 32-byte canonical order id,
+  // shown as `0x`-prefixed hex, matching that order's
+  // `SendOrderResponse.order_id`. Server-derived — the order's owner never
+  // chose it, only received it back.
+  bytes order_hit = 12;
   // Which market this trade executed on:
   // `base_chain::base_token::quote_chain::quote_token`, the same identity
   // `TradeRequest.market_id` and `OrderbookEntry.market_id` use.
@@ -309,8 +314,10 @@ message SendOrderResponse {
   repeated TransactionHash transaction_hashes = 4;
   // Current state of the orderbook after this operation
   repeated OrderbookEntry current_orderbook = 5;
-  // The unique identifier for this order
-  uint64 order_id = 6;
+  // The order's canonical identifier: the full 32-byte order id, shown as
+  // `0x`-prefixed hex. Always server-derived from the signed order — the
+  // caller cannot choose or influence it, only learn it from this response.
+  bytes order_id = 6;
 }
 
 /* rpc: CancelOrder */
@@ -321,16 +328,21 @@ message OrderToCancel {
   Side side = 2;
   // the token address
   string token_address = 3;
-  // Internal order Id.
-  uint64 order_id = 4;
+  // The order's canonical identifier: the full 32-byte order id, shown as
+  // `0x`-prefixed hex, exactly as returned in `SendOrderResponse.order_id`.
+  // Server-derived at order entry — the caller only echoes it back here to
+  // identify which order to cancel, never chooses it.
+  bytes order_id = 4;
 }
 
 /* rpc: Orderbook */
 message OrderbookEntry {
   // when the order first landed in The Orderbook
   uint64 timestamp = 1;
-  // internal id of the order
-  uint64 order_id = 2;
+  // The order's canonical identifier: the full 32-byte order id, shown as
+  // `0x`-prefixed hex, matching `SendOrderResponse.order_id` for the same
+  // order. Server-derived; not choosable by the order's owner.
+  bytes order_id = 2;
   // price of the order - in non-decimal form
   string price = 3;
   // quantity of the order - in non-decimal form

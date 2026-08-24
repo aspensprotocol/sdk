@@ -137,12 +137,37 @@ pub struct Order {
     /// User's pubkey (address) on the Quote chain
     #[prost(string, tag = "6")]
     pub quote_account_address: ::prost::alloc::string::String,
-    /// 'DIRECT' (default) or 'DISCRETIONARY'
+    /// 'DIRECT' (default): ordinary price-time-priority matching against the
+    /// book. 'DISCRETIONARY': the dealroom flow — this order names the exact
+    /// resting orders it is willing to fill, via `matching_order_ids` below.
+    /// See that field and `ExecutionType` for the full contract.
     #[prost(enumeration = "ExecutionType", tag = "7")]
     pub execution_type: i32,
-    /// When execution_type == 'discretionary', include order_ids to match with.
-    #[prost(uint64, repeated, tag = "8")]
-    pub matching_order_ids: ::prost::alloc::vec::Vec<u64>,
+    /// DISCRETIONARY only: 1..=16 resting order ids to fill against, tried in
+    /// the given sequence. Each is the full 32-byte canonical order id from
+    /// that resting order's `SendOrderResponse.order_id`, carried here as raw
+    /// bytes — the maker shares it as `0x`-prefixed hex with this caller
+    /// out-of-band for the dealroom flow; there is no other way to learn one,
+    /// and a hidden maker's id works the same as a visible one's.
+    ///
+    /// Fills happen ONLY against these named ids, in this order, and NEVER
+    /// against any other resting order — no sweep of top-of-book alongside
+    /// the named fills. Each fill executes at the RESTING (named) order's own
+    /// price, gated by this order's own limit price: a named order priced
+    /// worse than this order's limit is skipped, not filled at this order's
+    /// price instead of its own. That limit price is REQUIRED for a
+    /// DISCRETIONARY order (no market discretionary) and `quote_budget` is
+    /// rejected on it, exactly as for any other limit order — the spend is
+    /// `quantity x price`, already signed.
+    ///
+    /// Whatever quantity is left after walking the list is dropped, not
+    /// rested: DISCRETIONARY is immediate-or-cancel only. Naming a resting
+    /// order owned by this order's own signer rejects the WHOLE order (no
+    /// self-match, no partial fill of the rest of the list first). The list
+    /// must be non-empty and at most 16 ids long; empty (the default) is what
+    /// every DIRECT order carries.
+    #[prost(bytes = "vec", repeated, tag = "8")]
+    pub matching_order_ids: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
     /// Post-only: if true, the order MUST rest on the book. If it would
     /// cross any opposing confirmed order at submission time the request
     /// is rejected with FAILED_PRECONDITION and no on-chain lock is
@@ -237,9 +262,12 @@ pub struct Trade {
     /// Who is the seller in this trade (MAKER or TAKER)
     #[prost(enumeration = "TradeRole", tag = "11")]
     pub seller_is: i32,
-    /// The order_id that created this trade.
-    #[prost(uint64, tag = "12")]
-    pub order_hit: u64,
+    /// Which order this trade matched: the full 32-byte canonical order id,
+    /// shown as `0x`-prefixed hex, matching that order's
+    /// `SendOrderResponse.order_id`. Server-derived — the order's owner never
+    /// chose it, only received it back.
+    #[prost(bytes = "vec", tag = "12")]
+    pub order_hit: ::prost::alloc::vec::Vec<u8>,
     /// Which market this trade executed on:
     /// `base_chain::base_token::quote_chain::quote_token`, the same identity
     /// `TradeRequest.market_id` and `OrderbookEntry.market_id` use.
@@ -284,9 +312,11 @@ pub struct SendOrderResponse {
     /// Current state of the orderbook after this operation
     #[prost(message, repeated, tag = "5")]
     pub current_orderbook: ::prost::alloc::vec::Vec<OrderbookEntry>,
-    /// The unique identifier for this order
-    #[prost(uint64, tag = "6")]
-    pub order_id: u64,
+    /// The order's canonical identifier: the full 32-byte order id, shown as
+    /// `0x`-prefixed hex. Always server-derived from the signed order — the
+    /// caller cannot choose or influence it, only learn it from this response.
+    #[prost(bytes = "vec", tag = "6")]
+    pub order_id: ::prost::alloc::vec::Vec<u8>,
 }
 /// rpc: CancelOrder
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -300,9 +330,12 @@ pub struct OrderToCancel {
     /// the token address
     #[prost(string, tag = "3")]
     pub token_address: ::prost::alloc::string::String,
-    /// Internal order Id.
-    #[prost(uint64, tag = "4")]
-    pub order_id: u64,
+    /// The order's canonical identifier: the full 32-byte order id, shown as
+    /// `0x`-prefixed hex, exactly as returned in `SendOrderResponse.order_id`.
+    /// Server-derived at order entry — the caller only echoes it back here to
+    /// identify which order to cancel, never chooses it.
+    #[prost(bytes = "vec", tag = "4")]
+    pub order_id: ::prost::alloc::vec::Vec<u8>,
 }
 /// rpc: Orderbook
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -310,9 +343,11 @@ pub struct OrderbookEntry {
     /// when the order first landed in The Orderbook
     #[prost(uint64, tag = "1")]
     pub timestamp: u64,
-    /// internal id of the order
-    #[prost(uint64, tag = "2")]
-    pub order_id: u64,
+    /// The order's canonical identifier: the full 32-byte order id, shown as
+    /// `0x`-prefixed hex, matching `SendOrderResponse.order_id` for the same
+    /// order. Server-derived; not choosable by the order's owner.
+    #[prost(bytes = "vec", tag = "2")]
+    pub order_id: ::prost::alloc::vec::Vec<u8>,
     /// price of the order - in non-decimal form
     #[prost(string, tag = "3")]
     pub price: ::prost::alloc::string::String,
@@ -371,9 +406,20 @@ impl Side {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum ExecutionType {
-    /// Default - direct
+    /// Default: ordinary price-time-priority matching against the book.
+    /// `Order.matching_order_ids` is empty for this type.
     Unspecified = 0,
-    /// For dealroom use.
+    /// Dealroom flow: this order carries `Order.matching_order_ids`, a
+    /// caller-named list of 1..=16 resting order ids (each a
+    /// `SendOrderResponse.order_id` the maker shared out-of-band) it is
+    /// willing to fill against, tried in the listed sequence. Fills happen
+    /// ONLY against those named ids — never against any other resting order —
+    /// each at the RESTING order's own price, gated by this order's own
+    /// (REQUIRED) limit price; `quote_budget` is rejected, same as any other
+    /// limit order. Unfilled remainder is dropped rather than rested
+    /// (immediate-or-cancel only). Naming one of the caller's own resting
+    /// orders rejects the whole order. See `Order.matching_order_ids` for the
+    /// full contract.
     Discretionary = 1,
 }
 impl ExecutionType {

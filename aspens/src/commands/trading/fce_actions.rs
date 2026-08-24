@@ -226,7 +226,7 @@ pub async fn cancel_order(
     market_id: &str,
     side: &str,
     token_address: &str,
-    order_id: u64,
+    order_id: [u8; 32],
 ) -> Result<Outcome<CancelOrderResponse>> {
     let fce = fce_client(client)?;
     let side_i = super::send_order::parse_side(side)? as i32;
@@ -236,7 +236,7 @@ pub async fn cancel_order(
         market_id: market_id.to_string(),
         side: side_i,
         token_address: token_address.to_string(),
-        order_id,
+        order_id: order_id.to_vec(),
     };
     let signature_hash = super::sign_encoded(&to_cancel, wallet).await?;
 
@@ -244,7 +244,7 @@ pub async fn cancel_order(
         market_id: market_id.to_string(),
         side: side_str(side_i)?.to_string(),
         token_address: token_address.to_string(),
-        order_id,
+        order_id: format!("0x{}", hex::encode(order_id)),
         signature_hash,
     };
     fce.cancel_order(&req).await
@@ -289,7 +289,7 @@ pub async fn cancel_order_from_config(
     wallet: &Wallet,
     market_id: &str,
     side: &str,
-    order_id: u64,
+    order_id: [u8; 32],
     config: &GetConfigResponse,
 ) -> Result<Outcome<CancelOrderResponse>> {
     let market = lookup_market(config, market_id)?;
