@@ -51,7 +51,7 @@ cargo install --locked --git https://github.com/aspensprotocol/sdk aspens-cli as
 | `status` | Show current configuration and connection status |
 | `trader-public-key` | Get the public key and address for the trader wallet |
 | `signer-public-key [--chain-network <network>]` | Get the signer public key(s) for the trading instance (filtered to a chain network if provided) |
-| `get-attestation [--report-data <hex>] [-o text\|json]` | Fetch the TEE attestation report from the signer; optionally bind up to 64 bytes of user-supplied data into the report |
+| `get-attestation [--nonce <hex>] [--save-quote <file>] [-o text\|json]` | Fetch the signer's TD Quote; the caller-chosen nonce is bound into the quote's REPORTDATA (challenge-response); `--save-quote` writes the raw quote for offline `verify-attestation --quote` |
 
 All commands above are available in both `aspens-cli` and `aspens-repl`, except `buy-marketable` / `sell-marketable` which are CLI-only. The REPL also adds a `quit` command to exit the session.
 

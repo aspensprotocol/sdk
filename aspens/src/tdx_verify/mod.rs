@@ -11,7 +11,7 @@
 //!    measurements against operator values (`MeasurementPolicy`). A valid
 //!    signature over *some* TD is not enough.
 //! 3. **REPORTDATA (claims 2+3 + freshness):** recompute
-//!    `SHA-512(DOMAIN ‖ H(pubkey_manifest) ‖ H(images) ‖ H(report_data))` from the
+//!    `SHA-512(DOMAIN ‖ H(pubkey_manifest) ‖ H(images) ‖ H(nonce))` from the
 //!    *expected* values and require it to equal the verified quote's REPORTDATA.
 //!
 //! The DCAP step (`QuoteVerifier`) is pluggable. A pure-Rust backend
@@ -100,8 +100,8 @@ impl MeasurementPolicy {
 
 /// What the relying party expects the quote's REPORTDATA to bind: the signer's tx
 /// pubkeys (claim 3), the running image digests (claim 2), and the opaque
-/// `report_data` the verifier supplied to `GetAttestation` (a freshness nonce
-/// and/or external state). These are recomputed into the 64-byte REPORTDATA and
+/// `nonce` the verifier supplied to `GetAttestation` (a freshness /
+/// anti-replay value). These are recomputed into the 64-byte REPORTDATA and
 /// compared against the verified quote.
 #[derive(Clone, Default)]
 pub struct ExpectedReportData {
@@ -110,8 +110,8 @@ pub struct ExpectedReportData {
     pub pubkeys: Vec<(CurveTag, Vec<u8>)>,
     /// Expected running image digest(s), exactly as the signer reads them.
     pub image_digests: Vec<u8>,
-    /// The opaque bytes the verifier passed as `report_data` to `GetAttestation`.
-    pub report_data: Vec<u8>,
+    /// The opaque bytes the verifier passed as the `nonce` to `GetAttestation`.
+    pub nonce: Vec<u8>,
 }
 
 /// Verifies a raw TD Quote's signature chain to the Intel SGX Root CA and its TCB
@@ -145,11 +145,8 @@ pub fn verify_attestation(
 
     // Claims 2+3 + freshness — REPORTDATA must bind exactly the keys, images, and
     // caller data we expect.
-    let expected_rd = expected_reportdata(
-        &expected.pubkeys,
-        &expected.image_digests,
-        &expected.report_data,
-    );
+    let expected_rd =
+        expected_reportdata(&expected.pubkeys, &expected.image_digests, &expected.nonce);
     if quote.report_data != expected_rd {
         return Err(VerifyError::ReportDataMismatch);
     }
@@ -169,7 +166,7 @@ pub enum VerifyError {
     /// A pinned measurement did not match the quote (field name).
     MeasurementMismatch(&'static str),
     /// The recomputed REPORTDATA did not equal the quote's — the quote does not
-    /// bind the expected keys/images/report_data.
+    /// bind the expected keys/images/nonce.
     ReportDataMismatch,
     /// Fetching the DCAP collateral (TCB info / QE identity / PCK CRL) failed.
     Collateral(String),
@@ -201,7 +198,7 @@ impl fmt::Display for VerifyError {
             VerifyError::ReportDataMismatch => write!(
                 f,
                 "attestation rejected: REPORTDATA mismatch — quote does not bind the expected \
-                 pubkeys/images/report_data"
+                 pubkeys/images/nonce"
             ),
             VerifyError::Collateral(e) => {
                 write!(
@@ -251,14 +248,14 @@ mod tests {
         ExpectedReportData {
             pubkeys: vec![(CurveTag::Secp256k1, b"pubkey-evm".to_vec())],
             image_digests: b"img".to_vec(),
-            report_data: b"nonce".to_vec(),
+            nonce: b"nonce".to_vec(),
         }
     }
 
     #[test]
     fn accepts_matching_quote() {
         let exp = expected();
-        let rd = expected_reportdata(&exp.pubkeys, &exp.image_digests, &exp.report_data);
+        let rd = expected_reportdata(&exp.pubkeys, &exp.image_digests, &exp.nonce);
         let v = StubVerifier(quote_with_reportdata(rd));
         let policy = MeasurementPolicy {
             mr_td: Some(meas(0x11)),
@@ -271,7 +268,7 @@ mod tests {
     #[test]
     fn rejects_reportdata_mismatch() {
         let exp = expected();
-        // Quote binds a DIFFERENT report_data than expected.
+        // Quote binds a DIFFERENT nonce than expected.
         let wrong = expected_reportdata(&exp.pubkeys, &exp.image_digests, b"different-nonce");
         let v = StubVerifier(quote_with_reportdata(wrong));
         let err = verify_attestation(b"raw", &v, &MeasurementPolicy::default(), &exp).unwrap_err();
@@ -281,7 +278,7 @@ mod tests {
     #[test]
     fn rejects_measurement_mismatch() {
         let exp = expected();
-        let rd = expected_reportdata(&exp.pubkeys, &exp.image_digests, &exp.report_data);
+        let rd = expected_reportdata(&exp.pubkeys, &exp.image_digests, &exp.nonce);
         let v = StubVerifier(quote_with_reportdata(rd));
         let policy = MeasurementPolicy {
             mr_td: Some(meas(0xFF)), // wrong
@@ -309,7 +306,7 @@ mod tests {
         // An all-default policy pins nothing → passes the policy step (the
         // REPORTDATA + DCAP steps are what carry the weight then).
         let exp = expected();
-        let rd = expected_reportdata(&exp.pubkeys, &exp.image_digests, &exp.report_data);
+        let rd = expected_reportdata(&exp.pubkeys, &exp.image_digests, &exp.nonce);
         let v = StubVerifier(quote_with_reportdata(rd));
         assert!(verify_attestation(b"raw", &v, &MeasurementPolicy::default(), &exp).is_ok());
     }

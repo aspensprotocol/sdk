@@ -35,6 +35,7 @@ dcap-qvl = { workspace = true, optional = true }
 # ourselves — asn1_der (FMSPC extension walk), pem (PCK chain split), urlencoding
 # (issuer-chain header decode). See the `tdx_verify::collateral` module.
 reqwest = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
 asn1_der = { workspace = true, optional = true }
 pem = { workspace = true, optional = true }
 urlencoding = { workspace = true, optional = true }
@@ -90,7 +91,7 @@ dcap = ["dep:dcap-qvl"]
 # DCAP collateral fetching (`tdx_verify::collateral`) + live end-to-end
 # verification (`tdx_verify::live`, with `client`). Drives the PCS/PCCS REST API
 # over the SDK's own rustls reqwest (not dcap-qvl's `report`/reqwest-0.13 stack).
-dcap-fetch = ["dcap", "dep:reqwest", "dep:asn1_der", "dep:pem", "dep:urlencoding"]
+dcap-fetch = ["dcap", "dep:reqwest", "dep:asn1_der", "dep:pem", "dep:urlencoding", "dep:getrandom"]
 
 # FCE direct-action transport (`fce` module): POST /direct + poll the ext-proxy.
 # Reuses the SDK's rustls reqwest; tokio/time for the poll backoff. No gRPC deps.

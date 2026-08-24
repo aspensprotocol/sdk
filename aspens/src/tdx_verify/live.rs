@@ -31,7 +31,7 @@ pub struct LiveVerifyParams {
     pub now_secs: u64,
 }
 
-/// Fetch the attestation from `stack_url` (binding `nonce` as `report_data`),
+/// Fetch the attestation from `stack_url` (binding `nonce` into REPORTDATA),
 /// fetch its collateral, and verify fail-closed. Returns the verified quote body
 /// on success.
 ///
@@ -43,7 +43,7 @@ pub async fn verify_signer_attestation(
     nonce: Vec<u8>,
     params: LiveVerifyParams,
 ) -> Result<VerifiedQuote, VerifyError> {
-    // 1. Fetch the attestation, binding our nonce as report_data.
+    // 1. Fetch the attestation, binding our nonce into REPORTDATA.
     let response = crate::commands::config::get_attestation(stack_url, Some(nonce.clone()))
         .await
         .map_err(|e| VerifyError::Transport(format!("{e:?}")))?;
@@ -64,7 +64,45 @@ pub async fn verify_signer_attestation(
     let expected = ExpectedReportData {
         pubkeys: params.expected_pubkeys,
         image_digests: params.expected_image_digests,
-        report_data: nonce,
+        nonce,
     };
     verify_attestation(&raw_quote, &verifier, &params.policy, &expected)
+}
+
+/// Mint a fresh 32-byte challenge nonce from the OS RNG.
+///
+/// The nonce is what makes a challenge–response out of `GetAttestation`: the
+/// signer folds `SHA256(nonce)` into the quote's REPORTDATA, so a quote
+/// recorded before the nonce existed can never verify against it.
+pub fn mint_nonce() -> [u8; 32] {
+    let mut buf = [0u8; 32];
+    getrandom::fill(&mut buf).expect("OS randomness unavailable");
+    buf
+}
+
+/// Outcome of [`challenge_signer_attestation`]: the nonce that was minted and
+/// the verified quote body proven to bind it.
+pub struct ChallengeOutcome {
+    /// The freshly minted challenge nonce the quote binds.
+    pub nonce: [u8; 32],
+    /// The DCAP-verified quote body (measurements, TCB, REPORTDATA).
+    pub quote: VerifiedQuote,
+}
+
+/// One-call challenge–response attestation of a stack's signer.
+///
+/// Mints a fresh random 32-byte nonce, fetches the attestation with it, and
+/// runs the fail-closed pipeline: DCAP signature chain to the Intel SGX Root
+/// CA + TCB status, pinned measurements (`params.policy`), and the REPORTDATA
+/// binding (tx pubkeys + image digests + this nonce). Success proves, in one
+/// call, that a genuine TDX TD matching the pinned measurements holds the
+/// expected tx keys and answered *this* challenge — freshness included, no
+/// nonce bookkeeping on the caller's side.
+pub async fn challenge_signer_attestation(
+    stack_url: String,
+    params: LiveVerifyParams,
+) -> Result<ChallengeOutcome, VerifyError> {
+    let nonce = mint_nonce();
+    let quote = verify_signer_attestation(stack_url, nonce.to_vec(), params).await?;
+    Ok(ChallengeOutcome { nonce, quote })
 }
