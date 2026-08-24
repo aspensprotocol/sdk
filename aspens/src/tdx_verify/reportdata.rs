@@ -66,17 +66,17 @@ pub fn manifest_bytes(entries: &[(CurveTag, Vec<u8>)]) -> Vec<u8> {
 
 /// Reconstruct the 64-byte REPORTDATA from its three pre-hashed inputs:
 ///
-/// `REPORTDATA = SHA-512( DOMAIN ‖ SHA256(pubkey_manifest) ‖ SHA256(image_digests) ‖ SHA256(report_data) )`
+/// `REPORTDATA = SHA-512( DOMAIN ‖ SHA256(pubkey_manifest) ‖ SHA256(image_digests) ‖ SHA256(nonce) )`
 pub fn reconstruct_reportdata(
     pubkey_manifest: &[u8],
     image_digests: &[u8],
-    report_data: &[u8],
+    nonce: &[u8],
 ) -> [u8; 64] {
     let mut h = Sha512::new();
     h.update(REPORTDATA_DOMAIN);
     h.update(Sha256::digest(pubkey_manifest));
     h.update(Sha256::digest(image_digests));
-    h.update(Sha256::digest(report_data));
+    h.update(Sha256::digest(nonce));
     let out = h.finalize();
     let mut rd = [0u8; 64];
     rd.copy_from_slice(&out);
@@ -84,14 +84,14 @@ pub fn reconstruct_reportdata(
 }
 
 /// Convenience: reconstruct REPORTDATA directly from the expected tx pubkeys, the
-/// expected image digests, and the caller-supplied `report_data` (nonce / external
+/// expected image digests, and the caller-supplied `nonce` (freshness / external
 /// state). Equivalent to `reconstruct_reportdata(&manifest_bytes(pubkeys), …)`.
 pub fn expected_reportdata(
     pubkeys: &[(CurveTag, Vec<u8>)],
     image_digests: &[u8],
-    report_data: &[u8],
+    nonce: &[u8],
 ) -> [u8; 64] {
-    reconstruct_reportdata(&manifest_bytes(pubkeys), image_digests, report_data)
+    reconstruct_reportdata(&manifest_bytes(pubkeys), image_digests, nonce)
 }
 
 #[cfg(test)]

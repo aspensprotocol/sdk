@@ -327,17 +327,18 @@ pub use crate::attestation::v1::{
 ///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
-/// * `report_data` - Optional user-provided data to bind to the attestation report (max 64 bytes)
+/// * `nonce` - Optional caller-chosen freshness nonce; the signer binds `SHA256(nonce)`
+///   into the quote's REPORTDATA (any length; 32 random bytes is conventional)
 pub async fn get_attestation(
     url: String,
-    report_data: Option<Vec<u8>>,
+    nonce: Option<Vec<u8>>,
 ) -> Result<GetAttestationResponse> {
     use config_pb::config_service_client::ConfigServiceClient;
 
     let channel = create_channel(&url).await?;
     let mut client = ConfigServiceClient::new(channel);
 
-    let request = tonic::Request::new(GetAttestationRequest { report_data });
+    let request = tonic::Request::new(GetAttestationRequest { nonce });
     let response = client.get_attestation(request).await?;
 
     Ok(response.into_inner())
@@ -345,24 +346,53 @@ pub async fn get_attestation(
 
 /// Format attestation report for display
 pub fn format_attestation_report(report: &AttestationReport) -> String {
+    use sha2::{Digest, Sha256};
     let mut output = String::new();
     output.push_str("TEE Attestation Report:\n");
-    output.push_str(&format!("  TEE TCB SVN:      {}\n", report.tee_tcb_svn));
-    output.push_str(&format!("  MR SEAM:          {}\n", report.mr_seam));
-    output.push_str(&format!("  MR Signer SEAM:   {}\n", report.mr_signer_seam));
-    output.push_str(&format!("  SEAM Attributes:  {}\n", report.seam_attributes));
-    output.push_str(&format!("  TD Attributes:    {}\n", report.td_attributes));
-    output.push_str(&format!("  XFAM:             {}\n", report.xfam));
-    output.push_str(&format!("  MR TD:            {}\n", report.mr_td));
-    output.push_str(&format!("  MR Config ID:     {}\n", report.mr_config_id));
-    output.push_str(&format!("  MR Owner:         {}\n", report.mr_owner));
-    output.push_str(&format!("  MR Owner Config:  {}\n", report.mr_owner_config));
-    output.push_str(&format!("  RTMR[0]:          {}\n", report.rt_mr0));
-    output.push_str(&format!("  RTMR[1]:          {}\n", report.rt_mr1));
-    output.push_str(&format!("  RTMR[2]:          {}\n", report.rt_mr2));
-    output.push_str(&format!("  RTMR[3]:          {}\n", report.rt_mr3));
-    output.push_str(&format!("  Report Data:      {}\n", report.report_data));
+    if report.raw_quote.is_empty() {
+        output.push_str("  TD Quote:      (none -- signer is not attesting)\n");
+    } else {
+        output.push_str(&format!(
+            "  TD Quote:      {} bytes (sha256 {})\n",
+            report.raw_quote.len(),
+            hex::encode(Sha256::digest(&report.raw_quote))
+        ));
+    }
+    if report.cert_chain.is_empty() {
+        output.push_str("  Cert chain:    (embedded in the quote's certification data)\n");
+    } else {
+        output.push_str(&format!(
+            "  Cert chain:    {} bytes\n",
+            report.cert_chain.len()
+        ));
+    }
+    if report.image_digest.is_empty() {
+        output.push_str("  Image digest:  (none self-reported)\n");
+    } else {
+        output.push_str(&format!(
+            "  Image digest:  {}\n",
+            String::from_utf8_lossy(&report.image_digest).trim_end()
+        ));
+    }
+    output.push_str(
+        "\nThe TD Quote is the only attestation artifact; nothing above is verified.\n\
+         Verify it fail-closed -- DCAP chain to Intel, pinned measurements, and the\n\
+         REPORTDATA nonce binding -- with `verify-attestation` (aspens::tdx_verify).\n",
+    );
     output
+}
+
+/// JSON view of an [`AttestationReport`]: the raw quote (hex, for piping into
+/// an offline verifier), its length + sha256, and the self-reported fields.
+pub fn attestation_report_json(report: &AttestationReport) -> serde_json::Value {
+    use sha2::{Digest, Sha256};
+    serde_json::json!({
+        "raw_quote_len": report.raw_quote.len(),
+        "raw_quote_sha256": hex::encode(Sha256::digest(&report.raw_quote)),
+        "raw_quote": hex::encode(&report.raw_quote),
+        "cert_chain_len": report.cert_chain.len(),
+        "image_digest": String::from_utf8_lossy(&report.image_digest),
+    })
 }
 
 // No unit tests here: the three that existed were `#[ignore]`d against

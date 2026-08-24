@@ -610,9 +610,14 @@ enum Commands {
     },
     /// Get TEE attestation report from the signer
     GetAttestation {
-        /// Optional hex-encoded data to bind to the attestation report (max 64 bytes)
+        /// Optional hex-encoded freshness nonce bound into the quote's REPORTDATA
+        /// (any length -- it is pre-hashed; 32 random bytes is conventional)
         #[arg(long)]
-        report_data: Option<String>,
+        nonce: Option<String>,
+        /// Write the raw TD quote to a file (binary) for offline verification
+        /// (feed it to `verify-attestation --quote`)
+        #[arg(long, value_name = "FILE")]
+        save_quote: Option<std::path::PathBuf>,
         /// Output format: "text" (default) or "json"
         #[arg(long, short = 'o', default_value = "text")]
         output: String,
@@ -1379,93 +1384,68 @@ async fn run() -> Result<()> {
                 })?;
         }
         Commands::GetAttestation {
-            report_data,
+            nonce,
+            save_quote,
             output,
         } => {
             info!("Fetching TEE attestation from signer");
 
             let stack_url = client.stack_url().to_string();
 
-            // Parse report_data from hex if provided
-            let report_data_bytes = if let Some(hex_data) = report_data {
-                let hex_data = hex_data.strip_prefix("0x").unwrap_or(&hex_data);
-                Some(hex::decode(hex_data).map_err(|e| {
-                    eyre::eyre!(
-                        "Invalid hex data for --report-data: {}\n\n\
-                         Hints:\n\
-                         - Provide data as hex string (with or without 0x prefix)\n\
-                         - Maximum 64 bytes (128 hex characters)",
-                        e
-                    )
-                })?)
-            } else {
-                None
+            let nonce_bytes = match nonce {
+                Some(hex_data) => {
+                    let hex_data = hex_data.strip_prefix("0x").unwrap_or(&hex_data);
+                    Some(hex::decode(hex_data).map_err(|e| {
+                        eyre::eyre!(
+                            "Invalid hex data for --nonce: {}\n\n\
+                             Hint: provide the nonce as a hex string (with or without 0x prefix)",
+                            e
+                        )
+                    })?)
+                }
+                None => None,
             };
-
-            // Validate report_data length
-            if let Some(ref data) = report_data_bytes
-                && data.len() > 64
-            {
-                return Err(eyre::eyre!(
-                    "Report data too long: {} bytes (max 64 bytes)\n\n\
-                         Hints:\n\
-                         - Maximum report data length is 64 bytes\n\
-                         - Your data is {} hex characters, which is {} bytes",
-                    data.len(),
-                    data.len() * 2,
-                    data.len()
-                ));
-            }
 
             let response = executor
                 .execute(aspens::commands::config::get_attestation(
                     stack_url,
-                    report_data_bytes,
+                    nonce_bytes,
                 ))
                 .map_err(|e| eyre::eyre!(format_error(&e, "fetch TEE attestation")))?;
 
+            let report = response.report;
+            if let (Some(path), Some(report)) = (&save_quote, &report) {
+                if report.raw_quote.is_empty() {
+                    return Err(eyre::eyre!(
+                        "signer returned an empty TD quote; nothing to save to {}",
+                        path.display()
+                    ));
+                }
+                std::fs::write(path, &report.raw_quote)
+                    .map_err(|e| eyre::eyre!("writing quote to {}: {e}", path.display()))?;
+                info!("raw TD quote saved to {}", path.display());
+            }
+
             match output.as_str() {
-                "json" => {
-                    // Output as JSON
-                    if let Some(report) = &response.report {
-                        let json = serde_json::json!({
-                            "tee_tcb_svn": report.tee_tcb_svn,
-                            "mr_seam": report.mr_seam,
-                            "mr_signer_seam": report.mr_signer_seam,
-                            "seam_attributes": report.seam_attributes,
-                            "td_attributes": report.td_attributes,
-                            "xfam": report.xfam,
-                            "mr_td": report.mr_td,
-                            "mr_config_id": report.mr_config_id,
-                            "mr_owner": report.mr_owner,
-                            "mr_owner_config": report.mr_owner_config,
-                            "rt_mr0": report.rt_mr0,
-                            "rt_mr1": report.rt_mr1,
-                            "rt_mr2": report.rt_mr2,
-                            "rt_mr3": report.rt_mr3,
-                            "report_data": report.report_data,
-                        });
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json).map_err(|e| eyre::eyre!(
-                                "failed to format attestation report as JSON: {e}"
-                            ))?
-                        );
-                    } else {
-                        println!("null");
-                    }
-                }
-                _ => {
-                    // Default text output
-                    if let Some(report) = &response.report {
-                        print!(
-                            "{}",
-                            aspens::commands::config::format_attestation_report(report)
-                        );
-                    } else {
-                        println!("No attestation report available");
-                    }
-                }
+                "json" => match &report {
+                    Some(report) => println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &aspens::commands::config::attestation_report_json(report)
+                        )
+                        .map_err(|e| eyre::eyre!(
+                            "failed to format attestation report as JSON: {e}"
+                        ))?
+                    ),
+                    None => println!("null"),
+                },
+                _ => match &report {
+                    Some(report) => print!(
+                        "{}",
+                        aspens::commands::config::format_attestation_report(report)
+                    ),
+                    None => println!("No attestation report available"),
+                },
             }
         }
         Commands::VerifyAttestation {
@@ -1541,12 +1521,6 @@ async fn run() -> Result<()> {
                 }
                 None => Vec::new(),
             };
-            if nonce_bytes.len() > 64 {
-                return Err(eyre::eyre!(
-                    "--nonce is {} bytes; the REPORTDATA input is at most 64",
-                    nonce_bytes.len()
-                ));
-            }
 
             let accepted_tcb = if accept_tcb.is_empty() {
                 vec!["UpToDate".to_string()]
@@ -1609,7 +1583,7 @@ async fn run() -> Result<()> {
                 let expected = ExpectedReportData {
                     pubkeys,
                     image_digests,
-                    report_data: nonce_bytes,
+                    nonce: nonce_bytes,
                 };
                 let verified = verify_attestation(&raw_quote, &verifier, &policy, &expected)?;
                 Ok::<_, eyre::Report>(verified)
