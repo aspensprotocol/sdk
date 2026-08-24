@@ -961,6 +961,61 @@ mod tests {
         assert_eq!(decoded.quote_budget.as_deref(), Some("7500000"));
     }
 
+    /// The wire-pinning tests below prove the SHAPE (empty ids -> default
+    /// enum + empty repeated field) by building `Order` literals directly.
+    /// That never exercises `prepare_order`'s own
+    /// `if match_order_ids.is_empty() { 0 } else { .. }` branch — every
+    /// caller of `prepare_order` (the real construction path production
+    /// code uses) could regress to always emitting `Discretionary`, or to
+    /// writing an explicit `0`/`vec![]` in a way prost stops eliding, and a
+    /// literal-only test would never notice. Every existing order's derived
+    /// id and signature depends on the empty-ids encoding staying
+    /// byte-identical to before this feature existed, so this drives the
+    /// REAL function and compares its output — copying only the
+    /// dynamically-minted `nonce` — against a hand-built `Order` written the
+    /// old way (the two hardcoded lines this feature replaced).
+    #[test]
+    fn prepare_order_with_empty_match_ids_encodes_like_the_pre_feature_shape() {
+        // side=Ask, price 3.0 — distinct from every other `prepared()` call
+        // in this file, so a copy-paste mistake elsewhere can't make this
+        // pass for the wrong reason.
+        let p = prepared(2, Some("300000000"), None).expect("limit ask, no match ids");
+        assert_eq!(
+            p.order.execution_type, 0,
+            "prepare_order's real branch must leave execution_type at the proto default"
+        );
+        assert!(
+            p.order.matching_order_ids.is_empty(),
+            "prepare_order's real branch must leave matching_order_ids empty"
+        );
+
+        let hand_built_pre_feature_shape = Order {
+            side: p.order.side,
+            quantity: p.order.quantity.clone(),
+            price: p.order.price.clone(),
+            market_id: p.order.market_id.clone(),
+            base_account_address: p.order.base_account_address.clone(),
+            quote_account_address: p.order.quote_account_address.clone(),
+            execution_type: 0,
+            matching_order_ids: vec![],
+            post_only: p.order.post_only,
+            hidden: p.order.hidden,
+            quote_budget: p.order.quote_budget.clone(),
+            nonce: p.order.nonce,
+        };
+
+        let mut buf_real = Vec::new();
+        prost::Message::encode(&p.order, &mut buf_real).unwrap();
+        let mut buf_hand_built = Vec::new();
+        prost::Message::encode(&hand_built_pre_feature_shape, &mut buf_hand_built).unwrap();
+        assert_eq!(
+            buf_real, buf_hand_built,
+            "prepare_order(match_order_ids: vec![]) must encode identically to the \
+             pre-feature hand-built shape — any divergence changes the signed bytes, \
+             and therefore the derived id and signature, of every existing (non-dealroom) order"
+        );
+    }
+
     /// Every other order sets no budget, so its encoding — and therefore its
     /// signature — is byte-for-byte what it was before the field existed.
     #[test]
