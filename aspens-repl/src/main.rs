@@ -226,6 +226,10 @@ enum ReplCommand {
         /// returned order id.
         #[arg(long, default_value_t = false)]
         hidden: bool,
+        /// Dealroom: fill ONLY against these resting order ids (repeatable).
+        /// Requires a limit price; the remainder is canceled, never rested (IOC).
+        #[arg(long = "match-order-id")]
+        match_order_ids: Vec<u64>,
     },
     /// Send a market SELL order (executes at best available price)
     SellMarket {
@@ -251,6 +255,9 @@ enum ReplCommand {
         /// Invisible order: see `buy-limit --hidden`.
         #[arg(long, default_value_t = false)]
         hidden: bool,
+        /// Dealroom: see `buy-limit --match-order-id`.
+        #[arg(long = "match-order-id")]
+        match_order_ids: Vec<u64>,
     },
     /// Cancel an existing order by its ID
     CancelOrder {
@@ -558,6 +565,7 @@ fn main() {
                     false, // post_only meaningless for market orders
                     hidden,
                     Some(budget), // what actually bounds a market buy
+                    vec![],       // dealroom discretionary requires a limit price; not offered here
                 )
                 .await
             });
@@ -587,10 +595,11 @@ fn main() {
             price,
             post_only,
             hidden,
+            match_order_ids,
         } => {
             info!(
                 "Sending limit BUY order for {amount} at price {price} on market {market} \
-                 (post_only={post_only}, hidden={hidden})"
+                 (post_only={post_only}, hidden={hidden}, match_order_ids={match_order_ids:?})"
             );
 
             // Fetch configuration from server
@@ -623,6 +632,7 @@ fn main() {
                     post_only,
                     hidden,
                     None, // a limit order's budget is derived: quantity x price
+                    match_order_ids,
                 )
                 .await
             });
@@ -675,10 +685,17 @@ fn main() {
             let amt = amount.clone();
             let res = executor.execute(async move {
                 send_order::send_order_with_wallet(
-                    url, mkt, 2, // Sell side
-                    amt, None, // No limit price (market order)
-                    &wallet, config, false, // post_only meaningless for market orders
-                    hidden, None, // an ASK gives base: its budget IS its quantity
+                    url,
+                    mkt,
+                    2, // Sell side
+                    amt,
+                    None, // No limit price (market order)
+                    &wallet,
+                    config,
+                    false, // post_only meaningless for market orders
+                    hidden,
+                    None,   // an ASK gives base: its budget IS its quantity
+                    vec![], // dealroom discretionary requires a limit price; not offered here
                 )
                 .await
             });
@@ -708,10 +725,11 @@ fn main() {
             price,
             post_only,
             hidden,
+            match_order_ids,
         } => {
             info!(
                 "Sending limit SELL order for {amount} at price {price} on market {market} \
-                 (post_only={post_only}, hidden={hidden})"
+                 (post_only={post_only}, hidden={hidden}, match_order_ids={match_order_ids:?})"
             );
 
             // Fetch configuration from server
@@ -744,6 +762,7 @@ fn main() {
                     post_only,
                     hidden,
                     None, // a limit order's budget is derived: quantity x price
+                    match_order_ids,
                 )
                 .await
             });

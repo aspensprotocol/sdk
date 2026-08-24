@@ -141,6 +141,7 @@ async fn send_order_roundtrip_against_live_stack() -> Result<()> {
         false, // post_only — live happy-path test exercises the regular take-or-rest flow
         false, // hidden — live happy-path test exercises the regular visible-order flow
         quote_budget,
+        vec![], // match_order_ids — this test exercises the normal (non-dealroom) path
     )
     .await?;
 
