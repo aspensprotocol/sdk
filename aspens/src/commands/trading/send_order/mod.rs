@@ -50,6 +50,7 @@ pub(crate) fn prepare_order(
     post_only: bool,
     hidden: bool,
     quote_budget_raw: Option<String>,
+    match_order_ids: Vec<u64>,
 ) -> Result<PreparedOrder> {
     // ONE nonce, bound to two uses: hashed into the order id below, and signed
     // as `Order.nonce` further down. The arborter re-derives the id from the
@@ -82,6 +83,13 @@ pub(crate) fn prepare_order(
     // every order that isn't a market bid signs the exact bytes it always did.
     // Note the units differ from `quantity`/`price` — it is the QUOTE token's
     // own base units, not pair decimals (see `Order.quote_budget`).
+    //
+    // `match_order_ids` (field 8) drives `execution_type` (field 7) rather
+    // than being independently settable: a dealroom discretionary fill IS
+    // "match against these ids and nothing else", so the two travel together
+    // by construction instead of by a caller remembering to set both. Empty
+    // is wire-skipped on both fields, so every existing (non-dealroom) caller
+    // signs the exact bytes it always did.
     let order = Order {
         side,
         quantity: quantity_raw,
@@ -89,8 +97,12 @@ pub(crate) fn prepare_order(
         market_id: market.market_id.clone(),
         base_account_address,
         quote_account_address,
-        execution_type: 0,
-        matching_order_ids: vec![],
+        execution_type: if match_order_ids.is_empty() {
+            0
+        } else {
+            arborter_pb::ExecutionType::Discretionary as i32
+        },
+        matching_order_ids: match_order_ids,
         post_only,
         hidden,
         quote_budget: quote_budget_raw,
@@ -356,6 +368,9 @@ pub fn parse_side(s: &str) -> Result<arborter_pb::Side> {
 ///   "250.5"), scaled here by the market's quote-token decimals.
 ///   **Required for a market buy** (`side == 1` with no `price`) and
 ///   rejected on every other order — see [`send_order_with_wallets`].
+/// * `match_order_ids` - Dealroom discretionary fill: non-empty sets
+///   `Order.execution_type = DISCRETIONARY` and carries these ids as
+///   `Order.matching_order_ids` — see [`send_order_with_wallets`].
 // Public top-level API — the argument list is the documented entry
 // point; introducing a builder/struct here would break every caller
 // (CLI, REPL, examples) for no behavioural gain.
@@ -371,6 +386,7 @@ pub async fn send_order_with_wallet(
     post_only: bool,
     hidden: bool,
     quote_budget: Option<String>,
+    match_order_ids: Vec<u64>,
 ) -> Result<SendOrderResponse> {
     send_order_with_wallets(
         url,
@@ -383,6 +399,7 @@ pub async fn send_order_with_wallet(
         post_only,
         hidden,
         quote_budget,
+        match_order_ids,
     )
     .await
 }
@@ -413,6 +430,19 @@ pub async fn send_order_with_wallet(
 /// both reject a stated one. Note the budget bounds the spend — a market buy's
 /// `quantity` bounds nothing, though it must still be non-zero and is still
 /// signed.
+///
+/// `match_order_ids`: a dealroom discretionary fill. Non-empty (max 16) sets
+/// `Order.execution_type = DISCRETIONARY` and carries the ids as
+/// `Order.matching_order_ids` — both inside the signed envelope, so the
+/// signature covers exactly which resting orders this one is allowed to
+/// touch. The arborter then fills ONLY against those orders, at each maker's
+/// own price gated by this order's limit price (required — a discretionary
+/// order with no price is rejected), IOC: whatever doesn't fill against the
+/// named ids is canceled, never rested. Empty is the normal (non-dealroom)
+/// path and is wire-skipped, so existing callers sign byte-identical
+/// envelopes. The arborter also rejects a `quote_budget` alongside a
+/// non-empty list, `post_only` combined with it, ids on an order that isn't
+/// discretionary, and an id that would self-match.
 // Public top-level API — same rationale as `send_order_with_wallet`
 // for keeping the argument list flat.
 #[allow(clippy::too_many_arguments)]
@@ -427,6 +457,7 @@ pub async fn send_order_with_wallets(
     post_only: bool,
     hidden: bool,
     quote_budget: Option<String>,
+    match_order_ids: Vec<u64>,
 ) -> Result<SendOrderResponse> {
     if wallets.is_empty() {
         return Err(eyre::eyre!(
@@ -537,6 +568,7 @@ pub async fn send_order_with_wallets(
         post_only,
         hidden,
         quote_budget_raw,
+        match_order_ids,
     )?;
 
     // The canonical id is not sent, and the response carries only the
@@ -909,6 +941,7 @@ mod tests {
             false,
             false,
             quote_budget_raw.map(str::to_string),
+            vec![],
         )
     }
 
@@ -926,6 +959,61 @@ mod tests {
         prost::Message::encode(&p.order, &mut buf).unwrap();
         let decoded = <Order as prost::Message>::decode(&*buf).unwrap();
         assert_eq!(decoded.quote_budget.as_deref(), Some("7500000"));
+    }
+
+    /// The wire-pinning tests below prove the SHAPE (empty ids -> default
+    /// enum + empty repeated field) by building `Order` literals directly.
+    /// That never exercises `prepare_order`'s own
+    /// `if match_order_ids.is_empty() { 0 } else { .. }` branch — every
+    /// caller of `prepare_order` (the real construction path production
+    /// code uses) could regress to always emitting `Discretionary`, or to
+    /// writing an explicit `0`/`vec![]` in a way prost stops eliding, and a
+    /// literal-only test would never notice. Every existing order's derived
+    /// id and signature depends on the empty-ids encoding staying
+    /// byte-identical to before this feature existed, so this drives the
+    /// REAL function and compares its output — copying only the
+    /// dynamically-minted `nonce` — against a hand-built `Order` written the
+    /// old way (the two hardcoded lines this feature replaced).
+    #[test]
+    fn prepare_order_with_empty_match_ids_encodes_like_the_pre_feature_shape() {
+        // side=Ask, price 3.0 — distinct from every other `prepared()` call
+        // in this file, so a copy-paste mistake elsewhere can't make this
+        // pass for the wrong reason.
+        let p = prepared(2, Some("300000000"), None).expect("limit ask, no match ids");
+        assert_eq!(
+            p.order.execution_type, 0,
+            "prepare_order's real branch must leave execution_type at the proto default"
+        );
+        assert!(
+            p.order.matching_order_ids.is_empty(),
+            "prepare_order's real branch must leave matching_order_ids empty"
+        );
+
+        let hand_built_pre_feature_shape = Order {
+            side: p.order.side,
+            quantity: p.order.quantity.clone(),
+            price: p.order.price.clone(),
+            market_id: p.order.market_id.clone(),
+            base_account_address: p.order.base_account_address.clone(),
+            quote_account_address: p.order.quote_account_address.clone(),
+            execution_type: 0,
+            matching_order_ids: vec![],
+            post_only: p.order.post_only,
+            hidden: p.order.hidden,
+            quote_budget: p.order.quote_budget.clone(),
+            nonce: p.order.nonce,
+        };
+
+        let mut buf_real = Vec::new();
+        prost::Message::encode(&p.order, &mut buf_real).unwrap();
+        let mut buf_hand_built = Vec::new();
+        prost::Message::encode(&hand_built_pre_feature_shape, &mut buf_hand_built).unwrap();
+        assert_eq!(
+            buf_real, buf_hand_built,
+            "prepare_order(match_order_ids: vec![]) must encode identically to the \
+             pre-feature hand-built shape — any divergence changes the signed bytes, \
+             and therefore the derived id and signature, of every existing (non-dealroom) order"
+        );
     }
 
     /// Every other order sets no budget, so its encoding — and therefore its
@@ -1090,6 +1178,52 @@ mod order_flag_wire_pinning_tests {
     #[test]
     fn hidden_wire_pinned() {
         assert_bool_flag_wire_pinned(10, |o, v| o.hidden = v);
+    }
+
+    /// A dealroom order signs what it names: non-empty match ids must flip
+    /// execution_type to DISCRETIONARY and ride field 8 — and the encoded bytes
+    /// must differ from the same order without them (the signature covers both).
+    #[test]
+    fn match_order_ids_set_discretionary_and_change_the_signed_bytes() {
+        let plain = sample_order();
+        assert_eq!(
+            plain.execution_type, 0,
+            "fixture must start from the default"
+        );
+        assert!(
+            plain.matching_order_ids.is_empty(),
+            "fixture must start from the default"
+        );
+
+        let mut discretionary = sample_order();
+        discretionary.execution_type = arborter_pb::ExecutionType::Discretionary as i32;
+        discretionary.matching_order_ids = vec![42, 7];
+
+        let mut buf_plain = Vec::new();
+        plain.encode(&mut buf_plain).unwrap();
+        let mut buf_discretionary = Vec::new();
+        discretionary.encode(&mut buf_discretionary).unwrap();
+
+        // The whole point: these two orders must NOT encode to the same
+        // bytes, or the envelope signature would cover nothing about which
+        // resting orders this one is allowed to touch.
+        assert_ne!(
+            buf_plain, buf_discretionary,
+            "matching_order_ids and execution_type must reach the wire — an \
+             unchanged encoding means the signature does not cover them"
+        );
+
+        // Round-trips preserve both fields exactly, in both states.
+        let decoded_plain = Order::decode(&*buf_plain).unwrap();
+        assert_eq!(decoded_plain.execution_type, 0);
+        assert!(decoded_plain.matching_order_ids.is_empty());
+
+        let decoded_discretionary = Order::decode(&*buf_discretionary).unwrap();
+        assert_eq!(
+            decoded_discretionary.execution_type,
+            arborter_pb::ExecutionType::Discretionary as i32
+        );
+        assert_eq!(decoded_discretionary.matching_order_ids, vec![42, 7]);
     }
 
     /// `Order.nonce` (field 12), the same two invariants as the bool flags —

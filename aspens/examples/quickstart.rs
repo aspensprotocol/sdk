@@ -88,6 +88,9 @@ fn main() -> Result<()> {
             // has no price to size that with). This is a limit order, whose
             // budget is the already-signed `quantity x price`.
             None,
+            // match_order_ids: empty for a normal order. Non-empty turns this
+            // into a dealroom discretionary fill against those resting ids.
+            vec![],
         )
         .await
     })?;

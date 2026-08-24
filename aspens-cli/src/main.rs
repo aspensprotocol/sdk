@@ -159,6 +159,19 @@ fn check_flags_supported_over_fce(flags: OrderFlags) -> Result<()> {
     Ok(())
 }
 
+/// Reject `--match-order-id` over the FCE transport: the direct-action
+/// `PlaceOrderRequest` the payload builder constructs carries no
+/// `matching_order_ids` field, so a dealroom discretionary fill cannot be
+/// expressed there at all — refuse rather than silently submitting a
+/// normal (non-discretionary) order the caller didn't ask for.
+#[cfg(feature = "fce")]
+fn check_match_order_ids_supported_over_fce(match_order_ids: &[u64]) -> Result<()> {
+    if !match_order_ids.is_empty() {
+        eyre::bail!("discretionary orders are not supported over the FCE transport");
+    }
+    Ok(())
+}
+
 /// `quote_budget` is the human-readable maximum QUOTE a market buy may spend,
 /// and belongs to exactly that one cell of the order table: a sell's budget is
 /// its `amount` (base) and a limit buy's is `amount x price`, both derived from
@@ -174,6 +187,7 @@ async fn dispatch_send_order(
     price: Option<String>,
     flags: OrderFlags,
     quote_budget: Option<String>,
+    match_order_ids: Vec<u64>,
 ) -> Result<SentOrder> {
     // Reject flags this transport can't express BEFORE any network work — an
     // unsupported argument should not cost a config round-trip to discover, and
@@ -181,6 +195,7 @@ async fn dispatch_send_order(
     #[cfg(feature = "fce")]
     if client.uses_fce() {
         check_flags_supported_over_fce(flags)?;
+        check_match_order_ids_supported_over_fce(&match_order_ids)?;
     }
 
     let stack_url = client.stack_url().to_string();
@@ -220,6 +235,7 @@ async fn dispatch_send_order(
     #[cfg(feature = "fce")]
     if client.uses_fce() {
         check_flags_supported_over_fce(flags)?;
+        check_match_order_ids_supported_over_fce(&match_order_ids)?;
         let wallets: Vec<&Wallet> = [evm.as_ref(), solana.as_ref()]
             .into_iter()
             .flatten()
@@ -271,6 +287,7 @@ async fn dispatch_send_order(
                 flags.post_only,
                 flags.hidden,
                 quote_budget,
+                match_order_ids,
             )
             .await
         })
@@ -503,6 +520,10 @@ enum Commands {
         /// returned order id.
         #[arg(long, default_value_t = false)]
         hidden: bool,
+        /// Dealroom: fill ONLY against these resting order ids (repeatable).
+        /// Requires a limit price; the remainder is canceled, never rested (IOC).
+        #[arg(long = "match-order-id")]
+        match_order_ids: Vec<u64>,
     },
     /// Send a market SELL order (executes at best available price)
     SellMarket {
@@ -528,6 +549,9 @@ enum Commands {
         /// Invisible order: see `buy-limit --hidden`.
         #[arg(long, default_value_t = false)]
         hidden: bool,
+        /// Dealroom: see `buy-limit --match-order-id`.
+        #[arg(long = "match-order-id")]
+        match_order_ids: Vec<u64>,
     },
     /// Marketable BUY: snapshot the resting book, cap slippage off the
     /// best ask, submit as a buy-limit. Turns "take the top of book with a
@@ -886,6 +910,7 @@ async fn run() -> Result<()> {
                     hidden,
                 },
                 Some(quote_budget),
+                vec![], // dealroom discretionary requires a limit price; not offered here
             )
             .await?;
             info!(
@@ -900,10 +925,11 @@ async fn run() -> Result<()> {
             price,
             post_only,
             hidden,
+            match_order_ids,
         } => {
             info!(
                 "Sending limit BUY order for {amount} at price {price} on market {market} \
-                 (post_only={post_only}, hidden={hidden})"
+                 (post_only={post_only}, hidden={hidden}, match_order_ids={match_order_ids:?})"
             );
             let result = dispatch_send_order(
                 &executor,
@@ -914,6 +940,7 @@ async fn run() -> Result<()> {
                 Some(price),
                 OrderFlags { post_only, hidden },
                 None, // a limit order's budget is derived from (amount, price)
+                match_order_ids,
             )
             .await?;
             info!(
@@ -939,7 +966,8 @@ async fn run() -> Result<()> {
                     post_only: false, // meaningless for market orders
                     hidden,
                 },
-                None, // an ASK gives base: its budget IS its quantity
+                None,   // an ASK gives base: its budget IS its quantity
+                vec![], // dealroom discretionary requires a limit price; not offered here
             )
             .await?;
             info!(
@@ -954,10 +982,11 @@ async fn run() -> Result<()> {
             price,
             post_only,
             hidden,
+            match_order_ids,
         } => {
             info!(
                 "Sending limit SELL order for {amount} at price {price} on market {market} \
-                 (post_only={post_only}, hidden={hidden})"
+                 (post_only={post_only}, hidden={hidden}, match_order_ids={match_order_ids:?})"
             );
             let result = dispatch_send_order(
                 &executor,
@@ -968,6 +997,7 @@ async fn run() -> Result<()> {
                 Some(price),
                 OrderFlags { post_only, hidden },
                 None, // a limit order's budget is derived from (amount, price)
+                match_order_ids,
             )
             .await?;
             info!(
@@ -1002,7 +1032,8 @@ async fn run() -> Result<()> {
                     post_only: false,
                     hidden,
                 },
-                None, // priced, so the budget is derived from (amount, price)
+                None,   // priced, so the budget is derived from (amount, price)
+                vec![], // dealroom discretionary is not offered on the marketable path
             )
             .await?;
             info!(
@@ -1035,7 +1066,8 @@ async fn run() -> Result<()> {
                     post_only: false,
                     hidden,
                 },
-                None, // priced, so the budget is derived from (amount, price)
+                None,   // priced, so the budget is derived from (amount, price)
+                vec![], // dealroom discretionary is not offered on the marketable path
             )
             .await?;
             info!(
