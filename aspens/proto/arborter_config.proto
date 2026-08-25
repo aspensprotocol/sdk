@@ -16,6 +16,14 @@ service ConfigService {
   rpc DeployContract(DeployContractRequest) returns (DeployContractResponse) {}
   // rpc service to set a chain in the configuration
   rpc SetChain(SetChainRequest) returns (SetChainResponse) {}
+  // Replace one chain's RPC endpoint set declaratively (full replace, one
+  // transaction). Applied LIVE: providers rebuild and the chain's event
+  // listener restarts; no arborter restart. Requires >= 1 enabled endpoint.
+  rpc SetChainRpcs(SetChainRpcsRequest) returns (SetChainRpcsResponse) {}
+  // Probe one endpoint from the arborter's own network position before
+  // committing it: dials it once, returns the chain id it reports, whether
+  // the finalized tag answers, and the round-trip latency.
+  rpc ProbeChainRpc(ProbeChainRpcRequest) returns (ProbeChainRpcResponse) {}
   // rpc service to set a new token to trade
   rpc SetToken(SetTokenRequest) returns (SetTokenResponse) {}
   // rpc service to set a new market to trade
@@ -227,6 +235,34 @@ message TradeContract {
   string address = 2;
 }
 
+// Authentication scheme for RPC endpoints
+enum RpcAuthScheme {
+  RPC_AUTH_NONE = 0;    // no extra auth; the url may still embed a key (query/userinfo)
+  RPC_AUTH_HEADER = 1;  // auth_key = header name (e.g. "x-api-key"), auth_secret = value
+  RPC_AUTH_BASIC = 2;   // auth_key = username, auth_secret = password
+  RPC_AUTH_BEARER = 3;  // auth_key unused, auth_secret = token ("Authorization: Bearer TOKEN")
+}
+
+// An RPC endpoint configuration: URL, auth method, enabled/disabled state
+message RpcEndpoint {
+  // Operator-chosen handle, unique per chain (e.g. "alchemy-primary"). Shown
+  // unmasked everywhere; used to address an endpoint in CLI output.
+  string label = 1;
+  // Full URL. MASKED on read paths: query values and userinfo are replaced
+  // with "***" (scheme + host + path stay visible).
+  string url = 2;
+  RpcAuthScheme auth_scheme = 3;
+  // Meaning depends on auth_scheme (see enum). Visible on reads (it is a
+  // header name or username, not a secret).
+  string auth_key = 4;
+  // The secret. WRITE-ONLY: always "***" on read paths; a SetChainRpcs write
+  // must carry the real value (there is no keep-existing sentinel — edits
+  // re-send the full set, secrets included).
+  string auth_secret = 5;
+  // Disabled endpoints are kept in config but never dialed.
+  bool enabled = 6;
+}
+
 // How far behind the chain head a deposit balance must be before it may
 // back a withdrawal voucher. Deposits credited from an unfinalized read can
 // be reorged out after a voucher has already been redeemed, which is
@@ -256,8 +292,9 @@ message Chain {
   string instance_signer_address = 5;
   // Optional: URL to the chain explorer
   optional string explorer_url = 6;
-  // The RPC URL for the chain
-  string rpc_url = 7;
+  // The chain's RPC endpoint set, priority-ordered. At least one enabled
+  // endpoint is required for the chain to be operatable.
+  repeated RpcEndpoint rpcs = 7;
   // The address of the factory contract on this chain. This is the address to call to deploy a new trading instance
   string factory_address = 8;
   // Finality policy for deposit reads on this chain.
@@ -268,6 +305,39 @@ message Chain {
   map<string, Token> tokens = 11;
   // Confirmations to lag by. Read only when finality = FINALITY_POLICY_CONFIRMATIONS.
   uint32 finality_confirmations = 12;
+}
+
+// Request to set a chain's complete RPC endpoint set
+message SetChainRpcsRequest {
+  // chains.network key, e.g. "flare-coston2"
+  string network = 1;
+  // The chain's COMPLETE new endpoint list, priority-ordered. Secrets must be
+  // real values (reads mask them; there is no keep-existing sentinel).
+  repeated RpcEndpoint rpcs = 2;
+}
+
+// Response with the stored endpoint set (MASKED for read safety)
+message SetChainRpcsResponse {
+  // The stored set, MASKED (what GetConfig will now show for this chain).
+  repeated RpcEndpoint rpcs = 1;
+}
+
+// Request to probe a single RPC endpoint
+message ProbeChainRpcRequest {
+  string network = 1;      // used only to compare chain ids
+  RpcEndpoint endpoint = 2; // probed as-submitted; never stored
+}
+
+// Response with probe results
+message ProbeChainRpcResponse {
+  bool reachable = 1;
+  // Chain id the endpoint reported; caller compares against the chain row.
+  uint64 reported_chain_id = 2;
+  bool chain_id_matches = 3;
+  // Whether the finalized tag / finalized commitment answered (DEP-1 reads
+  // depend on it — a keyless public endpoint often throttles exactly this).
+  bool finalized_tag_ok = 4;
+  uint32 latency_ms = 5;
 }
 
 // Represents a market with a base- and quote- chain token pair
