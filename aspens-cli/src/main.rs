@@ -280,6 +280,7 @@ async fn dispatch_send_order(
     if client.uses_fce() {
         check_flags_supported_over_fce(flags)?;
         check_match_order_ids_supported_over_fce(&match_order_ids)?;
+        check_settle_args_supported_over_fce(&settle)?;
         let wallets: Vec<&Wallet> = [evm.as_ref(), solana.as_ref()]
             .into_iter()
             .flatten()

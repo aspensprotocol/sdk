@@ -19,12 +19,13 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
 /// Print a friendly error message for missing TRADER_PRIVKEY
 fn print_missing_privkey_error() {
     println!();
-    println!("TRADER_PRIVKEY not found");
+    println!("No trader wallet configured");
     println!();
     println!("Hints:");
-    println!("  - Set TRADER_PRIVKEY in your .env file");
-    println!("  - The private key should be a 64-character hex string");
-    println!("  - Do not include the '0x' prefix");
+    println!("  - Set TRADER_PRIVKEY (EVM) and/or TRADER_PRIVKEY_SOLANA (Solana)");
+    println!("    in your .env file — either one is enough for its chains");
+    println!("  - TRADER_PRIVKEY is a 64-character hex string, no '0x' prefix");
+    println!("  - TRADER_PRIVKEY_SOLANA is a base58 or JSON 64-byte keypair");
     println!();
 }
 
@@ -72,7 +73,11 @@ fn load_trader_wallets_or_complain(app_state: &AppState) -> Option<Vec<Wallet>> 
         match Wallet::from_solana_base58(&key).or_else(|_| Wallet::from_solana_json(&key)) {
             Ok(w) => wallets.push(w),
             Err(e) => {
-                print_error(&format_error(&eyre::eyre!(e), "load TRADER_PRIVKEY_SOLANA"));
+                print_error(&format_error(
+                    &eyre::eyre!(e),
+                    "load TRADER_PRIVKEY_SOLANA (fix the key, or remove the \
+                     variable if you only trade EVM chains)",
+                ));
                 return None;
             }
         }
@@ -937,9 +942,40 @@ fn main() {
                 }
             };
 
-            let wallet = match load_trader_wallet_or_complain(&app_state) {
+            // A cancel is authenticated against the order's COLLATERAL
+            // address — the give-leg wallet that signed the order (buy →
+            // quote chain, sell → base chain). Loading only the EVM wallet
+            // here would make a Solana-signed order placeable from this
+            // REPL but not cancelable from it.
+            let mut wallets = match load_trader_wallets_or_complain(&app_state) {
                 Some(w) => w,
                 None => return,
+            };
+            // `Wallet` is deliberately not Clone (it holds key material);
+            // find the index and take ownership out of the vec instead.
+            let picked = send_order::parse_side(&side)
+                .and_then(|s| send_order::origin_network_for_side(&config, &market, s))
+                .and_then(|origin| {
+                    let chain = config
+                        .get_chain(origin)
+                        .ok_or_else(|| eyre::eyre!("chain '{origin}' not in config"))?;
+                    let curve = aspens::wallet::chain_curve(chain);
+                    wallets
+                        .iter()
+                        .position(|w| w.curve() == curve)
+                        .ok_or_else(|| {
+                            eyre::eyre!(
+                                "no wallet of curve {curve:?} for chain '{origin}' — set \
+                                 TRADER_PRIVKEY (EVM) or TRADER_PRIVKEY_SOLANA (Solana)"
+                            )
+                        })
+                });
+            let wallet = match picked {
+                Ok(idx) => wallets.swap_remove(idx),
+                Err(e) => {
+                    print_error(&format_error(&e, "resolve the canceling wallet"));
+                    return;
+                }
             };
 
             let url = app_state.stack_url();

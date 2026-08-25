@@ -1566,14 +1566,37 @@ mod leg_address_tests {
             assert_eq!(b, ew.address());
             assert_eq!(q, sw.address());
 
-            let mangled = sw.address().to_ascii_lowercase();
-            if mangled != sw.address() {
-                assert!(
-                    resolve_leg_addresses("evm", "solana", &ew, &sw, BID, None, Some(mangled))
-                        .is_err(),
-                    "a case-mangled base58 pubkey is a DIFFERENT address"
-                );
-            }
+            // Mangle by swapping the case of ONE character — but only a
+            // swap whose result is still inside the base58 alphabet AND
+            // still passes address validation, so the refusal below can
+            // only come from the give-leg equality check. (Wholesale
+            // lowercasing was ~50% vacuous: any 'L' in the random pubkey
+            // became 'l', which is outside the alphabet, and validation
+            // rejected the string before equality was ever consulted.)
+            let addr = sw.address();
+            let mangled = addr
+                .char_indices()
+                .filter(|(_, c)| c.is_ascii_alphabetic())
+                .map(|(i, c)| {
+                    let swapped = if c.is_ascii_uppercase() {
+                        c.to_ascii_lowercase()
+                    } else {
+                        c.to_ascii_uppercase()
+                    };
+                    let mut s = addr.clone();
+                    s.replace_range(i..i + 1, &swapped.to_string());
+                    s
+                })
+                .find(|s| crate::orders::validate_settle_address("solana", s).is_ok() && *s != addr)
+                .expect("a 43/44-char base58 pubkey has at least one case-swappable char");
+
+            let err = resolve_leg_addresses("evm", "solana", &ew, &sw, BID, None, Some(mangled))
+                .expect_err("a case-mangled base58 pubkey is a DIFFERENT address");
+            assert!(
+                err.to_string().contains("sign"),
+                "the refusal must come from the give-leg signer check, not \
+                 from validation: {err}"
+            );
         }
     }
 }

@@ -170,6 +170,10 @@ pub fn parse_destination_token_bytes32(token: &str) -> Result<[u8; 32]> {
 /// and is echoed byte-verbatim), so catching the typo is this function's
 /// job or nobody's.
 pub fn validate_settle_address(architecture: &str, address: &str) -> Result<()> {
+    // The "solana" sentinel is matched case-insensitively, the same rule as
+    // `wallet::chain_curve` / `chain_client::ARCH_SOLANA` (not referenced
+    // here to keep this module free of client-gated code) — a new
+    // architecture must be added to all of these dispatch points together.
     if architecture.eq_ignore_ascii_case("solana") {
         #[cfg(feature = "solana")]
         return match bs58::decode(address).into_vec() {
