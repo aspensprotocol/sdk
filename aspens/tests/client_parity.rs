@@ -73,7 +73,7 @@ mod order_id_composition_parity {
 
     use aspens::Wallet;
     use aspens::commands::config::config_pb::{
-        Chain, Configuration, GetConfigResponse, Market, Token, TradeContract,
+        Chain, Configuration, GetConfigResponse, Market, RpcEndpoint, Token, TradeContract,
     };
     use aspens::commands::trading::gasless::build_order_commitment;
 
@@ -145,7 +145,12 @@ mod order_id_composition_parity {
             chain_id,
             instance_signer_address: "0x0000000000000000000000000000000000000001".into(),
             explorer_url: None,
-            rpc_url: "http://localhost".into(),
+            rpcs: vec![RpcEndpoint {
+                label: "primary".into(),
+                url: "http://localhost".into(),
+                enabled: true,
+                ..Default::default()
+            }],
             factory_address: "0xfactory".into(),
             trade_contract: Some(TradeContract {
                 contract_id: None,

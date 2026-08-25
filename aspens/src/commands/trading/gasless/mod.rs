@@ -700,7 +700,9 @@ pub(crate) mod tests {
         quote_dec: u32,
         pair_dec: i32,
     ) -> (GetConfigResponse, Market) {
-        use crate::commands::config::config_pb::{Chain, Configuration, Market, TradeContract};
+        use crate::commands::config::config_pb::{
+            Chain, Configuration, Market, RpcEndpoint, TradeContract,
+        };
         use std::collections::HashMap;
 
         let mut base_tokens = HashMap::new();
@@ -733,7 +735,12 @@ pub(crate) mod tests {
             chain_id: 1,
             instance_signer_address: "0x0000000000000000000000000000000000000001".into(),
             explorer_url: None,
-            rpc_url: "http://localhost".into(),
+            rpcs: vec![RpcEndpoint {
+                label: "primary".into(),
+                url: "http://localhost".into(),
+                enabled: true,
+                ..Default::default()
+            }],
             factory_address: "0xfactory".into(),
             trade_contract: Some(TradeContract {
                 contract_id: None,
@@ -752,7 +759,12 @@ pub(crate) mod tests {
             chain_id: 2,
             instance_signer_address: "0x0000000000000000000000000000000000000002".into(),
             explorer_url: None,
-            rpc_url: "http://localhost".into(),
+            rpcs: vec![RpcEndpoint {
+                label: "primary".into(),
+                url: "http://localhost".into(),
+                enabled: true,
+                ..Default::default()
+            }],
             factory_address: "0xfactory".into(),
             trade_contract: Some(TradeContract {
                 contract_id: None,

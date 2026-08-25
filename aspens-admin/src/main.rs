@@ -3,7 +3,10 @@
 //! Administrative command-line interface for managing Aspens Market Stacks  configuration.
 //! Requires authentication via EIP-712 signature to perform admin operations.
 
-use aspens::commands::admin::{self, Chain, CreateInstanceParams, SetMarketParams, Token};
+use aspens::chain_client;
+use aspens::commands::admin::{
+    self, Chain, CreateInstanceParams, RpcAuthScheme, RpcEndpoint, SetMarketParams, Token,
+};
 use aspens::commands::auth;
 use aspens::commands::config;
 use aspens::commands::trading::balance;
@@ -135,6 +138,12 @@ enum Commands {
     DeleteChain {
         /// Network identifier to delete (e.g., "base-sepolia")
         network: String,
+    },
+
+    /// Manage a chain's RPC endpoint set (list / set / probe)
+    Rpc {
+        #[command(subcommand)]
+        action: RpcCommand,
     },
 
     // ========================================================================
@@ -296,6 +305,148 @@ enum Commands {
 
     /// Show balances for owner, signers, and contracts across all chains
     Balances,
+}
+
+/// `aspens-admin rpc <list|set|probe>` — per-chain RPC endpoint management.
+#[derive(Debug, Subcommand)]
+enum RpcCommand {
+    /// List a chain's current RPC endpoint set (via `GetConfig`, unauthenticated).
+    ///
+    /// The result is MASKED exactly as the server returns it — `auth_secret`
+    /// reads "***" and a url's query values/userinfo read "***". There is no
+    /// unmask path; this prints the masked set as-is.
+    List {
+        /// Network identifier (e.g., "base-sepolia")
+        network: String,
+    },
+
+    /// Replace a chain's complete RPC endpoint set (full replace, one call).
+    ///
+    /// Repeat `--endpoint` for multiple endpoints; the order given is the
+    /// priority order the arborter fails over in. Requires at least one
+    /// enabled endpoint — refused client-side here, and again by the server.
+    Set {
+        /// Network identifier (e.g., "base-sepolia")
+        network: String,
+
+        /// One endpoint: `label=url[,scheme=none|header|basic|bearer]\
+        ///   [,key=<header-name-or-username>][,secret=<value>][,disabled]`.
+        /// `scheme` defaults to `none`; omit `disabled` to leave it enabled.
+        /// Repeatable — order sets priority.
+        #[arg(long = "endpoint", value_parser = parse_rpc_endpoint_flag, required = true)]
+        endpoint: Vec<RpcEndpoint>,
+    },
+
+    /// Probe a candidate RPC endpoint from the arborter's own network
+    /// position, before committing it with `rpc set`. Never stored.
+    Probe {
+        /// Network identifier, used only to compare chain ids
+        network: String,
+
+        /// The endpoint URL to probe
+        url: String,
+
+        /// Auth scheme: none, header, basic, or bearer
+        #[arg(long, default_value = "none", value_parser = parse_auth_scheme)]
+        scheme: RpcAuthScheme,
+
+        /// auth_key: header name for `header`, username for `basic`;
+        /// unused for `bearer`/`none`
+        #[arg(long, default_value = "")]
+        key: String,
+
+        /// auth_secret: header value / password / bearer token; unused for `none`
+        #[arg(long, default_value = "")]
+        secret: String,
+    },
+}
+
+/// Parse a `scheme=...` value shared by `rpc probe --scheme` and
+/// [`parse_rpc_endpoint_flag`]'s `scheme=` attribute — the two accept
+/// exactly the same vocabulary.
+fn parse_auth_scheme(s: &str) -> Result<RpcAuthScheme, String> {
+    match s {
+        "none" => Ok(RpcAuthScheme::RpcAuthNone),
+        "header" => Ok(RpcAuthScheme::RpcAuthHeader),
+        "basic" => Ok(RpcAuthScheme::RpcAuthBasic),
+        "bearer" => Ok(RpcAuthScheme::RpcAuthBearer),
+        other => Err(format!(
+            "unrecognized auth scheme '{other}' (expected: none, header, basic, bearer)"
+        )),
+    }
+}
+
+/// Parse one `--endpoint` flag value for `rpc set`:
+/// `label=url[,scheme=none|header|basic|bearer][,key=...][,secret=...][,disabled]`.
+///
+/// The label is everything before the FIRST `=`; the URL is everything up to
+/// the first `,` after that (so a URL's own `=`, e.g. a query string, is
+/// fine — only a literal `,` inside the URL would be misread as an attribute
+/// separator, which this format does not attempt to escape). Remaining
+/// comma-separated segments are `key=value` attributes, except the bare
+/// literal `disabled`, which clears `enabled`.
+fn parse_rpc_endpoint_flag(input: &str) -> Result<RpcEndpoint, String> {
+    let (label, rest) = input.split_once('=').ok_or_else(|| {
+        format!("invalid --endpoint '{input}': expected 'label=url[,attr=value...][,disabled]'")
+    })?;
+    if label.is_empty() {
+        return Err(format!(
+            "invalid --endpoint '{input}': label must not be empty"
+        ));
+    }
+
+    let mut parts = rest.split(',');
+    let url = parts.next().unwrap_or("").to_string();
+    if url.is_empty() {
+        return Err(format!(
+            "invalid --endpoint '{input}': url must not be empty"
+        ));
+    }
+
+    let mut auth_scheme = RpcAuthScheme::RpcAuthNone;
+    let mut auth_key = String::new();
+    let mut auth_secret = String::new();
+    let mut enabled = true;
+
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if part == "disabled" {
+            enabled = false;
+            continue;
+        }
+        let (key, value) = part.split_once('=').ok_or_else(|| {
+            format!(
+                "invalid --endpoint '{input}': unrecognized attribute '{part}' \
+                 (expected 'scheme=...', 'key=...', 'secret=...', or 'disabled')"
+            )
+        })?;
+        match key {
+            "scheme" => {
+                auth_scheme = parse_auth_scheme(value)
+                    .map_err(|e| format!("invalid --endpoint '{input}': {e}"))?;
+            }
+            "key" => auth_key = value.to_string(),
+            "secret" => auth_secret = value.to_string(),
+            other => {
+                return Err(format!(
+                    "invalid --endpoint '{input}': unrecognized attribute '{other}' \
+                     (expected 'scheme=...', 'key=...', 'secret=...', or 'disabled')"
+                ));
+            }
+        }
+    }
+
+    Ok(RpcEndpoint {
+        label: label.to_string(),
+        url,
+        auth_scheme: auth_scheme as i32,
+        auth_key,
+        auth_secret,
+        enabled,
+    })
 }
 
 #[tokio::main]
@@ -476,7 +627,17 @@ async fn run() -> Result<()> {
                 chain_id,
                 instance_signer_address: instance_signer_address.unwrap_or_default(),
                 explorer_url,
-                rpc_url,
+                // `--rpc-url` is sugar for a single-endpoint list labeled
+                // "primary", unauthenticated. Use `rpc set` for a
+                // multi-endpoint / authenticated set.
+                rpcs: vec![RpcEndpoint {
+                    label: "primary".to_string(),
+                    url: rpc_url,
+                    auth_scheme: RpcAuthScheme::RpcAuthNone as i32,
+                    auth_key: String::new(),
+                    auth_secret: String::new(),
+                    enabled: true,
+                }],
                 factory_address,
                 trade_contract: None,
                 tokens: HashMap::new(),
@@ -533,6 +694,134 @@ async fn run() -> Result<()> {
                 ));
             }
         }
+
+        // ====================================================================
+        // RPC Commands
+        // ====================================================================
+        Commands::Rpc { action } => match action {
+            RpcCommand::List { network } => {
+                let endpoints = executor
+                    .execute(admin::get_chain_rpcs(stack_url.clone(), network.clone()))
+                    .map_err(|e| {
+                        eyre::eyre!(format_error(
+                            &e,
+                            &format!("list RPC endpoints for '{}'", network)
+                        ))
+                    })?;
+
+                println!(
+                    "RPC endpoints for '{}' (masked — secrets and url query/userinfo read \"***\"):",
+                    network
+                );
+                if endpoints.is_empty() {
+                    println!("  (none configured)");
+                } else {
+                    let mut table = Table::new();
+                    table.load_style(UTF8_BORDERS_ONLY);
+                    table.set_header(vec![
+                        "#", "Label", "URL", "Scheme", "Key", "Secret", "Enabled",
+                    ]);
+                    for (i, ep) in endpoints.iter().enumerate() {
+                        let scheme = RpcAuthScheme::try_from(ep.auth_scheme)
+                            .map(|s| s.as_str_name().to_string())
+                            .unwrap_or_else(|_| ep.auth_scheme.to_string());
+                        table.add_row(vec![
+                            (i + 1).to_string(),
+                            ep.label.clone(),
+                            ep.url.clone(),
+                            scheme,
+                            ep.auth_key.clone(),
+                            ep.auth_secret.clone(),
+                            ep.enabled.to_string(),
+                        ]);
+                    }
+                    println!("{}", table);
+                }
+            }
+
+            RpcCommand::Set { network, endpoint } => {
+                let jwt = get_jwt()?;
+
+                // clap's `required = true` already refuses zero `--endpoint`
+                // flags; this catches the remaining zero-EFFECTIVE-endpoint
+                // case clap cannot see: every endpoint given, but all marked
+                // `disabled`.
+                if !endpoint.iter().any(|e| e.enabled) {
+                    return Err(eyre::eyre!(
+                        "at least one --endpoint must be enabled: all {} given are `disabled`",
+                        endpoint.len()
+                    ));
+                }
+
+                info!(
+                    "Setting {} RPC endpoint(s) for chain '{}'",
+                    endpoint.len(),
+                    network
+                );
+                let result = executor
+                    .execute(admin::set_chain_rpcs(
+                        stack_url.clone(),
+                        jwt,
+                        network.clone(),
+                        endpoint,
+                    ))
+                    .map_err(|e| {
+                        eyre::eyre!(format_error(
+                            &e,
+                            &format!("set RPC endpoints for '{}'", network)
+                        ))
+                    })?;
+
+                println!(
+                    "RPC endpoints for '{}' updated ({} endpoint(s)):",
+                    network,
+                    result.rpcs.len()
+                );
+                for ep in &result.rpcs {
+                    let suffix = if ep.enabled { "" } else { " [disabled]" };
+                    println!("  - {} ({}){}", ep.label, ep.url, suffix);
+                }
+            }
+
+            RpcCommand::Probe {
+                network,
+                url,
+                scheme,
+                key,
+                secret,
+            } => {
+                let jwt = get_jwt()?;
+                let endpoint = RpcEndpoint {
+                    label: "probe".to_string(),
+                    url: url.clone(),
+                    auth_scheme: scheme as i32,
+                    auth_key: key,
+                    auth_secret: secret,
+                    enabled: true,
+                };
+
+                let result = executor
+                    .execute(admin::probe_chain_rpc(
+                        stack_url.clone(),
+                        jwt,
+                        network.clone(),
+                        endpoint,
+                    ))
+                    .map_err(|e| {
+                        eyre::eyre!(format_error(
+                            &e,
+                            &format!("probe RPC endpoint for '{}'", network)
+                        ))
+                    })?;
+
+                println!("Probe result for '{}' on '{}':", url, network);
+                println!("  Reachable:         {}", result.reachable);
+                println!("  Reported chain id: {}", result.reported_chain_id);
+                println!("  Chain id matches:  {}", result.chain_id_matches);
+                println!("  Finalized tag ok:  {}", result.finalized_tag_ok);
+                println!("  Latency:           {} ms", result.latency_ms);
+            }
+        },
 
         // ====================================================================
         // Token Commands
@@ -787,7 +1076,7 @@ async fn run() -> Result<()> {
                 let params = CreateInstanceParams {
                     factory_address: calldata_response.factory_address.clone(),
                     calldata: calldata_response.calldata.clone(),
-                    rpc_url: chain.rpc_url.clone(),
+                    rpc_url: chain_client::chain_rpc_url(chain)?,
                     chain_id: calldata_response.chain_id as u64,
                     privkey: privkey.clone(),
                 };
@@ -807,7 +1096,7 @@ async fn run() -> Result<()> {
                 );
                 let tx_hash = executor
                     .execute(admin::broadcast_transaction(
-                        chain.rpc_url.clone(),
+                        chain_client::chain_rpc_url(chain)?,
                         signed_tx,
                     ))
                     .map_err(|e| {
@@ -1165,6 +1454,12 @@ async fn run() -> Result<()> {
 
                 println!("── {} (chain_id: {}) ──", chain.network, chain.chain_id);
 
+                // Resolved once per chain: the arborter masks each endpoint's
+                // url, so without a client-side override this errors — carry
+                // that through as a per-cell "error" rather than aborting the
+                // whole balances report.
+                let rpc_url = chain_client::chain_rpc_url(chain);
+
                 let addresses: Vec<(Address, &str)> = [
                     owner_address.map(|a| (a, "Owner")),
                     signer_addr.map(|a| (a, "Signer")),
@@ -1175,17 +1470,22 @@ async fn run() -> Result<()> {
                 .collect();
 
                 for (addr, role) in &addresses {
-                    let gas =
-                        match balance::call_get_native_balance_for_address(&chain.rpc_url, *addr)
-                            .await
-                        {
-                            Ok(v) => balance::format_balance(v, 18),
-                            Err(e) => {
-                                fetch_warnings
-                                    .push(format!("{role} gas on {}: {e}", chain.network));
-                                "error".into()
+                    let gas = match &rpc_url {
+                        Ok(rpc) => {
+                            match balance::call_get_native_balance_for_address(rpc, *addr).await {
+                                Ok(v) => balance::format_balance(v, 18),
+                                Err(e) => {
+                                    fetch_warnings
+                                        .push(format!("{role} gas on {}: {e}", chain.network));
+                                    "error".into()
+                                }
                             }
-                        };
+                        }
+                        Err(e) => {
+                            fetch_warnings.push(format!("{role} gas on {}: {e}", chain.network));
+                            "error".into()
+                        }
+                    };
 
                     let mut row = vec![
                         role.to_string(),
@@ -1195,14 +1495,23 @@ async fn run() -> Result<()> {
 
                     for sym in &token_symbols {
                         if let Some(token) = chain.tokens.get(sym) {
-                            let bal = match balance::call_get_erc20_balance_for_address(
-                                &chain.rpc_url,
-                                &token.address,
-                                *addr,
-                            )
-                            .await
-                            {
-                                Ok(v) => balance::format_balance(v, token.decimals),
+                            let bal = match &rpc_url {
+                                Ok(rpc) => match balance::call_get_erc20_balance_for_address(
+                                    rpc,
+                                    &token.address,
+                                    *addr,
+                                )
+                                .await
+                                {
+                                    Ok(v) => balance::format_balance(v, token.decimals),
+                                    Err(e) => {
+                                        fetch_warnings.push(format!(
+                                            "{role} {sym} on {}: {e}",
+                                            chain.network
+                                        ));
+                                        "error".into()
+                                    }
+                                },
                                 Err(e) => {
                                     fetch_warnings
                                         .push(format!("{role} {sym} on {}: {e}", chain.network));
@@ -1227,11 +1536,245 @@ async fn run() -> Result<()> {
                     eprintln!("  - {w}");
                 }
                 eprintln!(
-                    "  hint: check the chain's rpc_url / that the RPC endpoint is reachable."
+                    "  hint: check the chain's RPC endpoints (`aspens-admin rpc list <network>`) \
+                     / that one is reachable."
                 );
             }
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod rpc_endpoint_flag_tests {
+    use super::*;
+
+    /// The simplest form: `label=url`, no auth attributes. `scheme` defaults
+    /// to `none`, `key`/`secret` are empty, and the endpoint is enabled.
+    #[test]
+    fn parses_bare_label_and_url() {
+        let ep = parse_rpc_endpoint_flag("primary=https://rpc.example.com").unwrap();
+        assert_eq!(ep.label, "primary");
+        assert_eq!(ep.url, "https://rpc.example.com");
+        assert_eq!(ep.auth_scheme, RpcAuthScheme::RpcAuthNone as i32);
+        assert_eq!(ep.auth_key, "");
+        assert_eq!(ep.auth_secret, "");
+        assert!(ep.enabled);
+    }
+
+    /// A url containing its own `=` (a query string) must not confuse the
+    /// label/url split — only the FIRST `=` in the whole flag value is the
+    /// label boundary.
+    #[test]
+    fn url_with_its_own_equals_sign_is_preserved() {
+        let ep = parse_rpc_endpoint_flag("primary=https://rpc.example.com/v2?key=abc").unwrap();
+        assert_eq!(ep.label, "primary");
+        assert_eq!(ep.url, "https://rpc.example.com/v2?key=abc");
+    }
+
+    #[test]
+    fn parses_header_scheme() {
+        let ep = parse_rpc_endpoint_flag(
+            "alchemy=https://eth.example.com/v2,scheme=header,key=x-api-key,secret=shh",
+        )
+        .unwrap();
+        assert_eq!(ep.auth_scheme, RpcAuthScheme::RpcAuthHeader as i32);
+        assert_eq!(ep.auth_key, "x-api-key");
+        assert_eq!(ep.auth_secret, "shh");
+        assert!(ep.enabled);
+    }
+
+    #[test]
+    fn parses_basic_scheme() {
+        let ep = parse_rpc_endpoint_flag(
+            "basic-rpc=https://rpc.example.com,scheme=basic,key=user,secret=pass",
+        )
+        .unwrap();
+        assert_eq!(ep.auth_scheme, RpcAuthScheme::RpcAuthBasic as i32);
+        assert_eq!(ep.auth_key, "user");
+        assert_eq!(ep.auth_secret, "pass");
+    }
+
+    /// `bearer` ignores `key` (per the proto's documented contract) but this
+    /// parser does not enforce that — it just carries whatever `key=` was
+    /// given, same as the wire message allows. Only `secret` matters here.
+    #[test]
+    fn parses_bearer_scheme() {
+        let ep = parse_rpc_endpoint_flag(
+            "bearer-rpc=https://rpc.example.com,scheme=bearer,secret=token123",
+        )
+        .unwrap();
+        assert_eq!(ep.auth_scheme, RpcAuthScheme::RpcAuthBearer as i32);
+        assert_eq!(ep.auth_key, "");
+        assert_eq!(ep.auth_secret, "token123");
+    }
+
+    #[test]
+    fn explicit_scheme_none_is_the_default_shape() {
+        let ep = parse_rpc_endpoint_flag("primary=https://rpc.example.com,scheme=none").unwrap();
+        assert_eq!(ep.auth_scheme, RpcAuthScheme::RpcAuthNone as i32);
+    }
+
+    #[test]
+    fn disabled_attribute_clears_enabled() {
+        let ep = parse_rpc_endpoint_flag("backup=https://rpc2.example.com,disabled").unwrap();
+        assert!(!ep.enabled);
+    }
+
+    /// `disabled` combined with auth attributes, in either order — the
+    /// bare-word attribute must not be confused with a `key=value` pair.
+    #[test]
+    fn disabled_combines_with_auth_attributes() {
+        let ep = parse_rpc_endpoint_flag(
+            "backup=https://rpc2.example.com,scheme=header,key=x-api-key,secret=shh,disabled",
+        )
+        .unwrap();
+        assert!(!ep.enabled);
+        assert_eq!(ep.auth_scheme, RpcAuthScheme::RpcAuthHeader as i32);
+    }
+
+    #[test]
+    fn missing_equals_sign_is_an_error() {
+        assert!(parse_rpc_endpoint_flag("no-equals-here").is_err());
+    }
+
+    #[test]
+    fn empty_label_is_an_error() {
+        assert!(parse_rpc_endpoint_flag("=https://rpc.example.com").is_err());
+    }
+
+    #[test]
+    fn empty_url_is_an_error() {
+        assert!(parse_rpc_endpoint_flag("primary=").is_err());
+    }
+
+    #[test]
+    fn unrecognized_scheme_is_an_error() {
+        let err =
+            parse_rpc_endpoint_flag("primary=https://rpc.example.com,scheme=nope").unwrap_err();
+        assert!(
+            err.contains("nope"),
+            "error should name the bad scheme: {err}"
+        );
+    }
+
+    #[test]
+    fn unrecognized_attribute_is_an_error() {
+        assert!(parse_rpc_endpoint_flag("primary=https://rpc.example.com,bogus=1").is_err());
+    }
+
+    /// clap surfaces a malformed `--endpoint` (bad scheme) as a parse error
+    /// from `Cli::try_parse_from`, not a panic or a silently-accepted value —
+    /// this is what makes it "a clap error" rather than just an error from
+    /// the bare parser function.
+    #[test]
+    fn malformed_scheme_is_a_clap_error() {
+        let result = Cli::try_parse_from([
+            "aspens-admin",
+            "rpc",
+            "set",
+            "base-sepolia",
+            "--endpoint",
+            "primary=https://a.example.com,scheme=nope",
+        ]);
+        assert!(result.is_err());
+    }
+
+    /// Zero `--endpoint` flags is refused by clap itself (`required = true`),
+    /// before any handler code runs.
+    #[test]
+    fn zero_endpoint_flags_is_a_clap_error() {
+        let result = Cli::try_parse_from(["aspens-admin", "rpc", "set", "base-sepolia"]);
+        assert!(result.is_err());
+    }
+
+    /// Two `--endpoint` flags land in `Vec<RpcEndpoint>` in the order given —
+    /// that order IS the failover priority, so clap's natural accumulation
+    /// order must not be reshuffled.
+    #[test]
+    fn two_endpoint_flags_preserve_order() {
+        let cli = Cli::try_parse_from([
+            "aspens-admin",
+            "rpc",
+            "set",
+            "base-sepolia",
+            "--endpoint",
+            "primary=https://a.example.com",
+            "--endpoint",
+            "backup=https://b.example.com,disabled",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Rpc {
+                action: RpcCommand::Set { network, endpoint },
+            } => {
+                assert_eq!(network, "base-sepolia");
+                assert_eq!(endpoint.len(), 2);
+                assert_eq!(endpoint[0].label, "primary");
+                assert_eq!(endpoint[1].label, "backup");
+                assert!(endpoint[0].enabled);
+                assert!(!endpoint[1].enabled);
+            }
+            other => panic!("expected Rpc::Set, got {other:?}"),
+        }
+    }
+
+    /// `rpc probe`'s own `--scheme` flag goes through the same
+    /// [`parse_auth_scheme`] vocabulary as `--endpoint`'s `scheme=` attribute.
+    #[test]
+    fn probe_scheme_flag_uses_the_same_vocabulary() {
+        let cli = Cli::try_parse_from([
+            "aspens-admin",
+            "rpc",
+            "probe",
+            "base-sepolia",
+            "https://rpc.example.com",
+            "--scheme",
+            "bearer",
+            "--secret",
+            "tok",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Rpc {
+                action:
+                    RpcCommand::Probe {
+                        network,
+                        url,
+                        scheme,
+                        secret,
+                        ..
+                    },
+            } => {
+                assert_eq!(network, "base-sepolia");
+                assert_eq!(url, "https://rpc.example.com");
+                assert_eq!(scheme, RpcAuthScheme::RpcAuthBearer);
+                assert_eq!(secret, "tok");
+            }
+            other => panic!("expected Rpc::Probe, got {other:?}"),
+        }
+    }
+
+    /// `rpc probe` with no `--scheme` defaults to `none`.
+    #[test]
+    fn probe_scheme_defaults_to_none() {
+        let cli = Cli::try_parse_from([
+            "aspens-admin",
+            "rpc",
+            "probe",
+            "base-sepolia",
+            "https://rpc.example.com",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Rpc {
+                action: RpcCommand::Probe { scheme, .. },
+            } => assert_eq!(scheme, RpcAuthScheme::RpcAuthNone),
+            other => panic!("expected Rpc::Probe, got {other:?}"),
+        }
+    }
 }

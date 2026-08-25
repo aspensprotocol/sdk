@@ -115,7 +115,7 @@ async fn solana_deposit(
         // fast with a clear error instead of an opaque simulation failure.
         // Headroom: tx fee + possible ATA rent (~0.002 SOL).
         const WRAP_FEE_HEADROOM: u64 = 3_000_000;
-        let rpc = RpcClient::new(chain.rpc_url.clone());
+        let rpc = RpcClient::new(crate::chain_client::chain_rpc_url(chain)?);
         let lamports = rpc.get_balance(&user).await.unwrap_or(0);
         let required = amount.saturating_add(WRAP_FEE_HEADROOM);
         if lamports < required {
@@ -234,7 +234,7 @@ async fn call_deposit_from_config_evm(
         token_symbol,
         network,
         chain.chain_id,
-        chain.rpc_url
+        crate::chain_client::chain_rpc_url(chain).unwrap_or_default()
     );
 
     // Perform the deposit
@@ -245,7 +245,7 @@ async fn call_deposit_from_config_evm(
     let token_addr: Address = token.address.parse()?;
     let signer_address = signer.address();
     let wallet = EthereumWallet::new(signer);
-    // The arborter masks rpc_url; the client-side override is authoritative.
+    // The arborter masks each endpoint's url; the client-side override is authoritative.
     let rpc_url = Url::parse(&crate::chain_client::chain_rpc_url(chain)?)?;
 
     // Set up the provider

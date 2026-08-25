@@ -342,7 +342,7 @@ async fn solana_withdraw(
     //    the funds stay immediately withdrawable.
     {
         use solana_client::nonblocking::rpc_client::RpcClient;
-        let rpc = RpcClient::new(chain.rpc_url.clone());
+        let rpc = RpcClient::new(crate::chain_client::chain_rpc_url(chain)?);
         let lamports = rpc.get_balance(&user).await.unwrap_or(0);
         if lamports < MIN_SOL_LAMPORTS {
             return Err(eyre::eyre!(
@@ -592,7 +592,7 @@ async fn call_withdraw_from_config_evm(
         token_symbol,
         network,
         chain.chain_id,
-        chain.rpc_url
+        crate::chain_client::chain_rpc_url(chain).unwrap_or_default()
     );
 
     let contract_addr: Address = contract_address.parse()?;
@@ -602,7 +602,7 @@ async fn call_withdraw_from_config_evm(
     // Build the wallet-enabled provider up front so the gas pre-check and the
     // submit share it.
     let wallet = EthereumWallet::new(signer.clone());
-    // The arborter masks rpc_url; the client-side override is authoritative.
+    // The arborter masks each endpoint's url; the client-side override is authoritative.
     let rpc_url = Url::parse(&crate::chain_client::chain_rpc_url(chain)?)?;
     let provider = match named_chain {
         Some(named) => ProviderBuilder::new()
