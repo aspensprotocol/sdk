@@ -142,6 +142,8 @@ async fn send_order_roundtrip_against_live_stack() -> Result<()> {
         false, // hidden — live happy-path test exercises the regular visible-order flow
         quote_budget,
         vec![], // match_order_ids — this test exercises the normal (non-dealroom) path
+        None,   // base_address — settle to the wallet's own address
+        None,   // quote_address — settle to the wallet's own address
     )
     .await?;
 

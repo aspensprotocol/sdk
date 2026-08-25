@@ -91,6 +91,11 @@ fn main() -> Result<()> {
             // match_order_ids: empty for a normal order. Non-empty turns this
             // into a dealroom discretionary fill against those resting ids.
             vec![],
+            // base_address / quote_address: None settles each leg to the
+            // wallet's own address. Set the RECEIVING leg to settle
+            // proceeds to a different address on that chain.
+            None,
+            None,
         )
         .await
     })?;

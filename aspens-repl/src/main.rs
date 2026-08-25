@@ -49,6 +49,41 @@ fn load_trader_wallet_or_complain(app_state: &AppState) -> Option<Wallet> {
     }
 }
 
+/// Load every trader wallet present in the session env: `TRADER_PRIVKEY`
+/// (EVM) and/or `TRADER_PRIVKEY_SOLANA` (Solana keypair, base58 or JSON).
+/// Order placement picks a wallet per market leg by curve, and a market
+/// with a Solana leg is unplaceable with only an EVM key — so the order
+/// commands load the full set rather than assuming EVM. Returns `None`
+/// (after printing why) when no key is present, or when a key that IS
+/// present is malformed — a malformed key is a broken setup to surface,
+/// not an absence to shrug off.
+fn load_trader_wallets_or_complain(app_state: &AppState) -> Option<Vec<Wallet>> {
+    let mut wallets = Vec::new();
+    if let Some(key) = app_state.get_env("TRADER_PRIVKEY") {
+        match Wallet::from_evm_hex(&key) {
+            Ok(w) => wallets.push(w),
+            Err(e) => {
+                print_error(&format_error(&eyre::eyre!(e), "load TRADER_PRIVKEY"));
+                return None;
+            }
+        }
+    }
+    if let Some(key) = app_state.get_env("TRADER_PRIVKEY_SOLANA") {
+        match Wallet::from_solana_base58(&key).or_else(|_| Wallet::from_solana_json(&key)) {
+            Ok(w) => wallets.push(w),
+            Err(e) => {
+                print_error(&format_error(&eyre::eyre!(e), "load TRADER_PRIVKEY_SOLANA"));
+                return None;
+            }
+        }
+    }
+    if wallets.is_empty() {
+        print_missing_privkey_error();
+        return None;
+    }
+    Some(wallets)
+}
+
 /// Print a friendly error message
 fn print_error(message: &str) {
     println!();
@@ -160,6 +195,29 @@ struct ReplCli {
     env_file: Option<String>,
 }
 
+/// The optional settlement-address overrides, shared by every order command.
+///
+/// An order carries one account address per chain leg; the venue credits
+/// fill proceeds to those exact strings. By default both are the trader
+/// wallets' own addresses. Overriding the RECEIVING leg settles proceeds
+/// to a different address; overriding the GIVING leg may only restate the
+/// signing wallet's address (the venue verifies the signature against it).
+/// Passing a flag is the acknowledgement that you mean it: nothing can
+/// check that anyone holds the key to a redirected address, and funds
+/// credited there are withdrawable only by that key's holder.
+#[derive(Debug, Clone, Default, clap::Args)]
+struct SettleArgs {
+    /// Settle the BASE leg to this address (must be valid on the base
+    /// chain: 0x-prefixed hex on EVM, base58 pubkey on Solana). On a SELL
+    /// this is the giving leg and may only restate your own address.
+    #[arg(long)]
+    base_address: Option<String>,
+    /// Settle the QUOTE leg to this address (same per-chain rules). On a
+    /// BUY this is the giving leg and may only restate your own address.
+    #[arg(long)]
+    quote_address: Option<String>,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "", author, version, about, long_about = None)]
 enum ReplCommand {
@@ -207,6 +265,9 @@ enum ReplCommand {
         /// effect here is anonymous taking.
         #[arg(long, default_value_t = false)]
         hidden: bool,
+        /// Settlement-address overrides (see the flags' own help).
+        #[command(flatten)]
+        settle: SettleArgs,
     },
     /// Send a limit BUY order (executes at specified price or better)
     BuyLimit {
@@ -232,6 +293,9 @@ enum ReplCommand {
         /// remainder is canceled, never rested (IOC).
         #[arg(long = "match-order-id")]
         match_order_ids: Vec<String>,
+        /// Settlement-address overrides (see the flags' own help).
+        #[command(flatten)]
+        settle: SettleArgs,
     },
     /// Send a market SELL order (executes at best available price)
     SellMarket {
@@ -242,6 +306,9 @@ enum ReplCommand {
         /// Invisible order: see `buy-market --hidden`.
         #[arg(long, default_value_t = false)]
         hidden: bool,
+        /// Settlement-address overrides (see the flags' own help).
+        #[command(flatten)]
+        settle: SettleArgs,
     },
     /// Send a limit SELL order (executes at specified price or better)
     SellLimit {
@@ -260,6 +327,9 @@ enum ReplCommand {
         /// Dealroom: see `buy-limit --match-order-id`.
         #[arg(long = "match-order-id")]
         match_order_ids: Vec<String>,
+        /// Settlement-address overrides (see the flags' own help).
+        #[command(flatten)]
+        settle: SettleArgs,
     },
     /// Cancel an existing order by its ID
     CancelOrder {
@@ -532,6 +602,7 @@ fn main() {
             amount,
             quote_budget,
             hidden,
+            settle,
         } => {
             info!(
                 "Sending market BUY order for {amount} on market {market} \
@@ -547,7 +618,7 @@ fn main() {
                 }
             };
 
-            let wallet = match load_trader_wallet_or_complain(&app_state) {
+            let wallets = match load_trader_wallets_or_complain(&app_state) {
                 Some(w) => w,
                 None => return,
             };
@@ -557,18 +628,20 @@ fn main() {
             let amt = amount.clone();
             let budget = quote_budget.clone();
             let res = executor.execute(async move {
-                send_order::send_order_with_wallet(
+                send_order::send_order_with_wallets(
                     url,
                     mkt,
                     1, // Buy side
                     amt,
                     None, // No limit price (market order)
-                    &wallet,
+                    &wallets.iter().collect::<Vec<&Wallet>>(),
                     config,
                     false, // post_only meaningless for market orders
                     hidden,
                     Some(budget), // what actually bounds a market buy
                     vec![],       // dealroom discretionary requires a limit price; not offered here
+                    settle.base_address,
+                    settle.quote_address,
                 )
                 .await
             });
@@ -578,6 +651,9 @@ fn main() {
                         "Market buy order sent successfully (order_id: 0x{})",
                         hex::encode(&result.order_id)
                     );
+                    if let Some(line) = result.settlement_summary() {
+                        info!("{line}");
+                    }
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {
@@ -599,6 +675,7 @@ fn main() {
             post_only,
             hidden,
             match_order_ids,
+            settle,
         } => {
             info!(
                 "Sending limit BUY order for {amount} at price {price} on market {market} \
@@ -626,7 +703,7 @@ fn main() {
                 }
             };
 
-            let wallet = match load_trader_wallet_or_complain(&app_state) {
+            let wallets = match load_trader_wallets_or_complain(&app_state) {
                 Some(w) => w,
                 None => return,
             };
@@ -636,18 +713,20 @@ fn main() {
             let amt = amount.clone();
             let prc = price.clone();
             let res = executor.execute(async move {
-                send_order::send_order_with_wallet(
+                send_order::send_order_with_wallets(
                     url,
                     mkt,
                     1, // Buy side
                     amt,
                     Some(prc),
-                    &wallet,
+                    &wallets.iter().collect::<Vec<&Wallet>>(),
                     config,
                     post_only,
                     hidden,
                     None, // a limit order's budget is derived: quantity x price
                     match_order_ids,
+                    settle.base_address,
+                    settle.quote_address,
                 )
                 .await
             });
@@ -657,6 +736,9 @@ fn main() {
                         "Limit buy order sent successfully (order_id: 0x{})",
                         hex::encode(&result.order_id)
                     );
+                    if let Some(line) = result.settlement_summary() {
+                        info!("{line}");
+                    }
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {
@@ -678,6 +760,7 @@ fn main() {
             market,
             amount,
             hidden,
+            settle,
         } => {
             info!("Sending market SELL order for {amount} on market {market} (hidden={hidden})");
 
@@ -690,7 +773,7 @@ fn main() {
                 }
             };
 
-            let wallet = match load_trader_wallet_or_complain(&app_state) {
+            let wallets = match load_trader_wallets_or_complain(&app_state) {
                 Some(w) => w,
                 None => return,
             };
@@ -699,18 +782,20 @@ fn main() {
             let mkt = market.clone();
             let amt = amount.clone();
             let res = executor.execute(async move {
-                send_order::send_order_with_wallet(
+                send_order::send_order_with_wallets(
                     url,
                     mkt,
                     2, // Sell side
                     amt,
                     None, // No limit price (market order)
-                    &wallet,
+                    &wallets.iter().collect::<Vec<&Wallet>>(),
                     config,
                     false, // post_only meaningless for market orders
                     hidden,
                     None,   // an ASK gives base: its budget IS its quantity
                     vec![], // dealroom discretionary requires a limit price; not offered here
+                    settle.base_address,
+                    settle.quote_address,
                 )
                 .await
             });
@@ -720,6 +805,9 @@ fn main() {
                         "Market sell order sent successfully (order_id: 0x{})",
                         hex::encode(&result.order_id)
                     );
+                    if let Some(line) = result.settlement_summary() {
+                        info!("{line}");
+                    }
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {
@@ -741,6 +829,7 @@ fn main() {
             post_only,
             hidden,
             match_order_ids,
+            settle,
         } => {
             info!(
                 "Sending limit SELL order for {amount} at price {price} on market {market} \
@@ -768,7 +857,7 @@ fn main() {
                 }
             };
 
-            let wallet = match load_trader_wallet_or_complain(&app_state) {
+            let wallets = match load_trader_wallets_or_complain(&app_state) {
                 Some(w) => w,
                 None => return,
             };
@@ -778,18 +867,20 @@ fn main() {
             let amt = amount.clone();
             let prc = price.clone();
             let res = executor.execute(async move {
-                send_order::send_order_with_wallet(
+                send_order::send_order_with_wallets(
                     url,
                     mkt,
                     2, // Sell side
                     amt,
                     Some(prc),
-                    &wallet,
+                    &wallets.iter().collect::<Vec<&Wallet>>(),
                     config,
                     post_only,
                     hidden,
                     None, // a limit order's budget is derived: quantity x price
                     match_order_ids,
+                    settle.base_address,
+                    settle.quote_address,
                 )
                 .await
             });
@@ -799,6 +890,9 @@ fn main() {
                         "Limit sell order sent successfully (order_id: 0x{})",
                         hex::encode(&result.order_id)
                     );
+                    if let Some(line) = result.settlement_summary() {
+                        info!("{line}");
+                    }
                     if !result.transaction_hashes.is_empty() {
                         info!("Transaction hashes:");
                         for formatted_hash in result.get_formatted_transaction_hashes() {

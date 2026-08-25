@@ -115,6 +115,87 @@ pub(crate) fn prepare_order(
     Ok(PreparedOrder { order, commitment })
 }
 
+/// Two spellings of one address, judged by the chain's rules: EVM hex is
+/// case-insensitive, base58 is not.
+fn same_address(architecture: &str, a: &str, b: &str) -> bool {
+    if architecture.eq_ignore_ascii_case(crate::chain_client::ARCH_SOLANA) {
+        a == b
+    } else {
+        a.eq_ignore_ascii_case(b)
+    }
+}
+
+/// Decide the two `Order` account addresses — the per-chain settlement
+/// addresses — from the leg wallets and the caller's optional overrides.
+///
+/// - No override → the wallet's own address on that leg (the long-standing
+///   default; existing callers are byte-identical).
+/// - The GIVE leg (bid → quote, ask → base) is the address the arborter
+///   verifies the envelope signature against and draws collateral from. An
+///   override there may only restate the signing wallet's own address —
+///   anything else would fail signature verification at the venue, so it
+///   is refused here, before signing, with an explanation instead of a
+///   round-trip later.
+/// - The RECEIVE leg is where fill proceeds settle, and the venue credits
+///   whatever well-formed string the signed order carries. An override
+///   there is "settle to a different address": validated for the leg's
+///   chain architecture (`crate::orders::validate_settle_address`), and
+///   kept byte-verbatim — the caller's spelling is what gets signed.
+///
+/// What this cannot check: that anyone holds the key to a redirected
+/// address. The venue has no address registry, and funds credited there
+/// are withdrawable only by that key's holder. Callers presenting this to
+/// users should say so.
+fn resolve_leg_addresses(
+    base_architecture: &str,
+    quote_architecture: &str,
+    base_wallet: &Wallet,
+    quote_wallet: &Wallet,
+    side: i32,
+    base_override: Option<String>,
+    quote_override: Option<String>,
+) -> Result<(String, String)> {
+    let give_is_quote = side == 1; // Bid gives quote; Ask gives base.
+    let resolve = |leg: &str,
+                   architecture: &str,
+                   wallet: &Wallet,
+                   chosen: Option<String>,
+                   is_give: bool|
+     -> Result<String> {
+        let Some(addr) = chosen else {
+            return Ok(wallet.address());
+        };
+        crate::orders::validate_settle_address(architecture, &addr)
+            .map_err(|e| eyre::eyre!("{leg} address override rejected: {e}"))?;
+        if is_give && !same_address(architecture, &addr, &wallet.address()) {
+            return Err(eyre::eyre!(
+                "the {leg} leg is what this order GIVES: the venue verifies the envelope \
+                 signature against that address and draws collateral from it, so it must be \
+                 the signing wallet's own address {} (got '{addr}'). To settle proceeds to a \
+                 different address, override the receiving leg instead",
+                wallet.address()
+            ));
+        }
+        Ok(addr)
+    };
+    Ok((
+        resolve(
+            "base",
+            base_architecture,
+            base_wallet,
+            base_override,
+            !give_is_quote,
+        )?,
+        resolve(
+            "quote",
+            quote_architecture,
+            quote_wallet,
+            quote_override,
+            give_is_quote,
+        )?,
+    ))
+}
+
 // Internal RPC dispatcher: signs the prepared order and sends it.
 async fn call_send_order(
     url: String,
@@ -387,6 +468,8 @@ pub async fn send_order_with_wallet(
     hidden: bool,
     quote_budget: Option<String>,
     match_order_ids: Vec<[u8; 32]>,
+    base_address: Option<String>,
+    quote_address: Option<String>,
 ) -> Result<SendOrderResponse> {
     send_order_with_wallets(
         url,
@@ -400,6 +483,8 @@ pub async fn send_order_with_wallet(
         hidden,
         quote_budget,
         match_order_ids,
+        base_address,
+        quote_address,
     )
     .await
 }
@@ -443,6 +528,16 @@ pub async fn send_order_with_wallet(
 /// envelopes. The arborter also rejects a `quote_budget` alongside a
 /// non-empty list, `post_only` combined with it, ids on an order that isn't
 /// discretionary, and an id that would self-match.
+///
+/// `base_address` / `quote_address`: optional overrides for the order's two
+/// per-chain account addresses — the settlement addresses the venue credits
+/// fill proceeds to. `None` (the default for every pre-existing caller)
+/// uses each leg wallet's own address. The
+/// contract: the GIVE leg may only restate the signing wallet's
+/// address, the RECEIVE leg may name any well-formed address on that
+/// leg's chain ("settle to a different address"), and nothing can verify
+/// that anyone holds the key to a redirected address — funds credited
+/// there are withdrawable only by that key's holder.
 // Public top-level API — same rationale as `send_order_with_wallet`
 // for keeping the argument list flat.
 #[allow(clippy::too_many_arguments)]
@@ -458,6 +553,8 @@ pub async fn send_order_with_wallets(
     hidden: bool,
     quote_budget: Option<String>,
     match_order_ids: Vec<[u8; 32]>,
+    base_address: Option<String>,
+    quote_address: Option<String>,
 ) -> Result<SendOrderResponse> {
     if wallets.is_empty() {
         return Err(eyre::eyre!(
@@ -532,8 +629,18 @@ pub async fn send_order_with_wallets(
     //   Ask (SELL) → origin = base  chain  → user locks base
     let signing_wallet = if side == 1 { quote_wallet } else { base_wallet };
 
-    let base_account_address = base_wallet.address();
-    let quote_account_address = quote_wallet.address();
+    // The two per-chain settlement addresses the signed order carries:
+    // each leg wallet's own address unless overridden — see
+    // `resolve_leg_addresses` for what an override may and may not do.
+    let (base_account_address, quote_account_address) = resolve_leg_addresses(
+        &base_chain.architecture,
+        &quote_chain.architecture,
+        base_wallet,
+        quote_wallet,
+        side,
+        base_address,
+        quote_address,
+    )?;
 
     tracing::info!(
         "Sending order: market={}, side={}, quantity={} (raw: {}), price={:?} (raw: {:?}), \
@@ -1301,5 +1408,172 @@ mod order_flag_wire_pinning_tests {
             "FCE_ORDER_NONCE must be the value that vanishes on encode, or every \
              order sent over FCE fails the arborter's signature check"
         );
+    }
+}
+
+#[cfg(test)]
+mod leg_address_tests {
+    //! `resolve_leg_addresses` decides the two `Order` account addresses —
+    //! the per-chain settlement addresses — from the wallets and the
+    //! caller's optional overrides.
+    //!
+    //! The contract under test:
+    //! - No override → the wallet's own address on that leg (the behavior
+    //!   every existing caller relies on).
+    //! - The GIVE leg (bid → quote, ask → base) is the address the arborter
+    //!   verifies the envelope signature against and draws collateral from,
+    //!   so an override there may only restate the signing wallet's own
+    //!   address; anything else is refused before signing rather than
+    //!   bounced by the venue one round-trip later.
+    //! - The RECEIVE leg is where proceeds settle. An override there is the
+    //!   "settle to a different address" feature, and is validated for the
+    //!   leg's chain architecture — the venue credits the string verbatim,
+    //!   and a typo is stranded funds.
+
+    use super::*;
+
+    /// An anvil dev key — a signing-shape fixture, not a secret.
+    const TEST_PRIVKEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+    fn evm_wallet() -> Wallet {
+        Wallet::from_evm_hex(TEST_PRIVKEY).expect("test key parses")
+    }
+
+    /// A second, distinct EVM address in valid EIP-55 casing (computed, so
+    /// the fixture can't carry a hand-typed bad checksum).
+    fn other_evm() -> String {
+        "0x00000000000000000000000000000000feedbeef"
+            .parse::<alloy::primitives::Address>()
+            .unwrap()
+            .to_checksum(None)
+    }
+
+    const BID: i32 = 1;
+    const ASK: i32 = 2;
+
+    #[test]
+    fn defaults_to_the_wallets_addresses() {
+        let w = evm_wallet();
+        for side in [BID, ASK] {
+            let (b, q) = resolve_leg_addresses("evm", "evm", &w, &w, side, None, None)
+                .expect("no overrides is the pre-feature path");
+            assert_eq!(b, w.address());
+            assert_eq!(q, w.address());
+        }
+    }
+
+    #[test]
+    fn receive_leg_override_redirects_settlement() {
+        let w = evm_wallet();
+        // An ASK gives base and receives quote: the quote address is free.
+        let (b, q) =
+            resolve_leg_addresses("evm", "evm", &w, &w, ASK, None, Some(other_evm())).unwrap();
+        assert_eq!(b, w.address());
+        assert_eq!(q, other_evm());
+        // A BID gives quote and receives base: the base address is free.
+        let (b, q) =
+            resolve_leg_addresses("evm", "evm", &w, &w, BID, Some(other_evm()), None).unwrap();
+        assert_eq!(b, other_evm());
+        assert_eq!(q, w.address());
+    }
+
+    #[test]
+    fn give_leg_override_must_restate_the_signer() {
+        let w = evm_wallet();
+        let err = resolve_leg_addresses("evm", "evm", &w, &w, ASK, Some(other_evm()), None)
+            .expect_err("an ASK's base leg is the signer");
+        assert!(err.to_string().contains("sign"), "{err}");
+        let err = resolve_leg_addresses("evm", "evm", &w, &w, BID, None, Some(other_evm()))
+            .expect_err("a BID's quote leg is the signer");
+        assert!(err.to_string().contains("sign"), "{err}");
+    }
+
+    /// EVM addresses are case-insensitive, so restating the signer in a
+    /// different casing is the same address — and the caller's own spelling
+    /// is kept (the field is byte-verbatim inside the signed order).
+    #[test]
+    fn give_leg_override_matches_the_signer_case_insensitively() {
+        let w = evm_wallet();
+        let lower = w.address().to_ascii_lowercase();
+        let (b, _q) =
+            resolve_leg_addresses("evm", "evm", &w, &w, ASK, Some(lower.clone()), None).unwrap();
+        assert_eq!(b, lower);
+    }
+
+    #[test]
+    fn a_malformed_receive_leg_override_is_refused() {
+        let w = evm_wallet();
+        for bad in ["abc", "00000000000000000000000000000000feedbeef", ""] {
+            assert!(
+                resolve_leg_addresses("evm", "evm", &w, &w, ASK, None, Some(bad.into())).is_err(),
+                "{bad:?} must be refused on an EVM leg"
+            );
+        }
+    }
+
+    #[cfg(feature = "solana")]
+    mod cross_architecture {
+        use super::*;
+
+        fn sol_wallet() -> Wallet {
+            Wallet::Solana(Box::new(solana_keypair::Keypair::new()))
+        }
+
+        /// EVM base / Solana quote. A BID gives quote (Solana signer); its
+        /// base (EVM) receive leg may redirect — to an EVM address only.
+        #[test]
+        fn receive_leg_is_validated_for_its_own_architecture() {
+            let (ew, sw) = (evm_wallet(), sol_wallet());
+            let (b, q) =
+                resolve_leg_addresses("evm", "solana", &ew, &sw, BID, Some(other_evm()), None)
+                    .unwrap();
+            assert_eq!(b, other_evm());
+            assert_eq!(q, sw.address());
+
+            // A base58 pubkey on the EVM leg is the wrong architecture.
+            let base58 = bs58::encode([7u8; 32]).into_string();
+            assert!(
+                resolve_leg_addresses("evm", "solana", &ew, &sw, BID, Some(base58), None).is_err()
+            );
+        }
+
+        /// The mirror: an ASK on the same market receives Solana-side, and
+        /// that override must be a 32-byte base58 pubkey.
+        #[test]
+        fn solana_receive_leg_takes_a_pubkey_only() {
+            let (ew, sw) = (evm_wallet(), sol_wallet());
+            let pk = bs58::encode([9u8; 32]).into_string();
+            let (b, q) =
+                resolve_leg_addresses("evm", "solana", &ew, &sw, ASK, None, Some(pk.clone()))
+                    .unwrap();
+            assert_eq!(b, ew.address());
+            assert_eq!(q, pk);
+
+            assert!(
+                resolve_leg_addresses("evm", "solana", &ew, &sw, ASK, None, Some(other_evm()))
+                    .is_err(),
+                "an EVM address cannot receive on a Solana leg"
+            );
+        }
+
+        /// Solana give-leg equality is exact: base58 is case-sensitive.
+        #[test]
+        fn solana_give_leg_equality_is_exact() {
+            let (ew, sw) = (evm_wallet(), sol_wallet());
+            let (b, q) =
+                resolve_leg_addresses("evm", "solana", &ew, &sw, BID, None, Some(sw.address()))
+                    .unwrap();
+            assert_eq!(b, ew.address());
+            assert_eq!(q, sw.address());
+
+            let mangled = sw.address().to_ascii_lowercase();
+            if mangled != sw.address() {
+                assert!(
+                    resolve_leg_addresses("evm", "solana", &ew, &sw, BID, None, Some(mangled))
+                        .is_err(),
+                    "a case-mangled base58 pubkey is a DIFFERENT address"
+                );
+            }
+        }
     }
 }

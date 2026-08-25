@@ -110,6 +110,29 @@ struct OrderFlags {
     hidden: bool,
 }
 
+/// The optional settlement-address overrides, shared by every order command.
+///
+/// An order carries one account address per chain leg; the venue credits
+/// fill proceeds to those exact strings. By default both are the trader
+/// wallets' own addresses. Overriding the RECEIVING leg settles proceeds
+/// to a different address; overriding the GIVING leg may only restate the
+/// signing wallet's address (the venue verifies the signature against it).
+/// Passing a flag is the acknowledgement that you mean it: nothing can
+/// check that anyone holds the key to a redirected address, and funds
+/// credited there are withdrawable only by that key's holder.
+#[derive(clap::Args, Clone, Debug, Default)]
+struct SettleArgs {
+    /// Settle the BASE leg to this address (must be valid on the base
+    /// chain: 0x-prefixed hex on EVM, base58 pubkey on Solana). On a SELL
+    /// this is the giving leg and may only restate your own address.
+    #[arg(long)]
+    base_address: Option<String>,
+    /// Settle the QUOTE leg to this address (same per-chain rules). On a
+    /// BUY this is the giving leg and may only restate your own address.
+    #[arg(long)]
+    quote_address: Option<String>,
+}
+
 /// What the CLI needs back from a submitted order, normalized across the two
 /// transports.
 ///
@@ -174,6 +197,23 @@ fn check_match_order_ids_supported_over_fce(match_order_ids: &[[u8; 32]]) -> Res
     Ok(())
 }
 
+/// Reject `--base-address` / `--quote-address` over the FCE transport: the
+/// payload builder derives both account addresses from the wallets, so an
+/// override would be silently DROPPED — and a silently ignored settlement
+/// address is exactly the kind of surprise this flag pair exists to
+/// prevent.
+#[cfg(feature = "fce")]
+fn check_settle_args_supported_over_fce(settle: &SettleArgs) -> Result<()> {
+    if settle.base_address.is_some() || settle.quote_address.is_some() {
+        eyre::bail!(
+            "--base-address / --quote-address are not supported over the FCE transport: \
+             the direct-action wire derives both account addresses from the wallets, so \
+             the override would be ignored rather than honored"
+        );
+    }
+    Ok(())
+}
+
 /// `quote_budget` is the human-readable maximum QUOTE a market buy may spend,
 /// and belongs to exactly that one cell of the order table: a sell's budget is
 /// its `amount` (base) and a limit buy's is `amount x price`, both derived from
@@ -190,6 +230,7 @@ async fn dispatch_send_order(
     flags: OrderFlags,
     quote_budget: Option<String>,
     match_order_ids: Vec<[u8; 32]>,
+    settle: SettleArgs,
 ) -> Result<SentOrder> {
     // Reject flags this transport can't express BEFORE any network work — an
     // unsupported argument should not cost a config round-trip to discover, and
@@ -198,6 +239,7 @@ async fn dispatch_send_order(
     if client.uses_fce() {
         check_flags_supported_over_fce(flags)?;
         check_match_order_ids_supported_over_fce(&match_order_ids)?;
+        check_settle_args_supported_over_fce(&settle)?;
     }
 
     let stack_url = client.stack_url().to_string();
@@ -272,7 +314,7 @@ async fn dispatch_send_order(
         });
     }
 
-    executor
+    let resp = executor
         .execute(async move {
             let wallets: Vec<&Wallet> = [evm.as_ref(), solana.as_ref()]
                 .into_iter()
@@ -290,11 +332,16 @@ async fn dispatch_send_order(
                 flags.hidden,
                 quote_budget,
                 match_order_ids,
+                settle.base_address,
+                settle.quote_address,
             )
             .await
         })
-        .map(SentOrder::from)
-        .map_err(|e| eyre::eyre!(format_error(&e, &context)))
+        .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+    if let Some(line) = resp.settlement_summary() {
+        info!("{line}");
+    }
+    Ok(SentOrder::from(resp))
 }
 
 /// Top-of-book via the gRPC orderbook stream. The 1.5s window is enough for the
@@ -502,6 +549,9 @@ enum Commands {
         /// effect here is anonymous taking.
         #[arg(long, default_value_t = false)]
         hidden: bool,
+        /// Settlement-address overrides (see the flags' own help).
+        #[command(flatten)]
+        settle: SettleArgs,
     },
     /// Send a limit BUY order (executes at specified price or better)
     BuyLimit {
@@ -528,6 +578,9 @@ enum Commands {
         /// remainder is canceled, never rested (IOC).
         #[arg(long = "match-order-id")]
         match_order_ids: Vec<String>,
+        /// Settlement-address overrides (see the flags' own help).
+        #[command(flatten)]
+        settle: SettleArgs,
     },
     /// Send a market SELL order (executes at best available price)
     SellMarket {
@@ -538,6 +591,9 @@ enum Commands {
         /// Invisible order: see `buy-market --hidden`.
         #[arg(long, default_value_t = false)]
         hidden: bool,
+        /// Settlement-address overrides (see the flags' own help).
+        #[command(flatten)]
+        settle: SettleArgs,
     },
     /// Send a limit SELL order (executes at specified price or better)
     SellLimit {
@@ -556,6 +612,9 @@ enum Commands {
         /// Dealroom: see `buy-limit --match-order-id`.
         #[arg(long = "match-order-id")]
         match_order_ids: Vec<String>,
+        /// Settlement-address overrides (see the flags' own help).
+        #[command(flatten)]
+        settle: SettleArgs,
     },
     /// Marketable BUY: snapshot the resting book, cap slippage off the
     /// best ask, submit as a buy-limit. Turns "take the top of book with a
@@ -576,6 +635,9 @@ enum Commands {
         /// rests invisibly (track it via the returned order id).
         #[arg(long, default_value_t = false)]
         hidden: bool,
+        /// Settlement-address overrides (see the flags' own help).
+        #[command(flatten)]
+        settle: SettleArgs,
     },
     /// Marketable SELL: snapshot the resting book, cap slippage off
     /// the best bid, submit as a sell-limit. See `buy-marketable` for
@@ -592,6 +654,9 @@ enum Commands {
         /// Invisible order: see `buy-marketable --hidden`.
         #[arg(long, default_value_t = false)]
         hidden: bool,
+        /// Settlement-address overrides (see the flags' own help).
+        #[command(flatten)]
+        settle: SettleArgs,
     },
     /// Cancel an existing order by its ID
     CancelOrder {
@@ -898,6 +963,7 @@ async fn run() -> Result<()> {
             amount,
             quote_budget,
             hidden,
+            settle,
         } => {
             info!(
                 "Sending market BUY order for {amount} on market {market} \
@@ -916,6 +982,7 @@ async fn run() -> Result<()> {
                 },
                 Some(quote_budget),
                 vec![], // dealroom discretionary requires a limit price; not offered here
+                settle,
             )
             .await?;
             info!(
@@ -931,6 +998,7 @@ async fn run() -> Result<()> {
             post_only,
             hidden,
             match_order_ids,
+            settle,
         } => {
             info!(
                 "Sending limit BUY order for {amount} at price {price} on market {market} \
@@ -950,6 +1018,7 @@ async fn run() -> Result<()> {
                 OrderFlags { post_only, hidden },
                 None, // a limit order's budget is derived from (amount, price)
                 match_order_ids,
+                settle,
             )
             .await?;
             info!(
@@ -962,6 +1031,7 @@ async fn run() -> Result<()> {
             market,
             amount,
             hidden,
+            settle,
         } => {
             info!("Sending market SELL order for {amount} on market {market} (hidden={hidden})");
             let result = dispatch_send_order(
@@ -977,6 +1047,7 @@ async fn run() -> Result<()> {
                 },
                 None,   // an ASK gives base: its budget IS its quantity
                 vec![], // dealroom discretionary requires a limit price; not offered here
+                settle,
             )
             .await?;
             info!(
@@ -992,6 +1063,7 @@ async fn run() -> Result<()> {
             post_only,
             hidden,
             match_order_ids,
+            settle,
         } => {
             info!(
                 "Sending limit SELL order for {amount} at price {price} on market {market} \
@@ -1011,6 +1083,7 @@ async fn run() -> Result<()> {
                 OrderFlags { post_only, hidden },
                 None, // a limit order's budget is derived from (amount, price)
                 match_order_ids,
+                settle,
             )
             .await?;
             info!(
@@ -1024,6 +1097,7 @@ async fn run() -> Result<()> {
             amount,
             slippage_bps,
             hidden,
+            settle,
         } => {
             let price =
                 resolve_marketable_price(&executor, &client, &market, Side::Bid, slippage_bps)
@@ -1047,6 +1121,7 @@ async fn run() -> Result<()> {
                 },
                 None,   // priced, so the budget is derived from (amount, price)
                 vec![], // dealroom discretionary is not offered on the marketable path
+                settle,
             )
             .await?;
             info!(
@@ -1060,6 +1135,7 @@ async fn run() -> Result<()> {
             amount,
             slippage_bps,
             hidden,
+            settle,
         } => {
             let price =
                 resolve_marketable_price(&executor, &client, &market, Side::Ask, slippage_bps)
@@ -1081,6 +1157,7 @@ async fn run() -> Result<()> {
                 },
                 None,   // priced, so the budget is derived from (amount, price)
                 vec![], // dealroom discretionary is not offered on the marketable path
+                settle,
             )
             .await?;
             info!(
