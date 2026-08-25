@@ -148,6 +148,69 @@ pub fn parse_destination_token_bytes32(token: &str) -> Result<[u8; 32]> {
     ))
 }
 
+/// Validate that `address` is usable as an `Order` account (settlement)
+/// address on a chain of `architecture`.
+///
+/// The two `Order` account addresses are the per-chain settlement
+/// addresses: the venue credits fill proceeds to these exact strings, only
+/// the collateral-side one is authenticated by the envelope signature, and
+/// funds credited to an address are withdrawable only by the holder of
+/// that address's key. So a malformed or mistyped address here is stranded
+/// funds — validate before signing, not after the venue has credited it.
+///
+/// The rules mirror what the arborter enforces at `SendOrder` entry:
+/// - Solana architecture: base58 decoding to exactly 32 bytes.
+/// - Everything else (EVM): a `0x`-prefixed 20-byte hex string. The prefix
+///   is required — the venue's ledger only canonicalizes `0x`-prefixed
+///   addresses, so an unprefixed spelling would key a separate balance.
+///
+/// Plus one stricter, client-only rule: a MIXED-CASE EVM address claims an
+/// EIP-55 checksum, and is refused when that checksum is wrong. The venue
+/// deliberately accepts any casing (the string sits inside the signature
+/// and is echoed byte-verbatim), so catching the typo is this function's
+/// job or nobody's.
+pub fn validate_settle_address(architecture: &str, address: &str) -> Result<()> {
+    if architecture.eq_ignore_ascii_case("solana") {
+        #[cfg(feature = "solana")]
+        return match bs58::decode(address).into_vec() {
+            Ok(raw) if raw.len() == 32 => Ok(()),
+            Ok(raw) => Err(eyre!(
+                "'{address}' base58-decodes to {} bytes, expected exactly 32",
+                raw.len()
+            )),
+            Err(e) => Err(eyre!("'{address}' is not a valid base58 pubkey: {e}")),
+        };
+        #[cfg(not(feature = "solana"))]
+        return Err(eyre!(
+            "cannot validate Solana address '{address}': the `solana` feature is not compiled in"
+        ));
+    }
+
+    let Some(body) = address.strip_prefix("0x") else {
+        return Err(eyre!(
+            "EVM address '{address}' must carry the 0x prefix (the venue's ledger only \
+             canonicalizes 0x-prefixed addresses, so an unprefixed spelling would key a \
+             separate balance)"
+        ));
+    };
+    if body.len() != 40 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(eyre!(
+            "EVM address '{address}' must be exactly 20 bytes of hex after the 0x prefix"
+        ));
+    }
+    let has_lower = body.bytes().any(|b| b.is_ascii_lowercase());
+    let has_upper = body.bytes().any(|b| b.is_ascii_uppercase());
+    if has_lower && has_upper {
+        alloy_primitives::Address::parse_checksummed(address, None).map_err(|_| {
+            eyre!(
+                "EVM address '{address}' is mixed-case but fails its EIP-55 checksum — \
+                 likely a typo; paste the address exactly, or all-lowercase to skip the check"
+            )
+        })?;
+    }
+    Ok(())
+}
+
 /// Hex → left-padded `[u8; 32]`. Shared between the `0x`-prefixed and
 /// bare-hex fallback paths. `display` is the original string used for
 /// error messages so the operator sees what they actually passed in.
@@ -250,6 +313,93 @@ mod tests {
     fn parse_rejects_empty() {
         assert!(parse_destination_token_bytes32("").is_err());
         assert!(parse_destination_token_bytes32("   ").is_err());
+    }
+
+    // ----- validate_settle_address ---------------------------------------
+
+    /// A genuinely EIP-55-checksummed address, COMPUTED rather than
+    /// hand-typed: a hand-typed "checksummed" fixture can silently be
+    /// wrong-cased (or its deliberately-broken twin accidentally right),
+    /// and every assertion built on it then tests the opposite of what it
+    /// says. The underlying address is the EIP-55 spec's own example, so
+    /// its checksum form is known to be mixed-case.
+    fn checksummed() -> String {
+        let addr = "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"
+            .parse::<alloy_primitives::Address>()
+            .unwrap()
+            .to_checksum(None);
+        // The casing the whole module leans on (from the EIP-55 spec).
+        assert_eq!(addr, "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed");
+        addr
+    }
+
+    #[test]
+    fn settle_address_accepts_a_checksummed_evm_address() {
+        assert!(validate_settle_address("evm", &checksummed()).is_ok());
+    }
+
+    /// All-lowercase carries no checksum information; the venue accepts it
+    /// and the ledger canonicalizes to lowercase anyway.
+    #[test]
+    fn settle_address_accepts_a_lowercase_evm_address() {
+        assert!(validate_settle_address("evm", &checksummed().to_ascii_lowercase()).is_ok());
+    }
+
+    /// Mixed case CLAIMS an EIP-55 checksum, so a wrong one is a typo —
+    /// exactly what client-side validation exists to catch before the venue
+    /// (which deliberately doesn't enforce checksums) credits the typo.
+    #[test]
+    fn settle_address_rejects_a_bad_evm_checksum() {
+        // Swap the case of the first `aA` pair; the result is still
+        // mixed-case (later letters keep their casing) but no longer the
+        // checksum.
+        let good = checksummed();
+        let bad = good.replacen("aA", "Aa", 1);
+        assert_ne!(good, bad, "the swap must change something");
+        assert_ne!(
+            bad,
+            bad.to_ascii_lowercase(),
+            "the broken fixture must stay mixed-case, or it lands on the \
+             no-checksum-claimed path and is accepted for the wrong reason"
+        );
+        let err = validate_settle_address("evm", &bad).unwrap_err();
+        assert!(err.to_string().contains("checksum"), "{err}");
+    }
+
+    /// The arborter refuses unprefixed hex (the ledger only canonicalizes
+    /// `0x`-prefixed strings), so the client must too.
+    #[test]
+    fn settle_address_rejects_unprefixed_hex_on_evm() {
+        assert!(validate_settle_address("evm", &checksummed()[2..]).is_err());
+    }
+
+    #[test]
+    fn settle_address_rejects_wrong_length_or_garbage_on_evm() {
+        assert!(validate_settle_address("evm", "0xAbCdEf01").is_err());
+        assert!(
+            validate_settle_address("evm", "0xnot-hex-at-all-000000000000000000000000").is_err()
+        );
+        assert!(validate_settle_address("evm", "").is_err());
+    }
+
+    #[cfg(feature = "solana")]
+    #[test]
+    fn settle_address_accepts_a_32_byte_base58_pubkey() {
+        let pk = bs58::encode([7u8; 32]).into_string();
+        assert!(validate_settle_address("solana", &pk).is_ok());
+        // Architecture matching is case-insensitive, like `chain_curve`.
+        assert!(validate_settle_address("Solana", &pk).is_ok());
+    }
+
+    #[cfg(feature = "solana")]
+    #[test]
+    fn settle_address_rejects_non_pubkeys_on_solana() {
+        // Wrong decoded length.
+        assert!(validate_settle_address("solana", "abc").is_err());
+        // Not base58 at all: `0` is outside the alphabet, so an EVM address
+        // on a Solana leg fails loudly rather than being reinterpreted.
+        assert!(validate_settle_address("solana", &checksummed()).is_err());
+        assert!(validate_settle_address("solana", "").is_err());
     }
 
     /// Regression: Solana's System Program / null pubkey base58-encodes as
