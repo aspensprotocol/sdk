@@ -244,8 +244,8 @@ fn resolve_rpc_url_with(
         return Ok(server.to_string());
     }
     Err(eyre::eyre!(
-        "no usable RPC endpoint for chain '{network}': the server masks rpc_url in its config \
-         (it can embed an API key). Set {} to your own RPC URL for '{network}'.",
+        "no usable RPC endpoint for chain '{network}': the server masks each endpoint's url in \
+         its config (it can embed an API key). Set {} to your own RPC URL for '{network}'.",
         rpc_override_env_key(network)
     ))
 }
