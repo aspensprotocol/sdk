@@ -248,8 +248,9 @@ message RpcEndpoint {
   // Operator-chosen handle, unique per chain (e.g. "alchemy-primary"). Shown
   // unmasked everywhere; used to address an endpoint in CLI output.
   string label = 1;
-  // Full URL. MASKED on read paths: query values and userinfo are replaced
-  // with "***" (scheme + host + path stay visible).
+  // Full URL. MASKED on read paths: query values, userinfo, and every
+  // non-empty path segment are replaced with "***" (scheme + host stay
+  // visible; the endpoint's identity survives via label + host).
   string url = 2;
   RpcAuthScheme auth_scheme = 3;
   // Meaning depends on auth_scheme (see enum). Visible on reads (it is a
