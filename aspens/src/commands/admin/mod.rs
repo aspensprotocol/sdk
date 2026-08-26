@@ -25,12 +25,15 @@ use config_pb::{
     DeleteChainRequest, DeleteChainResponse, DeleteMarketRequest, DeleteMarketResponse,
     DeleteTokenRequest, DeleteTokenResponse, DeleteTradeContractRequest,
     DeleteTradeContractResponse, DeployContractRequest, DeployContractResponse, Empty,
-    GetDeployCalldataRequest, GetDeployCalldataResponse, SetChainRequest, SetChainResponse,
-    SetMarketRequest, SetMarketResponse, SetOperatorAdminRequest, SetOperatorAdminResponse,
-    SetOperatorFeeRequest, SetOperatorFeeResponse, SetTokenRequest, SetTokenResponse,
-    SetTradeContractRequest, SetTradeContractResponse, UpdateAdminRequest, UpdateAdminResponse,
-    VersionInfo,
+    GetConfigRequest, GetDeployCalldataRequest, GetDeployCalldataResponse, ProbeChainRpcRequest,
+    SetChainRequest, SetChainResponse, SetChainRpcsRequest, SetMarketRequest, SetMarketResponse,
+    SetOperatorAdminRequest, SetOperatorAdminResponse, SetOperatorFeeRequest,
+    SetOperatorFeeResponse, SetTokenRequest, SetTokenResponse, SetTradeContractRequest,
+    SetTradeContractResponse, UpdateAdminRequest, UpdateAdminResponse, VersionInfo,
 };
+// RpcEndpoint / ProbeChainRpcResponse / SetChainRpcsResponse are brought into
+// scope via the `pub use config_pb::...` re-exports below (CLI convenience
+// surface) — importing them here too would just be a duplicate binding.
 use eyre::Result;
 use tonic::Request;
 use tonic::metadata::MetadataValue;
@@ -422,6 +425,115 @@ pub async fn delete_chain(
     Ok(response.into_inner())
 }
 
+/// Replace a chain's complete RPC endpoint set (requires auth).
+///
+/// Full replace, one transaction: `rpcs` becomes the chain's ENTIRE endpoint
+/// list, priority-ordered. Applied live on the arborter — providers rebuild
+/// and the chain's event listener restarts, no arborter restart needed.
+/// Requires at least one enabled endpoint (the server rejects an all-disabled
+/// or empty set with `InvalidArgument`); an unknown `network` is `NotFound`.
+///
+/// Secrets must be the real values — there is no keep-existing sentinel, so
+/// an edit that drops a field clears it. The response mirrors what
+/// `GetConfig` will now show for this chain: MASKED (`auth_secret` = "***",
+/// url query values/userinfo = "***").
+///
+/// # Arguments
+/// * `url` - The Aspens stack gRPC URL
+/// * `jwt` - Valid JWT token
+/// * `network` - `chains.network` key, e.g. `"flare-coston2"`
+/// * `rpcs` - The chain's complete new endpoint list, priority-ordered
+pub async fn set_chain_rpcs(
+    url: String,
+    jwt: String,
+    network: String,
+    rpcs: Vec<RpcEndpoint>,
+) -> Result<SetChainRpcsResponse> {
+    let channel = create_channel(&url).await?;
+    let mut client = ConfigServiceClient::new(channel);
+
+    let request = authenticated_request(&jwt, SetChainRpcsRequest { network, rpcs });
+    let response = client.set_chain_rpcs(request).await?;
+
+    Ok(response.into_inner())
+}
+
+/// Probe a candidate RPC endpoint from the arborter's own network position,
+/// before committing it via [`set_chain_rpcs`] (requires auth).
+///
+/// The endpoint is dialed as submitted and never stored. Compares the chain
+/// id it reports against `network`'s configured chain id, and checks whether
+/// the finalized tag / finalized commitment answers (DEP-1 deposit-finality
+/// reads depend on it — a keyless public endpoint often throttles exactly
+/// this).
+///
+/// # Arguments
+/// * `url` - The Aspens stack gRPC URL
+/// * `jwt` - Valid JWT token
+/// * `network` - `chains.network` key, used only to compare chain ids
+/// * `endpoint` - The candidate endpoint to probe
+pub async fn probe_chain_rpc(
+    url: String,
+    jwt: String,
+    network: String,
+    endpoint: RpcEndpoint,
+) -> Result<ProbeChainRpcResponse> {
+    let channel = create_channel(&url).await?;
+    let mut client = ConfigServiceClient::new(channel);
+
+    let request = authenticated_request(
+        &jwt,
+        ProbeChainRpcRequest {
+            network,
+            endpoint: Some(endpoint),
+        },
+    );
+    let response = client.probe_chain_rpc(request).await?;
+
+    Ok(response.into_inner())
+}
+
+/// Fetch a single chain's current RPC endpoint set via `GetConfig` (no auth
+/// required — mirrors the unauthenticated read path in
+/// [`crate::commands::config::download_config`]).
+///
+/// The result is exactly what the server returns: MASKED (`auth_secret` =
+/// "***", url query values/userinfo = "***"). Render it as-is — there is no
+/// unmask path; a client needing the real values must have set them itself.
+///
+/// # Arguments
+/// * `url` - The Aspens stack gRPC URL
+/// * `network` - `chains.network` key to look up (e.g. `"flare-coston2"`)
+///
+/// # Errors
+/// Returns an error if the network has no matching chain in the
+/// configuration (a client-side filter over `GetConfig`, not a wire-level
+/// `NotFound` — that status is what `set_chain_rpcs`/`probe_chain_rpc`
+/// return for an unknown network).
+pub async fn get_chain_rpcs(url: String, network: String) -> Result<Vec<RpcEndpoint>> {
+    let channel = create_channel(&url).await?;
+    let mut client = ConfigServiceClient::new(channel);
+
+    let request = Request::new(GetConfigRequest {});
+    let response = client.get_config(request).await?;
+    let config = response
+        .into_inner()
+        .config
+        .ok_or_else(|| eyre::eyre!("server returned no configuration"))?;
+
+    config
+        .chains
+        .into_iter()
+        .find(|chain| chain.network == network)
+        .map(|chain| chain.rpcs)
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "unknown network '{}': no such chain in the configuration",
+                network
+            )
+        })
+}
+
 // ============================================================================
 // Token Operations
 // ============================================================================
@@ -610,6 +722,10 @@ pub async fn get_version(url: String) -> Result<VersionInfo> {
 
 // Re-export types needed by CLI
 pub use config_pb::Chain;
+pub use config_pb::ProbeChainRpcResponse;
+pub use config_pb::RpcAuthScheme;
+pub use config_pb::RpcEndpoint;
+pub use config_pb::SetChainRpcsResponse;
 pub use config_pb::Token;
 pub use config_pb::TradeContract;
 

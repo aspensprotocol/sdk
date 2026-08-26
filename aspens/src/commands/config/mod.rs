@@ -21,7 +21,7 @@ use crate::grpc::create_channel;
 
 /// Raw config fetch from the trading server — NO local RPC overrides applied.
 /// Used by the `download_*` helpers, which should snapshot exactly what the
-/// server returned (a masked `rpc_url`), not bake in a client's local override.
+/// server returned (masked `rpcs`), not bake in a client's local override.
 async fn fetch_config(url: String) -> Result<GetConfigResponse> {
     use config_pb::config_service_client::ConfigServiceClient;
 
@@ -34,9 +34,9 @@ async fn fetch_config(url: String) -> Result<GetConfigResponse> {
 }
 
 /// Fetch configuration from the trading server, with local RPC overrides
-/// applied. The server masks `rpc_url` in its response (it can embed an API
-/// key), so a client supplies its own endpoint via `ASPENS_RPC_URL_<NETWORK>`
-/// — see [`crate::chain_client::resolve_rpc_url`].
+/// applied. The server masks each endpoint's `url` in its response (it can
+/// embed an API key), so a client supplies its own endpoint via
+/// `ASPENS_RPC_URL_<NETWORK>` — see [`crate::chain_client::resolve_rpc_url`].
 pub async fn get_config(url: String) -> Result<GetConfigResponse> {
     let mut config = fetch_config(url).await?;
     config.apply_rpc_overrides();
@@ -77,30 +77,41 @@ impl GetConfigResponse {
             None => bail!("No file extension found"),
         };
 
-        // A file may carry a masked rpc_url (e.g. a download snapshot); apply
-        // the same local override resolution used for a live fetch.
+        // A file may carry masked endpoint urls (e.g. a download snapshot);
+        // apply the same local override resolution used for a live fetch.
         config.apply_rpc_overrides();
         Ok(config)
     }
 
-    /// Rewrite each chain's `rpc_url` to the client's local override
-    /// (`ASPENS_RPC_URL_<NETWORK>`) when set; otherwise keep the server value
-    /// (an unmasked URL stays usable). The arborter masks `rpc_url` in its
-    /// response (it can embed an API key), so this is where a client supplies
-    /// its own endpoint. A chain left masked (no override) is logged at WARN —
-    /// on-chain operations for it will fail until the env var is set.
+    /// Rewrite each chain's primary (first enabled) RPC endpoint url to the
+    /// client's local override (`ASPENS_RPC_URL_<NETWORK>`) when set;
+    /// otherwise keep the server value (an unmasked URL stays usable). The
+    /// arborter masks each endpoint's `url` in its response (it can embed an
+    /// API key), so this is where a client supplies its own endpoint. A chain
+    /// left masked (no override) is logged at WARN — on-chain operations for
+    /// it will fail until the env var is set.
+    ///
+    /// Only the first enabled endpoint is overridden: the SDK talks to the
+    /// chain directly for its own wallet/deposit/withdraw/balance calls and
+    /// only needs one workable URL (multi-endpoint failover is the
+    /// arborter's own internal concern, not implemented client-side here).
     fn apply_rpc_overrides(&mut self) {
         let Some(config) = self.config.as_mut() else {
             return;
         };
         for chain in &mut config.chains {
-            match crate::chain_client::resolve_rpc_url(&chain.network, &chain.rpc_url) {
-                Ok(url) => chain.rpc_url = url,
+            match crate::chain_client::chain_rpc_url(chain) {
+                Ok(url) => {
+                    if let Some(primary) = chain.rpcs.iter_mut().find(|e| e.enabled) {
+                        primary.url = url;
+                    }
+                }
                 Err(_) => tracing::warn!(
                     network = %chain.network,
                     env = %crate::chain_client::rpc_override_env_key(&chain.network),
-                    "chain rpc_url is masked/unset and no local RPC override is set; \
-                     on-chain operations for this chain will fail until you set this env var"
+                    "chain has no usable RPC endpoint (masked/unset, or no enabled endpoint) \
+                     and no local RPC override is set; on-chain operations for this chain will \
+                     fail until you set this env var"
                 ),
             }
         }
@@ -276,11 +287,18 @@ pub async fn get_signer_public_key_with_balances(
         .config
         .ok_or_else(|| eyre::eyre!("No configuration found"))?;
 
-    // Build a map of chain_network -> rpc_url
+    // Build a map of chain_network -> rpc_url. `get_config` above already
+    // applied local RPC overrides, so this just reads the resolved primary
+    // endpoint back out (falling back to empty on failure, same as before).
     let chain_rpc_map: std::collections::HashMap<String, String> = config
         .chains
         .iter()
-        .map(|chain| (chain.network.clone(), chain.rpc_url.clone()))
+        .map(|chain| {
+            (
+                chain.network.clone(),
+                crate::chain_client::chain_rpc_url(chain).unwrap_or_default(),
+            )
+        })
         .collect();
 
     // Fetch balances for each signer

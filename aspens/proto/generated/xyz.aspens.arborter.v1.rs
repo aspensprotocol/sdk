@@ -131,10 +131,21 @@ pub struct Order {
     /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
     #[prost(string, tag = "4")]
     pub market_id: ::prost::alloc::string::String,
-    /// User's pubkey (address) on the Base chain
+    /// User's pubkey (address) on the Base chain.
+    ///
+    /// Casing contract: this field is part of the SIGNED order, so when the
+    /// server echoes this message back (`SendOrderResponse.order`) it carries the
+    /// address BYTE-VERBATIM as submitted — an EIP-55 checksummed submission
+    /// comes back checksummed. That is deliberate: rewriting a field of a signed
+    /// message would detach the echo from the signature that authorized it.
+    /// Every OTHER address the server emits (`OrderbookEntry`, `Trade`) is
+    /// canonicalized instead (EVM lowercased, base58 byte-exact), so do not
+    /// string-compare this echo against those fields without lowercasing the EVM
+    /// case first.
     #[prost(string, tag = "5")]
     pub base_account_address: ::prost::alloc::string::String,
-    /// User's pubkey (address) on the Quote chain
+    /// User's pubkey (address) on the Quote chain. Echoed byte-verbatim, same as
+    /// `base_account_address`.
     #[prost(string, tag = "6")]
     pub quote_account_address: ::prost::alloc::string::String,
     /// 'DIRECT' (default): ordinary price-time-priority matching against the
@@ -232,10 +243,16 @@ pub struct Trade {
     /// When the engine registers this executed trade
     #[prost(uint64, tag = "1")]
     pub timestamp: u64,
-    /// The setttled price net of fees
+    /// Execution price, in pair-decimal units — the resting (maker) order's own
+    /// price. No fee is applied here: fees are taken at settlement, not on the
+    /// trade print.
     #[prost(string, tag = "2")]
     pub price: ::prost::alloc::string::String,
-    /// How much or many of the quote token
+    /// Traded quantity in BASE units at pair decimals — the same units as
+    /// `Order.quantity`. (This has always been what the server sends; an older
+    /// version of this comment claimed quote units, which was never true.) The
+    /// quote amount is not on the wire: derive it as `qty * price / 10^pair_decimals`
+    /// if needed.
     #[prost(string, tag = "3")]
     pub qty: ::prost::alloc::string::String,
     /// Maker's internal trader id. Safely ignore.
@@ -244,16 +261,29 @@ pub struct Trade {
     /// Taker's internal trader id. Safely ignore.
     #[prost(string, tag = "5")]
     pub taker_id: ::prost::alloc::string::String,
-    /// The maker's base chain wallet address
+    /// The maker's base chain wallet address.
+    ///
+    /// All four wallet addresses on this message are CANONICALIZED by the server:
+    /// EVM addresses arrive as lowercase hex regardless of how the trader
+    /// submitted them (an EIP-55 checksummed submission is lowercased), and
+    /// base58 (Solana) addresses pass through byte-exact, case significant. The
+    /// same rule covers `OrderbookEntry`'s maker addresses. The ONE exception on
+    /// the wire is `Order.base_account_address` / `Order.quote_account_address`
+    /// in a placement response, which echo the signed submission byte-verbatim —
+    /// see the comments there. Clients comparing any of these four fields
+    /// against a locally-held EVM address must lowercase their own side first.
     #[prost(string, tag = "6")]
     pub maker_base_address: ::prost::alloc::string::String,
-    /// The maker's quote chain wallet address
+    /// The maker's quote chain wallet address (canonicalized; see
+    /// `maker_base_address`)
     #[prost(string, tag = "7")]
     pub maker_quote_address: ::prost::alloc::string::String,
-    /// The taker's base chain wallet address
+    /// The taker's base chain wallet address (canonicalized; see
+    /// `maker_base_address`)
     #[prost(string, tag = "8")]
     pub taker_base_address: ::prost::alloc::string::String,
-    /// The taker's quote chain wallet address
+    /// The taker's quote chain wallet address (canonicalized; see
+    /// `maker_base_address`)
     #[prost(string, tag = "9")]
     pub taker_quote_address: ::prost::alloc::string::String,
     /// Who is the buyer in this trade (MAKER or TAKER)
@@ -357,10 +387,14 @@ pub struct OrderbookEntry {
     /// 'BID = 1' or 'ASK = 2'
     #[prost(enumeration = "Side", tag = "5")]
     pub side: i32,
-    /// The maker's base chain wallet address
+    /// The maker's base chain wallet address. Canonicalized by the server —
+    /// EVM lowercased hex, base58 byte-exact — same rule as `Trade`'s address
+    /// fields; see `Trade.maker_base_address` for the full contract, including
+    /// the one byte-verbatim exception (`Order`'s echoed addresses).
     #[prost(string, tag = "6")]
     pub maker_base_address: ::prost::alloc::string::String,
-    /// The maker's quote chain wallet address
+    /// The maker's quote chain wallet address (canonicalized; see
+    /// `maker_base_address`)
     #[prost(string, tag = "7")]
     pub maker_quote_address: ::prost::alloc::string::String,
     /// The market ID this order belongs to

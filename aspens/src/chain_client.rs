@@ -47,14 +47,15 @@ impl ChainClient {
     /// - `"EVM"` (or empty/anything else for backward compat) → Alloy provider
     /// - `"Solana"` → Solana RPC client (requires the `solana` feature)
     ///
-    /// The endpoint goes through [`resolve_rpc_url`], NOT `chain.rpc_url`
-    /// directly: the server masks `rpc_url` (it can embed an API key), so the
-    /// raw field is usually the literal `"********"`. Resolving here rather
-    /// than at each call site means no caller can reintroduce that — reaching
-    /// for `chain.rpc_url` was what silently broke every wallet and native
-    /// balance read while the deposited column beside them stayed correct.
+    /// The endpoint goes through [`resolve_rpc_url`], NOT `chain.rpcs`
+    /// directly: the server masks each endpoint's `url` (query values and
+    /// userinfo become `"***"`; it can embed an API key), so the raw field is
+    /// often unusable as-is. Resolving here rather than at each call site
+    /// means no caller can reintroduce that — reaching for `chain.rpcs`
+    /// directly was what silently broke every wallet and native balance read
+    /// while the deposited column beside them stayed correct.
     pub fn from_chain_config(chain: &Chain) -> Result<Self> {
-        let rpc_url = resolve_rpc_url(&chain.network, &chain.rpc_url)?;
+        let rpc_url = resolve_rpc_url(&chain.network, primary_endpoint_url(chain))?;
         if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
             #[cfg(feature = "solana")]
             {
@@ -148,12 +149,32 @@ impl ChainClient {
 
 /// The usable RPC endpoint for `chain`, honouring the client-side override.
 ///
-/// Prefer this over reading `chain.rpc_url` directly. The arborter MASKS that
-/// field in `GetConfig` (it can embed an API key), so the raw value is normally
-/// the literal `********` — parsing it yields the memorable and thoroughly
-/// unhelpful "relative URL without a base", several layers from the cause.
+/// Prefer this over reading `chain.rpcs` directly. The arborter MASKS each
+/// endpoint's `url` in `GetConfig` (query values / userinfo become `"***"`;
+/// it can embed an API key), so the raw value is often unusable as-is —
+/// parsing a masked query string can still succeed and yield a URL that
+/// simply doesn't authenticate, several layers from the cause.
+///
+/// `chain.rpcs` is priority-ordered and may list several endpoints (the
+/// arborter fails over between them internally); the SDK talks to the chain
+/// directly for its own wallet/deposit/withdraw/balance calls and only needs
+/// one workable URL, so this resolves against the FIRST enabled endpoint.
 pub fn chain_rpc_url(chain: &crate::commands::config::config_pb::Chain) -> Result<String> {
-    resolve_rpc_url(&chain.network, &chain.rpc_url)
+    resolve_rpc_url(&chain.network, primary_endpoint_url(chain))
+}
+
+/// The url of the first enabled endpoint in `chain.rpcs` (priority order), or
+/// `""` when there is none (an empty or all-disabled set). Internal helper
+/// for [`chain_rpc_url`] / [`ChainClient::from_chain_config`]; an empty
+/// result flows into [`resolve_rpc_url`], which turns it into the same
+/// actionable "set your override" error as a masked value would.
+fn primary_endpoint_url(chain: &Chain) -> &str {
+    chain
+        .rpcs
+        .iter()
+        .find(|endpoint| endpoint.enabled)
+        .map(|endpoint| endpoint.url.as_str())
+        .unwrap_or("")
 }
 
 /// alloy's [`NamedChain`] for `chain_id`, or `None` when alloy does not know it.
@@ -193,8 +214,9 @@ pub fn rpc_override_env_key(network: &str) -> String {
 
 /// Resolve the RPC endpoint to use for `network`.
 ///
-/// The arborter masks `rpc_url` in its `GetConfig` response (it can embed an API
-/// key), so the server value is usually unusable. Resolution order:
+/// The arborter masks each endpoint's `url` in its `GetConfig` response (it
+/// can embed an API key), so the server value is often unusable. Resolution
+/// order:
 /// 1. the per-network override env var ([`rpc_override_env_key`]), if set; else
 /// 2. `server_rpc_url`, when it is a real URL (an unmasked server / local
 ///    fixture); else
@@ -222,8 +244,8 @@ fn resolve_rpc_url_with(
         return Ok(server.to_string());
     }
     Err(eyre::eyre!(
-        "no usable RPC endpoint for chain '{network}': the server masks rpc_url in its config \
-         (it can embed an API key). Set {} to your own RPC URL for '{network}'.",
+        "no usable RPC endpoint for chain '{network}': the server masks each endpoint's url in \
+         its config (it can embed an API key). Set {} to your own RPC URL for '{network}'.",
         rpc_override_env_key(network)
     ))
 }
@@ -271,6 +293,7 @@ mod named_chain_tests {
 #[cfg(test)]
 mod rpc_resolve_tests {
     use super::*;
+    use crate::commands::config::config_pb::RpcEndpoint;
 
     #[test]
     fn env_key_uppercases_and_sanitizes() {
@@ -327,6 +350,10 @@ mod rpc_resolve_tests {
     /// printed `error` in the wallet column next to a correct deposited
     /// figure. Fail at construction instead, naming the env key to set.
     ///
+    /// `chain.rpc_url` is gone (replaced by `chain.rpcs`), but the sentinel
+    /// this test pins is the same shape a masked endpoint's `url` can still
+    /// take, so it's kept as a single-endpoint `rpcs` list.
+    ///
     /// The network name is unique to this test so the override key cannot be
     /// set by another test running in parallel (`resolve_rpc_url` reads the
     /// process env, which is global).
@@ -334,7 +361,12 @@ mod rpc_resolve_tests {
     fn from_chain_config_rejects_a_masked_url_rather_than_building_a_broken_client() {
         let chain = Chain {
             network: "rpc-mask-2-regression".to_string(),
-            rpc_url: "********".to_string(),
+            rpcs: vec![RpcEndpoint {
+                label: "primary".to_string(),
+                url: "********".to_string(),
+                enabled: true,
+                ..Default::default()
+            }],
             chain_id: 114,
             ..Default::default()
         };
@@ -351,13 +383,19 @@ mod rpc_resolve_tests {
         );
     }
 
-    /// The unmasked case is unchanged: a stack that serves a real `rpc_url`
-    /// (local anvil, any non-masking server) still works with no override set.
+    /// The unmasked case is unchanged: a stack that serves a real endpoint
+    /// url (local anvil, any non-masking server) still works with no
+    /// override set.
     #[test]
     fn from_chain_config_keeps_using_a_usable_server_url() {
         let chain = Chain {
             network: "rpc-mask-2-unmasked".to_string(),
-            rpc_url: "http://localhost:8545".to_string(),
+            rpcs: vec![RpcEndpoint {
+                label: "primary".to_string(),
+                url: "http://localhost:8545".to_string(),
+                enabled: true,
+                ..Default::default()
+            }],
             chain_id: 31337,
             ..Default::default()
         };

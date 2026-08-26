@@ -237,6 +237,34 @@ pub struct TradeContract {
     #[prost(string, tag = "2")]
     pub address: ::prost::alloc::string::String,
 }
+/// An RPC endpoint configuration: URL, auth method, enabled/disabled state
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RpcEndpoint {
+    /// Operator-chosen handle, unique per chain (e.g. "alchemy-primary"). Shown
+    /// unmasked everywhere; used to address an endpoint in CLI output.
+    #[prost(string, tag = "1")]
+    pub label: ::prost::alloc::string::String,
+    /// Full URL. MASKED on read paths: query values and userinfo are replaced
+    /// with "\*\*\*" (scheme + host + path stay visible).
+    #[prost(string, tag = "2")]
+    pub url: ::prost::alloc::string::String,
+    #[prost(enumeration = "RpcAuthScheme", tag = "3")]
+    pub auth_scheme: i32,
+    /// Meaning depends on auth_scheme (see enum). Visible on reads (it is a
+    /// header name or username, not a secret).
+    #[prost(string, tag = "4")]
+    pub auth_key: ::prost::alloc::string::String,
+    /// The secret. WRITE-ONLY: always "\*\*\*" on read paths; a SetChainRpcs write
+    /// must carry the real value (there is no keep-existing sentinel — edits
+    /// re-send the full set, secrets included).
+    #[prost(string, tag = "5")]
+    pub auth_secret: ::prost::alloc::string::String,
+    /// Disabled endpoints are kept in config but never dialed.
+    #[prost(bool, tag = "6")]
+    pub enabled: bool,
+}
 /// Represents a single blockchain network
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -260,9 +288,10 @@ pub struct Chain {
     /// Optional: URL to the chain explorer
     #[prost(string, optional, tag = "6")]
     pub explorer_url: ::core::option::Option<::prost::alloc::string::String>,
-    /// The RPC URL for the chain
-    #[prost(string, tag = "7")]
-    pub rpc_url: ::prost::alloc::string::String,
+    /// The chain's RPC endpoint set, priority-ordered. At least one enabled
+    /// endpoint is required for the chain to be operatable.
+    #[prost(message, repeated, tag = "7")]
+    pub rpcs: ::prost::alloc::vec::Vec<RpcEndpoint>,
     /// The address of the factory contract on this chain. This is the address to call to deploy a new trading instance
     #[prost(string, tag = "8")]
     pub factory_address: ::prost::alloc::string::String,
@@ -278,6 +307,51 @@ pub struct Chain {
     /// Confirmations to lag by. Read only when finality = FINALITY_POLICY_CONFIRMATIONS.
     #[prost(uint32, tag = "12")]
     pub finality_confirmations: u32,
+}
+/// Request to set a chain's complete RPC endpoint set
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetChainRpcsRequest {
+    /// chains.network key, e.g. "flare-coston2"
+    #[prost(string, tag = "1")]
+    pub network: ::prost::alloc::string::String,
+    /// The chain's COMPLETE new endpoint list, priority-ordered. Secrets must be
+    /// real values (reads mask them; there is no keep-existing sentinel).
+    #[prost(message, repeated, tag = "2")]
+    pub rpcs: ::prost::alloc::vec::Vec<RpcEndpoint>,
+}
+/// Response with the stored endpoint set (MASKED for read safety)
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetChainRpcsResponse {
+    /// The stored set, MASKED (what GetConfig will now show for this chain).
+    #[prost(message, repeated, tag = "1")]
+    pub rpcs: ::prost::alloc::vec::Vec<RpcEndpoint>,
+}
+/// Request to probe a single RPC endpoint
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProbeChainRpcRequest {
+    /// used only to compare chain ids
+    #[prost(string, tag = "1")]
+    pub network: ::prost::alloc::string::String,
+    /// probed as-submitted; never stored
+    #[prost(message, optional, tag = "2")]
+    pub endpoint: ::core::option::Option<RpcEndpoint>,
+}
+/// Response with probe results
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProbeChainRpcResponse {
+    #[prost(bool, tag = "1")]
+    pub reachable: bool,
+    /// Chain id the endpoint reported; caller compares against the chain row.
+    #[prost(uint64, tag = "2")]
+    pub reported_chain_id: u64,
+    #[prost(bool, tag = "3")]
+    pub chain_id_matches: bool,
+    /// Whether the finalized tag / finalized commitment answered (DEP-1 reads
+    /// depend on it — a keyless public endpoint often throttles exactly this).
+    #[prost(bool, tag = "4")]
+    pub finalized_tag_ok: bool,
+    #[prost(uint32, tag = "5")]
+    pub latency_ms: u32,
 }
 /// Represents a market with a base- and quote- chain token pair
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -464,6 +538,43 @@ pub struct VersionInfo {
     /// The cargo features enabled
     #[prost(string, repeated, tag = "8")]
     pub cargo_features: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+/// Authentication scheme for RPC endpoints
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum RpcAuthScheme {
+    /// no extra auth; the url may still embed a key (query/userinfo)
+    RpcAuthNone = 0,
+    /// auth_key = header name (e.g. "x-api-key"), auth_secret = value
+    RpcAuthHeader = 1,
+    /// auth_key = username, auth_secret = password
+    RpcAuthBasic = 2,
+    /// auth_key unused, auth_secret = token ("Authorization: Bearer TOKEN")
+    RpcAuthBearer = 3,
+}
+impl RpcAuthScheme {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::RpcAuthNone => "RPC_AUTH_NONE",
+            Self::RpcAuthHeader => "RPC_AUTH_HEADER",
+            Self::RpcAuthBasic => "RPC_AUTH_BASIC",
+            Self::RpcAuthBearer => "RPC_AUTH_BEARER",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "RPC_AUTH_NONE" => Some(Self::RpcAuthNone),
+            "RPC_AUTH_HEADER" => Some(Self::RpcAuthHeader),
+            "RPC_AUTH_BASIC" => Some(Self::RpcAuthBasic),
+            "RPC_AUTH_BEARER" => Some(Self::RpcAuthBearer),
+            _ => None,
+        }
+    }
 }
 /// How far behind the chain head a deposit balance must be before it may
 /// back a withdrawal voucher. Deposits credited from an unfinalized read can
@@ -711,6 +822,70 @@ pub mod config_service_client {
                     GrpcMethod::new(
                         "xyz.aspens.arborter_config.v1.ConfigService",
                         "SetChain",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Replace one chain's RPC endpoint set declaratively (full replace, one
+        /// transaction). Applied LIVE: providers rebuild and the chain's event
+        /// listener restarts; no arborter restart. Requires >= 1 enabled endpoint.
+        pub async fn set_chain_rpcs(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetChainRpcsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SetChainRpcsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/SetChainRpcs",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "SetChainRpcs",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Probe one endpoint from the arborter's own network position before
+        /// committing it: dials it once, returns the chain id it reports, whether
+        /// the finalized tag answers, and the round-trip latency.
+        pub async fn probe_chain_rpc(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ProbeChainRpcRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ProbeChainRpcResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/ProbeChainRpc",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "ProbeChainRpc",
                     ),
                 );
             self.inner.unary(req, path, codec).await

@@ -96,6 +96,10 @@ fn build_protos() -> Result<()> {
             "#[derive(serde::Serialize, serde::Deserialize)] #[serde(rename_all = \"camelCase\")]",
         )
         .type_attribute(
+            "xyz.aspens.arborter_config.v1.RpcEndpoint",
+            "#[derive(serde::Serialize, serde::Deserialize)] #[serde(rename_all = \"camelCase\")]",
+        )
+        .type_attribute(
             "xyz.aspens.arborter_config.v1.Market",
             "#[derive(serde::Serialize, serde::Deserialize)] #[serde(rename_all = \"camelCase\")]",
         )
