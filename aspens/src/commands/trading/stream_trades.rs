@@ -73,7 +73,6 @@ where
 
     // Create the request
     let request = TradeRequest {
-        continue_stream: true,
         market_id: options.market_id,
         historical_closed_trades: Some(options.historical_closed_trades),
         filter_by_trader: options.filter_by_trader,

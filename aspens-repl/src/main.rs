@@ -659,13 +659,6 @@ fn main() {
                     if let Some(line) = result.settlement_summary() {
                         info!("{line}");
                     }
-                    if !result.transaction_hashes.is_empty() {
-                        info!("Transaction hashes:");
-                        for formatted_hash in result.get_formatted_transaction_hashes() {
-                            info!("  {}", formatted_hash);
-                        }
-                        info!("Paste these hashes into your chain's block explorer");
-                    }
                 }
                 Err(e) => print_error(&format_error(
                     &e,
@@ -744,13 +737,6 @@ fn main() {
                     if let Some(line) = result.settlement_summary() {
                         info!("{line}");
                     }
-                    if !result.transaction_hashes.is_empty() {
-                        info!("Transaction hashes:");
-                        for formatted_hash in result.get_formatted_transaction_hashes() {
-                            info!("  {}", formatted_hash);
-                        }
-                        info!("Paste these hashes into your chain's block explorer");
-                    }
                 }
                 Err(e) => print_error(&format_error(
                     &e,
@@ -812,13 +798,6 @@ fn main() {
                     );
                     if let Some(line) = result.settlement_summary() {
                         info!("{line}");
-                    }
-                    if !result.transaction_hashes.is_empty() {
-                        info!("Transaction hashes:");
-                        for formatted_hash in result.get_formatted_transaction_hashes() {
-                            info!("  {}", formatted_hash);
-                        }
-                        info!("Paste these hashes into your chain's block explorer");
                     }
                 }
                 Err(e) => print_error(&format_error(
@@ -897,13 +876,6 @@ fn main() {
                     );
                     if let Some(line) = result.settlement_summary() {
                         info!("{line}");
-                    }
-                    if !result.transaction_hashes.is_empty() {
-                        info!("Transaction hashes:");
-                        for formatted_hash in result.get_formatted_transaction_hashes() {
-                            info!("  {}", formatted_hash);
-                        }
-                        info!("Paste these hashes into your chain's block explorer");
                     }
                 }
                 Err(e) => print_error(&format_error(
@@ -993,13 +965,6 @@ fn main() {
                         info!("Order {} canceled successfully", order_id_hex);
                     } else {
                         info!("Order {} was not found or already canceled", order_id_hex);
-                    }
-                    if !result.transaction_hashes.is_empty() {
-                        info!("Transaction hashes:");
-                        for formatted_hash in result.get_formatted_transaction_hashes() {
-                            info!("  {}", formatted_hash);
-                        }
-                        info!("Paste these hashes into your chain's block explorer");
                     }
                 }
                 Err(e) => print_error(&format_error(

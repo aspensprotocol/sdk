@@ -134,24 +134,17 @@ struct SettleArgs {
 }
 
 /// What the CLI needs back from a submitted order, normalized across the two
-/// transports.
-///
-/// gRPC answers with a `SendOrderResponse`; FCE answers with a
-/// `PlaceOrderResponse`, which carries no transaction hashes — trading is
-/// off-chain until settlement, so there is nothing to link to an explorer. The
-/// hash list is simply empty there rather than fabricated.
+/// transports (gRPC's `SendOrderResponse` and FCE's `PlaceOrderResponse`).
 struct SentOrder {
     /// `0x`-prefixed hex, pre-formatted here so every downstream `{}` print
     /// site stays unchanged from when this carried a `u64`.
     order_id: String,
-    tx_hashes: Vec<String>,
 }
 
 impl From<SendOrderResponse> for SentOrder {
     fn from(r: SendOrderResponse) -> Self {
         Self {
             order_id: format!("0x{}", hex::encode(&r.order_id)),
-            tx_hashes: r.get_formatted_transaction_hashes(),
         }
     }
 }
@@ -311,7 +304,6 @@ async fn dispatch_send_order(
         );
         return Ok(SentOrder {
             order_id: resp.order_id,
-            tx_hashes: vec![],
         });
     }
 
@@ -461,18 +453,6 @@ fn resolve_token_amount(
     amount: &str,
 ) -> Result<u128> {
     aspens_cliutil::resolve_token_amount(config, network, token_symbol, amount)
-}
-
-/// Print the transaction-hash footer that all order/cancel commands share.
-fn log_tx_hashes(formatted: &[String]) {
-    if formatted.is_empty() {
-        return;
-    }
-    info!("Transaction hashes:");
-    for hash in formatted {
-        info!("  {}", hash);
-    }
-    info!("Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)");
 }
 
 #[derive(Debug, Parser)]
@@ -990,7 +970,6 @@ async fn run() -> Result<()> {
                 "Market buy order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.tx_hashes);
         }
         Commands::BuyLimit {
             market,
@@ -1026,7 +1005,6 @@ async fn run() -> Result<()> {
                 "Limit buy order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.tx_hashes);
         }
         Commands::SellMarket {
             market,
@@ -1055,7 +1033,6 @@ async fn run() -> Result<()> {
                 "Market sell order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.tx_hashes);
         }
         Commands::SellLimit {
             market,
@@ -1091,7 +1068,6 @@ async fn run() -> Result<()> {
                 "Limit sell order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.tx_hashes);
         }
         Commands::BuyMarketable {
             market,
@@ -1129,7 +1105,6 @@ async fn run() -> Result<()> {
                 "Marketable buy order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.tx_hashes);
         }
         Commands::SellMarketable {
             market,
@@ -1165,7 +1140,6 @@ async fn run() -> Result<()> {
                 "Marketable sell order sent successfully (order_id: {})",
                 result.order_id
             );
-            log_tx_hashes(&result.tx_hashes);
         }
         Commands::CancelOrder {
             market,
@@ -1233,17 +1207,6 @@ async fn run() -> Result<()> {
                 info!(
                     "Order {} already gone (filled or previously cancelled)",
                     order_id_hex
-                );
-            }
-
-            // Log transaction hashes if available
-            if !result.transaction_hashes.is_empty() {
-                info!("Transaction hashes:");
-                for formatted_hash in result.get_formatted_transaction_hashes() {
-                    info!("  {}", formatted_hash);
-                }
-                info!(
-                    "Paste these hashes into your chain's block explorer (e.g., Etherscan, Basescan)"
                 );
             }
         }

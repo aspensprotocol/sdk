@@ -386,8 +386,9 @@ pub fn lookup_market<'a>(
 /// Resolve the origin chain network for a (market, side) pair — the chain
 /// where the user signs their lock instruction.
 ///
-/// Mirrors `gasless::resolve_order` and the per-side branches in
-/// `cancel_order::call_cancel_order_with_wallet`:
+/// Mirrors `gasless::resolve_order`'s side logic. The CLI and REPL
+/// `cancel-order` commands call this directly to pick which chain's wallet
+/// (and therefore which curve) signs the cancel:
 /// - `Side::Bid` (BUY) locks the quote token → origin = quote chain
 /// - `Side::Ask` (SELL) locks the base token → origin = base chain
 ///
@@ -836,8 +837,6 @@ mod tests {
             order_in_book: true,
             order: None,
             trades: vec![],
-            transaction_hashes: vec![],
-            current_orderbook: vec![],
         };
 
         assert_eq!(response.order_id, vec![0xaa, 0xbb, 0xcc]);
@@ -850,8 +849,6 @@ mod tests {
             order_in_book: false,
             order: None,
             trades: vec![],
-            transaction_hashes: vec![],
-            current_orderbook: vec![],
         };
 
         assert!(response.order_id.is_empty());
@@ -865,8 +862,6 @@ mod tests {
             order_in_book: true,
             order: None,
             trades: vec![],
-            transaction_hashes: vec![],
-            current_orderbook: vec![],
         };
 
         assert_eq!(response.order_id, id);
@@ -879,8 +874,6 @@ mod tests {
             order_in_book: true,
             order: None,
             trades: vec![],
-            transaction_hashes: vec![],
-            current_orderbook: vec![],
         };
 
         let display_str = format!("{}", response);
@@ -913,8 +906,6 @@ mod tests {
             order_in_book: true,
             order: Some(order),
             trades: vec![],
-            transaction_hashes: vec![],
-            current_orderbook: vec![],
         };
 
         assert_eq!(response.order_id, vec![0x2a]);

@@ -20,24 +20,19 @@ use crate::solana::derive_user_balance_pda;
 /// Lives here rather than in the pure module because it reads from the
 /// proto-generated `Chain` struct — a `client`-feature type.
 pub fn resolve_program_and_instance(chain: &Chain) -> Result<(Pubkey, Pubkey)> {
-    // Program id is in `factory_address`; the existing scaffold also accepted
-    // `trade_contract.contract_id`, so fall back to it for compatibility.
-    let program_str = if !chain.factory_address.is_empty() {
-        chain.factory_address.clone()
-    } else {
-        chain
-            .trade_contract
-            .as_ref()
-            .and_then(|tc| tc.contract_id.clone())
-            .ok_or_else(|| {
-                eyre!(
-                    "Solana chain '{}' has no factory_address / trade_contract.contract_id (program id) configured",
-                    chain.network
-                )
-            })?
-    };
-    let program_id = Pubkey::from_str(&program_str)
-        .map_err(|e| eyre!("invalid Solana program id '{}': {}", program_str, e))?;
+    if chain.factory_address.is_empty() {
+        return Err(eyre!(
+            "chain {} has no factory_address (the Solana program id)",
+            chain.network
+        ));
+    }
+    let program_id = Pubkey::from_str(&chain.factory_address).map_err(|e| {
+        eyre!(
+            "invalid Solana program id '{}': {}",
+            chain.factory_address,
+            e
+        )
+    })?;
 
     let instance_str = chain
         .trade_contract

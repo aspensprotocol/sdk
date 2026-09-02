@@ -84,8 +84,6 @@ pub struct CancelOrderRequest {
     pub market_id: String,
     /// "BID" | "ASK".
     pub side: String,
-    #[serde(rename = "tokenAddress")]
-    pub token_address: String,
     /// The order's canonical 32-byte id, `0x`-prefixed hex (matches
     /// `SendOrderResponse.order_id` / `OrderToCancel.order_id`).
     #[serde(rename = "orderId")]

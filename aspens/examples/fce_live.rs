@@ -8,7 +8,7 @@
 //! Usage (cwd holds the .env):
 //!   fce_live book     <market_id> [depth]
 //!   fce_live place    <side> <qty> [price]      (market_id via MARKET_ID env)
-//!   fce_live cancel   <side> <token_addr> <order_id>
+//!   fce_live cancel   <side> <order_id>
 //!   fce_live mystate  [trader]
 //!   fce_live history  [trader]
 //!   fce_live withdraw <network> <token_addr> <amount_raw>
@@ -53,8 +53,7 @@ async fn main() -> Result<()> {
         "cancel" => {
             let wallet = load_trader_wallet(CurveType::Secp256k1)?;
             let side = args.get(1).ok_or_else(|| eyre!("need side"))?;
-            let token = args.get(2).ok_or_else(|| eyre!("need token addr"))?;
-            let oid_str = args.get(3).ok_or_else(|| eyre!("need order id"))?;
+            let oid_str = args.get(2).ok_or_else(|| eyre!("need order id"))?;
             let oid_body = oid_str.strip_prefix("0x").unwrap_or(oid_str);
             let oid_bytes =
                 hex::decode(oid_body).map_err(|e| eyre!("order id '{oid_str}' is not hex: {e}"))?;
@@ -64,8 +63,7 @@ async fn main() -> Result<()> {
                     v.len()
                 )
             })?;
-            let out =
-                fce_actions::cancel_order(&client, &wallet, &market_id(), side, token, oid).await?;
+            let out = fce_actions::cancel_order(&client, &wallet, &market_id(), side, oid).await?;
             println!("status={} log={}", out.status, out.log);
             println!("{}", serde_json::to_string_pretty(&out.data)?);
         }

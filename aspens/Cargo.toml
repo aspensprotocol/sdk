@@ -149,10 +149,6 @@ name = "quickstart"
 required-features = ["client"]
 
 [[example]]
-name = "transaction_hash_example"
-required-features = ["client"]
-
-[[example]]
 name = "fce_live"
 required-features = ["fce"]
 
