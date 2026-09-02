@@ -4,7 +4,10 @@
 //! JWT tokens for admin operations on the Aspens platform.
 
 /// Generated protobuf bindings for the `arborter_auth.v1` service.
-#[allow(missing_docs)]
+// `invalid_html_tags`: the canonical-message doc comments use
+// `<placeholder>` notation (e.g. `Address: <address>`) that rustdoc
+// otherwise parses as an unclosed HTML tag.
+#[allow(missing_docs, rustdoc::invalid_html_tags)]
 pub mod auth_pb {
     include!("../../../proto/generated/xyz.aspens.arborter_auth.v1.rs");
 }
@@ -106,12 +109,9 @@ pub async fn authenticate_with_wallet(
             sign_auth_message(evm_signer, address, timestamp, &nonce, chain_id).await?
         }
         CurveType::Ed25519 => {
-            // Solana path: sign canonical message bytes
-            let mut msg = Vec::new();
-            msg.extend_from_slice(address_str.as_bytes());
-            msg.extend_from_slice(&timestamp.to_be_bytes());
-            msg.extend_from_slice(nonce.as_bytes());
-            let sig_bytes = wallet.sign_message(&msg).await?;
+            // Solana path: sign the server's literal auth message
+            let msg = build_solana_auth_message(&address_str, timestamp, &nonce);
+            let sig_bytes = wallet.sign_message(msg.as_bytes()).await?;
             format!("0x{}", hex::encode(sig_bytes))
         }
     };
@@ -133,6 +133,14 @@ pub async fn authenticate_with_wallet(
     Ok(response.into_inner().into())
 }
 
+/// The Solana admin auth message, byte-for-byte what the arborter verifies:
+/// a literal text block, signed raw (no prefix, no pre-hash) with Ed25519.
+pub fn build_solana_auth_message(address: &str, timestamp: u64, nonce: &str) -> String {
+    format!(
+        "Arborter v1 Authentication\n\nAddress: {address}\nTimestamp: {timestamp}\nNonce: {nonce}"
+    )
+}
+
 /// Generate a random nonce for authentication
 fn generate_nonce() -> String {
     use std::time::Instant;
@@ -149,7 +157,7 @@ fn generate_nonce() -> String {
 /// Sign an authentication message using EIP-712 typed data
 ///
 /// The typed data structure matches the server's expected format:
-/// - Domain: { name: "Aspens", version: "1", chainId: <chain_id> }
+/// - Domain: { name: "Arborter", version: "1", chainId: <chain_id> }
 /// - Message: { address, timestamp, nonce }
 async fn sign_auth_message(
     signer: &PrivateKeySigner,
@@ -257,6 +265,19 @@ mod tests {
         // Just verify it computes without panicking
         let separator = compute_domain_separator(1);
         assert!(!separator.is_zero());
+    }
+
+    #[test]
+    fn solana_auth_message_matches_the_server_literal() {
+        let msg = build_solana_auth_message(
+            "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+            1_756_800_000,
+            "n-1",
+        );
+        assert_eq!(
+            msg,
+            "Arborter v1 Authentication\n\nAddress: 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU\nTimestamp: 1756800000\nNonce: n-1"
+        );
     }
 
     #[test]
