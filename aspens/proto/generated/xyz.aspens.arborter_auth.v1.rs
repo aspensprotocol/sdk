@@ -7,13 +7,17 @@ pub struct AuthRequest {
     /// base58-encoded Ed25519 public keys (32 bytes).
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
-    /// Unix timestamp when the message was created (in seconds). Enforced window: see the service doc.
+    /// Unix timestamp when the message was created (in seconds). Enforced
+    /// window: see the service doc.
     #[prost(uint64, tag = "2")]
     pub timestamp: u64,
-    /// Client-chosen nonce; uniqueness within 300 s per address is what matters (see the service doc).
+    /// Client-chosen nonce; uniqueness within 300 s per address is what
+    /// matters (see the service doc).
     #[prost(string, tag = "3")]
     pub nonce: ::prost::alloc::string::String,
-    /// Hex-encoded signature over the canonical auth message defined in the service doc (with or without 0x prefix): 65-byte EIP-712 for EVM addresses, 64-byte raw Ed25519 for Solana addresses.
+    /// Hex-encoded signature over the canonical auth message defined in the
+    /// service doc (with or without 0x prefix): 65-byte EIP-712 for EVM
+    /// addresses, 64-byte raw Ed25519 for Solana addresses.
     #[prost(string, tag = "4")]
     pub signature: ::prost::alloc::string::String,
 }

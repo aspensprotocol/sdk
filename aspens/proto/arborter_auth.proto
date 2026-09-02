@@ -56,11 +56,15 @@ message AuthRequest {
   // EVM addresses are 0x-prefixed hex (20 bytes); Solana addresses are
   // base58-encoded Ed25519 public keys (32 bytes).
   string address = 1;
-  // Unix timestamp when the message was created (in seconds). Enforced window: see the service doc.
+  // Unix timestamp when the message was created (in seconds). Enforced
+  // window: see the service doc.
   uint64 timestamp = 2;
-  // Client-chosen nonce; uniqueness within 300 s per address is what matters (see the service doc).
+  // Client-chosen nonce; uniqueness within 300 s per address is what
+  // matters (see the service doc).
   string nonce = 3;
-  // Hex-encoded signature over the canonical auth message defined in the service doc (with or without 0x prefix): 65-byte EIP-712 for EVM addresses, 64-byte raw Ed25519 for Solana addresses.
+  // Hex-encoded signature over the canonical auth message defined in the
+  // service doc (with or without 0x prefix): 65-byte EIP-712 for EVM
+  // addresses, 64-byte raw Ed25519 for Solana addresses.
   string signature = 4;
 }
 

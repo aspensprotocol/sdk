@@ -188,9 +188,10 @@ message Order {
   repeated bytes matching_order_ids = 8;
   // Post-only: if true, the order MUST rest on the book. If it would
   // cross any opposing confirmed order at submission time the request
-  // is rejected with FAILED_PRECONDITION and nothing is reserved. Limit orders only — incompatible with market (no price)
-  // and with DISCRETIONARY execution_type. Defaults to false, which
-  // preserves legacy take-or-rest behavior.
+  // is rejected with FAILED_PRECONDITION and nothing is reserved. Limit
+  // orders only — incompatible with market (no price) and with
+  // DISCRETIONARY execution_type. Defaults to false, which preserves
+  // legacy take-or-rest behavior.
   bool post_only = 9;
   // Hidden ("invisible") order: matched, settled, and canceled exactly
   // like a visible order (normal price-time priority), but never exposed

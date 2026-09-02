@@ -158,7 +158,7 @@ message SetMarketRequest {
   string base_chain_token_address = 5;
   // The quote chain token address
   string quote_chain_token_address = 6;
-  // NOTE: `base_chain_token_decimals` (7) and `quote_chain_token_decimals` (8)
+  // NOTE: `base_chain_token_decimals` and `quote_chain_token_decimals`
   // were removed. A token's decimals are a property of the TOKEN, and their one
   // home is the `tokens` table, which `GetConfig` already serves. Carrying a
   // second copy on the market let the two disagree with nothing to reconcile
@@ -168,7 +168,7 @@ message SetMarketRequest {
   //
   // The pair decimals below are NOT a duplicate: they belong to the market, not
   // to either token, and nothing else knows them.
-  int32 pair_decimals = 9;
+  int32 pair_decimals = 7;
 }
 
 message SetMarketResponse {
