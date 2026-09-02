@@ -46,13 +46,20 @@ solana-sdk = { workspace = true, optional = true }
 # Pin transitive solana-keypair to avoid the buggy 3.1.1+ releases.
 solana-keypair = { workspace = true, optional = true }
 bs58 = { workspace = true, optional = true }
-ed25519-dalek = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 
 # --- Client runtime: gRPC (tonic/prost), RPC submission, async runtime,
 # URL/TOML parsing, EVM provider machinery. Pulled in only when the
 # `client` feature is enabled.
 alloy-chains = { workspace = true, optional = true }
+# NOTE: not called by name anywhere in `aspens/src` — the sol! macro's
+# `#[sol(rpc)]` bindings (admin/mod.rs, evm/rpc.rs) expand to code that
+# references `::alloy_contract` directly, so it must stay a direct
+# dependency even though the crate itself never spells the name. Verified
+# 2026-09-02: removing it breaks `cargo check -p aspens --all-features`
+# with E0432 (`no external crate alloy_contract`) despite `alloy`'s own
+# "contract" feature being on — a transitive dep isn't visible under its
+# own name unless it's also a direct one.
 alloy-contract = { workspace = true, optional = true }
 solana-client = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
@@ -65,11 +72,12 @@ futures = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
-# Optional: formatting support (only meaningful alongside `client`).
+# Table formatting for the `trader` command output (only meaningful
+# alongside `client`).
 comfy-table = { workspace = true, optional = true }
 
 [features]
-default = ["trader", "formatting", "client", "evm", "solana"]
+default = ["trader", "client", "evm", "solana"]
 
 # `trader` and `admin` don't pull additional dependencies, but they DO
 # gate which submodules of `commands` are compiled in (see
@@ -79,9 +87,8 @@ default = ["trader", "formatting", "client", "evm", "solana"]
 # A `client`-only build with neither flag enabled gives you the
 # config-fetch surface and nothing else. Binaries enable `trader`
 # (and `admin` for aspens-admin) explicitly — see their Cargo.toml.
-trader = []
+trader = ["dep:comfy-table"]
 admin = []
-formatting = ["dep:comfy-table"]
 
 # Relying-party DCAP backend for `tdx_verify::dcap` — pulls the pure-Rust
 # `dcap-qvl` quote verifier. The rest of `tdx_verify` (reconstruction + pipeline)
@@ -109,7 +116,6 @@ solana = [
     "dep:solana-sdk",
     "dep:solana-keypair",
     "dep:bs58",
-    "dep:ed25519-dalek",
     "dep:borsh",
 ]
 

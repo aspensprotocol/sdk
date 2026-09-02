@@ -1198,7 +1198,6 @@ dependencies = [
  "bs58",
  "comfy-table",
  "dcap-qvl",
- "ed25519-dalek",
  "eyre",
  "futures",
  "getrandom 0.4.3",
@@ -1239,7 +1238,6 @@ dependencies = [
  "comfy-table",
  "eyre",
  "hex",
- "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1251,7 +1249,6 @@ name = "aspens-cli"
 version = "0.7.0"
 dependencies = [
  "alloy",
- "alloy-chains",
  "aspens",
  "aspens-cliutil",
  "clap",
@@ -1281,7 +1278,6 @@ name = "aspens-repl"
 version = "0.7.0"
 dependencies = [
  "alloy",
- "alloy-chains",
  "aspens",
  "aspens-cliutil",
  "clap",

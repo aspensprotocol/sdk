@@ -20,14 +20,12 @@ aspens = { path = "../aspens", default-features = false, features = [
   "trader",
   "evm",
   "solana",
-  "formatting",
   "dcap-fetch",
 ] }
 aspens-cliutil = { path = "../aspens-cliutil" }
 
 # Workspace dependencies
 alloy.workspace = true
-alloy-chains.workspace = true
 eyre.workspace = true
 clap.workspace = true
 clap-verbosity.workspace = true
