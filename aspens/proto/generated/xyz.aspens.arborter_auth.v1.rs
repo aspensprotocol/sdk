@@ -89,8 +89,8 @@ pub mod auth_service_client {
     ///
     /// Solana (address is base58): raw Ed25519 (no prefix, no pre-hash) over the
     /// UTF-8 bytes of exactly
-    /// "Arborter v1 Authentication\n\nAddress: <address>\\nTimestamp: <timestamp>\\nNonce: <nonce>"
-    /// with <timestamp> in decimal. signature: 64 bytes, hex, "0x" optional.
+    /// `"Arborter v1 Authentication\n\nAddress: <address>\nTimestamp: <timestamp>\nNonce: <nonce>"`
+    /// with `<timestamp>` in decimal. signature: 64 bytes, hex, "0x" optional.
     ///
     /// Freshness: `timestamp` must be at most 300 s old and at most 60 s in the
     /// future by the server's clock. Replay: the server remembers (address,

@@ -1,7 +1,7 @@
 use std::fmt;
 
 use super::arborter_pb::arborter_service_client::ArborterServiceClient;
-use super::arborter_pb::{CancelOrderRequest, CancelOrderResponse, OrderToCancel, Side};
+use super::arborter_pb::{CancelOrderRequest, CancelOrderResponse, OrderToCancel};
 use eyre::Result;
 use prost::Message;
 
@@ -96,16 +96,13 @@ fn classify_cancel_result(
 /// Resolve the `Side` value a cancel must carry from the CLI's "buy"/"sell"
 /// spelling.
 ///
-/// Shared by the gRPC and FCE cancel paths.
+/// Delegates to [`super::send_order::parse_side`] rather than repeating its
+/// match arms: the FCE cancel path (`fce_actions::cancel_order`) already
+/// calls that parser directly, so routing this one through it too means
+/// there is exactly one place that decides what "buy"/"bid"/"sell"/"ask"
+/// mean, instead of two copies that could drift.
 pub(crate) fn resolve_side(side: &str) -> Result<i32> {
-    match side.to_lowercase().as_str() {
-        "buy" | "bid" => Ok(Side::Bid as i32),
-        "sell" | "ask" => Ok(Side::Ask as i32),
-        _ => Err(eyre::eyre!(
-            "Invalid side '{}'. Must be 'buy' or 'sell'",
-            side
-        )),
-    }
+    Ok(super::send_order::parse_side(side)? as i32)
 }
 
 /// Cancel an order using configuration from the server with a curve-agnostic wallet.
@@ -143,6 +140,7 @@ pub async fn call_cancel_order_from_config_with_wallet(
 
 #[cfg(test)]
 mod resolve_side_tests {
+    use super::super::arborter_pb::Side;
     use super::*;
 
     /// A BID locked quote-chain funds; the CURVE that signs the cancel still

@@ -14,10 +14,7 @@
 /// `commands::auth::auth_pb`. (`attestation.v1` is the one exception,
 /// anchored at [`crate::attestation::v1`] because `build.rs` rewrites the
 /// generated cross-package references to that absolute path.)
-// `invalid_html_tags`: some proto comments use `<placeholder>` wire-format
-// notation (e.g. `"<network>|<token>|<account>|<amount>"`) that rustdoc
-// otherwise parses as an unclosed HTML tag.
-#[allow(missing_docs, rustdoc::invalid_html_tags)]
+#[allow(missing_docs)]
 pub mod arborter_pb {
     include!("../../../proto/generated/xyz.aspens.arborter.v1.rs");
 }

@@ -4,10 +4,7 @@
 //! JWT tokens for admin operations on the Aspens platform.
 
 /// Generated protobuf bindings for the `arborter_auth.v1` service.
-// `invalid_html_tags`: the canonical-message doc comments use
-// `<placeholder>` notation (e.g. `Address: <address>`) that rustdoc
-// otherwise parses as an unclosed HTML tag.
-#[allow(missing_docs, rustdoc::invalid_html_tags)]
+#[allow(missing_docs)]
 pub mod auth_pb {
     include!("../../../proto/generated/xyz.aspens.arborter_auth.v1.rs");
 }
