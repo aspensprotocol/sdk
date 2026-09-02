@@ -37,15 +37,12 @@ pub struct AttestationReport {
     /// GetAttestationRequest.nonce for the construction).
     #[prost(bytes = "vec", tag = "1")]
     pub raw_quote: ::prost::alloc::vec::Vec<u8>,
-    /// Optional collateral the verifier couldn't otherwise obtain (PCK chain /
-    /// auxblob). Usually empty -- DCAP fetches collateral from Intel PCS/PCCS and
-    /// the PCK chain is embedded in the quote's certification data.
+    /// Self-reported running image digest(s): the raw bytes of the signer's
+    /// digests file, unparsed by any verifier. Trust rests on the MRTD/RTMR
+    /// measurement policy, NOT on this self-report — a compromised signer can
+    /// put anything here. A verifier must compare the quote's REPORTDATA
+    /// against an EXPECTED digest it supplies itself, never against this echo.
     #[prost(bytes = "vec", tag = "2")]
-    pub cert_chain: ::prost::alloc::vec::Vec<u8>,
-    /// Self-reported running image digest(s). Trust rests on the MRTD/RTMR
-    /// measurement policy, NOT on this self-report — a compromised signer can put
-    /// anything here.
-    #[prost(bytes = "vec", tag = "3")]
     pub image_digest: ::prost::alloc::vec::Vec<u8>,
 }
 /// Generated client implementations.

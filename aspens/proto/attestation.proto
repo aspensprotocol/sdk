@@ -43,13 +43,10 @@ message AttestationReport {
   // GetAttestationRequest.nonce for the construction).
   bytes raw_quote = 1;
 
-  // Optional collateral the verifier couldn't otherwise obtain (PCK chain /
-  // auxblob). Usually empty -- DCAP fetches collateral from Intel PCS/PCCS and
-  // the PCK chain is embedded in the quote's certification data.
-  bytes cert_chain = 2;
-
-  // Self-reported running image digest(s). Trust rests on the MRTD/RTMR
-  // measurement policy, NOT on this self-report — a compromised signer can put
-  // anything here.
-  bytes image_digest = 3;
+  // Self-reported running image digest(s): the raw bytes of the signer's
+  // digests file, unparsed by any verifier. Trust rests on the MRTD/RTMR
+  // measurement policy, NOT on this self-report — a compromised signer can
+  // put anything here. A verifier must compare the quote's REPORTDATA
+  // against an EXPECTED digest it supplies itself, never against this echo.
+  bytes image_digest = 2;
 }

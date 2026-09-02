@@ -6,7 +6,13 @@ import "attestation.proto";
 
 option optimize_for = SPEED;
 
-// The Configuration service definition
+// The Configuration service definition.
+//
+// Authentication: every RPC here requires an admin JWT from AuthService,
+// EXCEPT four that are served unauthenticated on purpose because a client
+// needs them BEFORE it can trust or talk to the venue: GetConfig,
+// GetVersion, GetSignerPublicKey and GetAttestation. Operator readiness
+// probes depend on GetConfig staying open.
 service ConfigService {
   // rpc service to set the admin address
   rpc UpdateAdmin(UpdateAdminRequest) returns (UpdateAdminResponse) {}
@@ -56,7 +62,9 @@ service ConfigService {
 }
 
 message UpdateAdminRequest {
-  // The address to set for admin management operations
+  // Adds (or updates) an address in the SAME admin set that AuthService
+  // mints JWTs for — the address created by InitializeAdmin lives there
+  // too. Additive: it never removes an existing admin.
   string admin_address = 1;
 }
 
@@ -123,8 +131,6 @@ message SetChainRequest {
 message SetChainResponse {
   // Indicates if the chain was set successfully
   bool success = 1;
-  // The configuration object
-  Configuration config = 2;
 }
 
 message SetTokenRequest {
@@ -137,8 +143,6 @@ message SetTokenRequest {
 message SetTokenResponse {
   // Indicates if the token was set successfully
   bool success = 1;
-  // The configuration object
-  Configuration config = 2;
 }
 
 message SetMarketRequest {
@@ -170,8 +174,6 @@ message SetMarketRequest {
 message SetMarketResponse {
   // Indicates if the market was set successfully
   bool success = 1;
-  // The configuration object
-  Configuration config = 2;
 }
 
 message SetTradeContractRequest {
@@ -229,10 +231,9 @@ message Configuration {
 
 // Represents the trading instance details
 message TradeContract {
-  // Optional: For non-EVM chains like Hedera, Solana, etc.
-  optional string contract_id = 1;
-  // The chain address of the trading instance
-  string address = 2;
+  // The chain address of the trading instance: 0x-hex for EVM, the
+  // program/instance address in base58 for Solana.
+  string address = 1;
 }
 
 // Authentication scheme for RPC endpoints
@@ -274,18 +275,24 @@ enum FinalityPolicy {
   FINALITY_POLICY_UNSPECIFIED = 0;
   // Read at the chain's finalized tag (EVM) / finalized commitment (Solana).
   FINALITY_POLICY_FINALIZED = 1;
-  // Read at (head - finality_confirmations). Escape hatch for a chain whose
-  // RPC rejects the finalized tag.
+  // Read at (head - finality_confirmations). Intended for a chain whose RPC
+  // rejects the finalized tag. Reachable today only through an operator's
+  // raw SetChain payload (the infra `just` config recipe reads it from
+  // markets.toml); the admin CLI and the Go deployer always send
+  // UNSPECIFIED, so every chain they register runs FINALIZED.
   FINALITY_POLICY_CONFIRMATIONS = 2;
 }
 
 // Represents a single blockchain network
 message Chain {
-  // The architecture of the chain (e.g., EVM, Hedera)
+  // The chain's architecture: exactly "evm" or "solana", lowercase (the
+  // server lowercases on write). Any other string is accepted by SetChain
+  // and only fails later, at deploy or listener start; an empty string is
+  // treated as "evm" on the deploy paths.
   string architecture = 1;
-  // The canonical name of the chain (e.g., 'Ethereum Mainnet' | 'Hedera Testnet')
+  // The canonical name of the chain (e.g., 'Ethereum Mainnet' | 'Solana Devnet')
   string canonical_name = 2;
-  // The chain network (e.g., op-mainnet, hedera-testnet)
+  // The chain network (e.g., op-mainnet, solana-devnet)
   string network = 3;
   // The chain ID (e.g., Ethereum = 1)
   uint32 chain_id = 4;
@@ -353,9 +360,11 @@ message Market {
   string base_chain_token_symbol = 4;
   /// The token symbol for the quote chain
   string quote_chain_token_symbol = 5;
-  // The base chain token decimals
+  // The base chain token's decimals, derived from its `tokens` row at read
+  // time (the token row is the one home for decimals; see the note on
+  // `SetMarketRequest`).
   int32 base_chain_token_decimals = 6;
-  // The quote chain token decimals
+  // The quote chain token's decimals, derived the same way.
   int32 quote_chain_token_decimals = 7;
   // The pair decimals (this is chosen by the stack admin)
   int32 pair_decimals = 8;
@@ -369,12 +378,10 @@ message Token {
   string name = 1;
   // The symbol of the token
   string symbol = 2;
-  // The chain address of the token contract
+  // The token contract address (EVM) or mint address (Solana)
   string address = 3;
-  // Optional: for networks that use IDs (e.g., Hedera)
-  optional string token_id = 4;
   // The number of decimal places the token is defined with
-  uint32 decimals = 5;
+  uint32 decimals = 4;
 }
 
 // Request to get signer public key(s)
@@ -384,14 +391,13 @@ message GetSignerPublicKeyRequest {
   optional string chain_network = 1;
 }
 
-// Single chain's public key information
+// Single chain's public key information. The chain's network name is the
+// map key it sits under in `GetSignerPublicKeyResponse.chain_keys`.
 message ChainPublicKey {
-  // The chain ID
+  // The chain ID (0 when the network is not registered)
   uint32 chain_id = 1;
-  // The chain network name (e.g., "anvil-1", "base-sepolia")
-  string chain_network = 2;
   // The signer's public key (address) for this chain
-  string public_key = 3;
+  string public_key = 2;
 }
 
 // Response with public keys per chain
@@ -410,8 +416,6 @@ message DeleteMarketRequest {
 message DeleteMarketResponse {
   // Indicates if the market was deleted successfully
   bool success = 1;
-  // The configuration object after deletion
-  Configuration config = 2;
 }
 
 // Delete token request
@@ -426,8 +430,6 @@ message DeleteTokenRequest {
 message DeleteTokenResponse {
   // Indicates if the token was deleted successfully
   bool success = 1;
-  // The configuration object after deletion
-  Configuration config = 2;
 }
 
 // Delete chain request
@@ -440,8 +442,6 @@ message DeleteChainRequest {
 message DeleteChainResponse {
   // Indicates if the chain was deleted successfully
   bool success = 1;
-  // The configuration object after deletion
-  Configuration config = 2;
 }
 
 // Delete trading instance request
@@ -454,8 +454,6 @@ message DeleteTradeContractRequest {
 message DeleteTradeContractResponse {
   // Indicates if the trading instance was deleted successfully
   bool success = 1;
-  // The configuration object after deletion
-  Configuration config = 2;
 }
 
 message Empty {}

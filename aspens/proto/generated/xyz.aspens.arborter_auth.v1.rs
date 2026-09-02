@@ -7,16 +7,13 @@ pub struct AuthRequest {
     /// base58-encoded Ed25519 public keys (32 bytes).
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
-    /// Unix timestamp when the message was created (in seconds)
+    /// Unix timestamp when the message was created (in seconds). Enforced window: see the service doc.
     #[prost(uint64, tag = "2")]
     pub timestamp: u64,
-    /// Random nonce to prevent replay attacks
+    /// Client-chosen nonce; uniqueness within 300 s per address is what matters (see the service doc).
     #[prost(string, tag = "3")]
     pub nonce: ::prost::alloc::string::String,
-    /// Hex-encoded signature over the canonical auth message (with or
-    /// without 0x prefix). For EVM addresses this is a 65-byte EIP-712
-    /// signature; for Solana addresses this is a 64-byte raw Ed25519
-    /// signature.
+    /// Hex-encoded signature over the canonical auth message defined in the service doc (with or without 0x prefix): 65-byte EIP-712 for EVM addresses, 64-byte raw Ed25519 for Solana addresses.
     #[prost(string, tag = "4")]
     pub signature: ::prost::alloc::string::String,
 }
@@ -53,9 +50,6 @@ pub struct InitializeAdminResponse {
     /// The address that was set as admin
     #[prost(string, tag = "3")]
     pub address: ::prost::alloc::string::String,
-    /// Success message
-    #[prost(string, tag = "4")]
-    pub message: ::prost::alloc::string::String,
 }
 /// Generated client implementations.
 pub mod auth_service_client {
@@ -79,6 +73,31 @@ pub mod auth_service_client {
     ///
     /// Consumers should not need to know which curve was used — the same
     /// JWT is minted either way and carries the address as an opaque string.
+    ///
+    /// ---- The canonical auth message ----------------------------------------
+    ///
+    /// EVM (address is 0x-hex): EIP-712 typed data (eth_signTypedData_v4 or
+    /// equivalent) with
+    /// domain  = { name: "Arborter", version: "1", chainId: 1 }
+    /// — no verifyingContract, no salt. chainId is FIXED at 1 on the
+    /// server regardless of which chains the venue trades on; sign
+    /// with 1, not with the wallet's current network, or the server
+    /// recovers a different address and rejects the login.
+    /// type    = AuthRequest(address address, uint64 timestamp, string nonce)
+    /// message = { address, timestamp, nonce } of this request, verbatim.
+    /// signature: 65-byte r||s||v, hex, "0x" optional.
+    ///
+    /// Solana (address is base58): raw Ed25519 (no prefix, no pre-hash) over the
+    /// UTF-8 bytes of exactly
+    /// "Arborter v1 Authentication\n\nAddress: <address>\\nTimestamp: <timestamp>\\nNonce: <nonce>"
+    /// with <timestamp> in decimal. signature: 64 bytes, hex, "0x" optional.
+    ///
+    /// Freshness: `timestamp` must be at most 300 s old and at most 60 s in the
+    /// future by the server's clock. Replay: the server remembers (address,
+    /// nonce) pairs in memory for 300 s (at most 10 000 entries; a nonce is at
+    /// most 256 bytes) and rejects a repeat. The set is not persisted — a server
+    /// restart forgets it, so a captured request stays replayable for up to
+    /// 300 s after a restart. Any unique string is an acceptable nonce.
     #[derive(Debug, Clone)]
     pub struct AuthServiceClient<T> {
         inner: tonic::client::Grpc<T>,
