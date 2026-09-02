@@ -131,7 +131,6 @@ mod order_id_composition_parity {
                 name: symbol.to_string(),
                 symbol: symbol.to_string(),
                 address: address.to_string(),
-                token_id: None,
                 decimals,
             },
         )
@@ -153,7 +152,6 @@ mod order_id_composition_parity {
             }],
             factory_address: "0xfactory".into(),
             trade_contract: Some(TradeContract {
-                contract_id: None,
                 address: "0xtradecontract".into(),
             }),
             tokens,

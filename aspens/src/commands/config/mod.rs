@@ -376,14 +376,6 @@ pub fn format_attestation_report(report: &AttestationReport) -> String {
             hex::encode(Sha256::digest(&report.raw_quote))
         ));
     }
-    if report.cert_chain.is_empty() {
-        output.push_str("  Cert chain:    (embedded in the quote's certification data)\n");
-    } else {
-        output.push_str(&format!(
-            "  Cert chain:    {} bytes\n",
-            report.cert_chain.len()
-        ));
-    }
     if report.image_digest.is_empty() {
         output.push_str("  Image digest:  (none self-reported)\n");
     } else {
@@ -408,7 +400,6 @@ pub fn attestation_report_json(report: &AttestationReport) -> serde_json::Value 
         "raw_quote_len": report.raw_quote.len(),
         "raw_quote_sha256": hex::encode(Sha256::digest(&report.raw_quote)),
         "raw_quote": hex::encode(&report.raw_quote),
-        "cert_chain_len": report.cert_chain.len(),
         "image_digest": String::from_utf8_lossy(&report.image_digest),
     })
 }

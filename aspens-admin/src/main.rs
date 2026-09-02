@@ -170,10 +170,6 @@ enum Commands {
         /// Token decimals
         #[arg(long)]
         decimals: u32,
-
-        /// Optional token ID (for Hedera)
-        #[arg(long)]
-        token_id: Option<String>,
     },
 
     /// Delete a token from a chain
@@ -832,7 +828,6 @@ async fn run() -> Result<()> {
             symbol,
             address,
             decimals,
-            token_id,
         } => {
             let jwt = get_jwt()?;
             info!("Setting token {} ({}) on {}", name, symbol, network);
@@ -841,7 +836,6 @@ async fn run() -> Result<()> {
                 name,
                 symbol: symbol.clone(),
                 address,
-                token_id,
                 decimals,
             };
 

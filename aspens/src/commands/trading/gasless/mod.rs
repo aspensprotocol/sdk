@@ -712,7 +712,6 @@ pub(crate) mod tests {
                 name: "Base".into(),
                 symbol: "BASE".into(),
                 address: BASE_ADDR_IN_TOKENS_TABLE.into(),
-                token_id: None,
                 decimals: base_dec,
             },
         );
@@ -723,7 +722,6 @@ pub(crate) mod tests {
                 name: "Quote".into(),
                 symbol: "QUOTE".into(),
                 address: QUOTE_ADDR_IN_TOKENS_TABLE.into(),
-                token_id: None,
                 decimals: quote_dec,
             },
         );
@@ -743,7 +741,6 @@ pub(crate) mod tests {
             }],
             factory_address: "0xfactory".into(),
             trade_contract: Some(TradeContract {
-                contract_id: None,
                 address: "0xtradecontract".into(),
             }),
             tokens: base_tokens,
@@ -767,7 +764,6 @@ pub(crate) mod tests {
             }],
             factory_address: "0xfactory".into(),
             trade_contract: Some(TradeContract {
-                contract_id: None,
                 address: "0xtradecontract".into(),
             }),
             tokens: quote_tokens,

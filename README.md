@@ -66,7 +66,7 @@ Most commands below require a JWT (set via `--jwt`, `ASPENS_JWT` in `.env`, or t
 | `update-admin --address <eth-address>` | Update the admin address |
 | `set-chain --architecture … --name … --network … --chain-id … --rpc-url … --factory-address … --permit2-address … [--block-explorer-url …] [--instance-signer-address …]` | Add or update a chain entry |
 | `delete-chain --network <network>` | Remove a chain from the configuration |
-| `set-token --network … --name … --symbol … --address … --decimals … [--token-id …]` | Add or update a token on a chain |
+| `set-token --network … --name … --symbol … --address … --decimals …` | Add or update a token on a chain |
 | `delete-token --network <network> --symbol <symbol>` | Remove a token from a chain |
 | `set-market --base-network … --quote-network … --base-symbol … --quote-symbol … --base-address … --quote-address … --base-decimals … --quote-decimals … --pair-decimals …` | Add or update a market |
 | `delete-market --market-id <id>` | Remove a market |
