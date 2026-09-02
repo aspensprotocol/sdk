@@ -195,12 +195,16 @@ Internally `amount = 0.25 × 10^6 = 250_000` USDT0 base units.
 If you're calling the library directly (not via the CLI), keep in
 mind:
 
-- `aspens::commands::trading::deposit::call_deposit_from_config_with_wallet(... amount: u64 ...)`
+- `aspens::commands::trading::deposit::call_deposit_from_config_with_wallet(... amount: u128 ...)`
   takes **base units**, not human-readable strings. Pre-scale yourself
-  using `aspens::decimals::parse_decimal_amount_u64(s, decimals)` (or
+  using `aspens::decimals::parse_decimal_amount(s, decimals)` (or
   multiply if you already have an integer).
 - `aspens::commands::trading::withdraw::call_withdraw_from_config_with_wallet`
   has the same convention.
+- On Solana chains, `deposit`/`withdraw` narrow that `u128` to `u64`
+  internally (the on-chain instruction takes a native `u64`) via a checked
+  `u64::try_from(amount)?`, returning a clear error rather than truncating
+  if the amount doesn't fit.
 - Order helpers (`send_order_with_wallets`) take `quantity: String` /
   `price: Option<String>` and call `convert_to_pair_decimals` on them
   internally, so the human-readable form works there too.
@@ -246,8 +250,8 @@ your typed price scales to a non-zero pair-decimal integer.
 
 - `aspens::decimals::parse_decimal_amount(amount: &str, decimals: u32) -> Result<u128>`
   — single source of truth for human-readable → base-units conversion.
-- `aspens::decimals::parse_decimal_amount_u64` — same, but downcasts
-  with a clear overflow error.
+  `deposit`/`withdraw` on Solana take `u64`, so narrow the result with
+  `u64::try_from(..)?` before calling them there.
 - `aspens/src/decimals.rs` test module — pins parsing, truncation,
   overflow, and rejection behaviour. If you change parsing rules,
   update those tests first.

@@ -92,9 +92,9 @@ admin = []
 # is always available; only the `QuoteVerifier` impl needs this.
 dcap = ["dep:dcap-qvl"]
 
-# DCAP collateral fetching (`tdx_verify::collateral`) + live end-to-end
-# verification (`tdx_verify::live`, with `client`). Drives the PCS/PCCS REST API
-# over the SDK's own rustls reqwest (not dcap-qvl's `report`/reqwest-0.13 stack).
+# DCAP collateral fetching (`tdx_verify::collateral`). Drives the PCS/PCCS
+# REST API over the SDK's own rustls reqwest (not dcap-qvl's
+# `report`/reqwest-0.13 stack).
 dcap-fetch = ["dcap", "dep:reqwest", "dep:asn1_der", "dep:pem", "dep:urlencoding"]
 
 # FCE direct-action transport (`fce` module): POST /direct + poll the ext-proxy.

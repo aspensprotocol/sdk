@@ -62,6 +62,12 @@ change before 1.0.
   only by the deleted `tdx_verify::live::mint_nonce`) and `tokio-stream`
   (used only by the deleted `health::check_grpc_server`) — alongside
   `tonic-reflection`, noted above under `health`.
+- **BREAKING (build): the `formatting` Cargo feature was removed** (`bbee5d0`)
+  — nothing in `aspens/src` gated on `feature = "formatting"`, while
+  `comfy-table` (its sole dependency) was already used unconditionally by
+  `commands::trading::balance`. `comfy-table` now rides on the `trader`
+  feature instead. A downstream `Cargo.toml` with `features = ["formatting"]`
+  must drop it.
 
 ## [0.7.0] — 2026-08-20
 
