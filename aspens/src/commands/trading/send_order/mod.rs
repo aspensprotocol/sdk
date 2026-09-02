@@ -836,8 +836,6 @@ mod tests {
             order_in_book: true,
             order: None,
             trades: vec![],
-            transaction_hashes: vec![],
-            current_orderbook: vec![],
         };
 
         assert_eq!(response.order_id, vec![0xaa, 0xbb, 0xcc]);
@@ -850,8 +848,6 @@ mod tests {
             order_in_book: false,
             order: None,
             trades: vec![],
-            transaction_hashes: vec![],
-            current_orderbook: vec![],
         };
 
         assert!(response.order_id.is_empty());
@@ -865,8 +861,6 @@ mod tests {
             order_in_book: true,
             order: None,
             trades: vec![],
-            transaction_hashes: vec![],
-            current_orderbook: vec![],
         };
 
         assert_eq!(response.order_id, id);
@@ -879,8 +873,6 @@ mod tests {
             order_in_book: true,
             order: None,
             trades: vec![],
-            transaction_hashes: vec![],
-            current_orderbook: vec![],
         };
 
         let display_str = format!("{}", response);
@@ -913,8 +905,6 @@ mod tests {
             order_in_book: true,
             order: Some(order),
             trades: vec![],
-            transaction_hashes: vec![],
-            current_orderbook: vec![],
         };
 
         assert_eq!(response.order_id, vec![0x2a]);

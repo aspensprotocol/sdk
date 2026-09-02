@@ -463,3 +463,39 @@ mod order_wire {
         );
     }
 }
+
+// -- Cancel wire encoding: what the cancel signature is taken over --------
+
+/// The arborter verifies a cancel's `signature_hash` against
+/// `order_to_cancel.encode(&buf)` — the prost encoding of `OrderToCancel`.
+/// Pin the bytes by field number so a renumber or a re-added field (e.g. a
+/// resurrected `token_address`) changes this literal instead of silently
+/// changing every client's signature.
+#[cfg(feature = "client")]
+mod cancel_wire {
+    use aspens::commands::trading::arborter_pb::{OrderToCancel, Side};
+    use prost::Message;
+
+    /// The cancel signature is over the prost encoding of `OrderToCancel`.
+    /// Values are distinct per field on purpose.
+    #[test]
+    fn order_to_cancel_encoding_snapshot() {
+        let msg = OrderToCancel {
+            market_id: "a::0x1::b::0x2".to_string(),
+            side: Side::Ask as i32,
+            order_id: (1u8..=32).collect(),
+        };
+        let mut buf = Vec::new();
+        msg.encode(&mut buf).unwrap();
+        // field 1 (string, tag 0x0a) len 14 | field 2 (varint, tag 0x10) = 2 |
+        // field 3 (bytes, tag 0x1a) len 32
+        let expected = {
+            let mut v = vec![0x0a, 14];
+            v.extend_from_slice(b"a::0x1::b::0x2");
+            v.extend_from_slice(&[0x10, 0x02, 0x1a, 32]);
+            v.extend(1u8..=32);
+            v
+        };
+        assert_eq!(buf, expected);
+    }
+}

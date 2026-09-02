@@ -147,20 +147,6 @@ async fn send_order_roundtrip_against_live_stack() -> Result<()> {
     )
     .await?;
 
-    // The arborter returns at least a `send_order_tx` hash once the
-    // gasless authorization is accepted and `lock_for_order_gasless`
-    // submitted. If the legacy path had been hit instead, we'd see the
-    // typed-error surface from chain-evm's P1 stub (or Solana's
-    // pre-gasless error) propagate up before this point.
-    let tx_hashes: Vec<&str> = response
-        .transaction_hashes
-        .iter()
-        .map(|t| t.hash_type.as_str())
-        .collect();
-    assert!(
-        tx_hashes.contains(&"send_order_tx"),
-        "expected a send_order_tx in response.transaction_hashes, got: {tx_hashes:?}"
-    );
     // Order must either have landed in the book OR matched (producing trades).
     assert!(
         response.order_in_book || !response.trades.is_empty(),

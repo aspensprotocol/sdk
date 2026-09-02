@@ -1,5 +1,5 @@
 //! `Display` impls and CLI-formatting helpers for the proto-generated
-//! `Order`, `TransactionHash`, and `SendOrderResponse` types.
+//! `Order` and `SendOrderResponse` types.
 //!
 //! These can't live in the generated proto module (it's overwritten on
 //! every `cargo build`), and they don't depend on any of the call /
@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use crate::commands::trading::arborter_pb::{Order, SendOrderResponse, TransactionHash};
+use crate::commands::trading::arborter_pb::{Order, SendOrderResponse};
 
 impl fmt::Display for Order {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -29,43 +29,7 @@ impl fmt::Display for Order {
     }
 }
 
-/// Transaction hash information for blockchain transactions
-///
-/// This struct contains information about transaction hashes that are generated
-/// when orders are processed on the blockchain. Each transaction hash includes
-/// a type (e.g., "deposit", "settlement", "withdrawal") and the actual hash value.
-impl fmt::Display for TransactionHash {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "TransactionHash {{ hash_type: {}, hash_value: {} }}",
-            self.hash_type, self.hash_value
-        )
-    }
-}
-
-impl TransactionHash {
-    /// Format transaction hash for CLI display
-    ///
-    /// Returns a user-friendly string representation of the transaction hash
-    /// in the format "type: hash_value"
-    pub fn format_for_cli(&self) -> String {
-        format!("[{}] {}", self.hash_type.to_uppercase(), self.hash_value)
-    }
-}
-
 impl SendOrderResponse {
-    /// Get formatted transaction hashes for CLI display
-    ///
-    /// Returns a vector of formatted transaction hash strings that can be
-    /// easily displayed in the CLI or REPL interface
-    pub fn get_formatted_transaction_hashes(&self) -> Vec<String> {
-        self.transaction_hashes
-            .iter()
-            .map(|th| th.format_for_cli())
-            .collect()
-    }
-
     /// One line saying where each leg of this order settles — the
     /// acknowledgement surface for the two per-chain account addresses.
     ///
@@ -98,7 +62,7 @@ impl fmt::Display for SendOrderResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "SendOrderResponse {{\n  order_id: 0x{},\n  order_in_book: {},\n  order: {},\n  trades: [{}],\n  transaction_hashes: [{}]\n}}",
+            "SendOrderResponse {{\n  order_id: 0x{},\n  order_in_book: {},\n  order: {},\n  trades: [{}]\n}}",
             hex::encode(&self.order_id),
             self.order_in_book,
             self.order
@@ -107,11 +71,6 @@ impl fmt::Display for SendOrderResponse {
             self.trades
                 .iter()
                 .map(|t| format!("{:?}", t))
-                .collect::<Vec<_>>()
-                .join(", "),
-            self.transaction_hashes
-                .iter()
-                .map(|th| format!("{}: {}", th.hash_type, th.hash_value))
                 .collect::<Vec<_>>()
                 .join(", ")
         )

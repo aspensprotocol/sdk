@@ -17,11 +17,9 @@ impl fmt::Display for OrderbookEntry {
             _ => "UNKNOWN",
         };
         let state_str = match OrderState::try_from(self.state) {
-            Ok(OrderState::Pending) => "PENDING",
             Ok(OrderState::Confirmed) => "CONFIRMED",
             Ok(OrderState::Matched) => "MATCHED",
             Ok(OrderState::Canceled) => "CANCELED",
-            Ok(OrderState::Settled) => "SETTLED",
             _ => "UNKNOWN",
         };
         write!(
@@ -102,7 +100,6 @@ where
 
     // Create the request
     let request = OrderbookRequest {
-        continue_stream: true,
         market_id: options.market_id,
         historical_open_orders: Some(options.historical_open_orders),
         filter_by_trader: options.filter_by_trader,
@@ -292,11 +289,9 @@ pub fn format_orderbook_entry(entry: &OrderbookEntry) -> String {
         _ => "??? ",
     };
     let state_str = match OrderState::try_from(entry.state) {
-        Ok(OrderState::Pending) => "PENDING  ",
         Ok(OrderState::Confirmed) => "CONFIRMED",
         Ok(OrderState::Matched) => "MATCHED  ",
         Ok(OrderState::Canceled) => "CANCELED ",
-        Ok(OrderState::Settled) => "SETTLED  ",
         _ => "UNKNOWN  ",
     };
 

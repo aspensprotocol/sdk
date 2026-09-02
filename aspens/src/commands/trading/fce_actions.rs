@@ -225,7 +225,6 @@ pub async fn cancel_order(
     wallet: &Wallet,
     market_id: &str,
     side: &str,
-    token_address: &str,
     order_id: [u8; 32],
 ) -> Result<Outcome<CancelOrderResponse>> {
     let fce = fce_client(client)?;
@@ -235,7 +234,6 @@ pub async fn cancel_order(
     let to_cancel = OrderToCancel {
         market_id: market_id.to_string(),
         side: side_i,
-        token_address: token_address.to_string(),
         order_id: order_id.to_vec(),
     };
     let signature_hash = super::sign_encoded(&to_cancel, wallet).await?;
@@ -243,7 +241,6 @@ pub async fn cancel_order(
     let req = fce::CancelOrderRequest {
         market_id: market_id.to_string(),
         side: side_str(side_i)?.to_string(),
-        token_address: token_address.to_string(),
         order_id: format!("0x{}", hex::encode(order_id)),
         signature_hash,
     };
@@ -276,14 +273,12 @@ pub async fn withdraw(
     fce.withdraw(&req).await
 }
 
-/// Cancel an order via FCE, resolving the released token from the config the
-/// way the gRPC path does.
+/// Cancel an order via FCE.
 ///
-/// Delegates the side→token mapping to the gRPC path's own
-/// `super::cancel_order::resolve_side_and_token` rather than repeating it: the
-/// arborter matches the resting order on the signed `OrderToCancel`, so a
-/// transport that resolved a different token would sign a well-formed request
-/// that cancels nothing at all.
+/// Resolves the market's canonical id from config the way the gRPC path
+/// does; the released token is no longer resolved or sent — the arborter
+/// derives it from the resting order it matches on the signed
+/// `OrderToCancel`.
 pub async fn cancel_order_from_config(
     client: &AspensClient,
     wallet: &Wallet,
@@ -293,18 +288,9 @@ pub async fn cancel_order_from_config(
     config: &GetConfigResponse,
 ) -> Result<Outcome<CancelOrderResponse>> {
     let market = lookup_market(config, market_id)?;
-    let (_, token_address) = super::cancel_order::resolve_side_and_token(config, market, side)?;
     // Sign against the RESOLVED market id, as the gRPC path does — the caller's
     // `market_id` may be the shorthand form.
-    cancel_order(
-        client,
-        wallet,
-        &market.market_id,
-        side,
-        &token_address,
-        order_id,
-    )
-    .await
+    cancel_order(client, wallet, &market.market_id, side, order_id).await
 }
 
 /// Top-of-book for `market_id` from a one-shot FCE book snapshot.
