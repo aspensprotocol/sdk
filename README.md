@@ -292,7 +292,7 @@ are opt-in. Consumers can trim down to just what they need:
 | `admin` | `commands::trading`, `commands::admin`, `commands::auth` (chain/token/market registration, JWT login). No extra deps. | Keep for the admin command surface (needs `client`). |
 | `fce` | The FCE direct-action transport (`aspens::fce`): POST `/direct` + poll. Pulls `reqwest`, `tokio`. | Keep only when talking to a stack behind the FCE proxy — parked deployment mode. |
 | `dcap` | The relying-party DCAP quote verifier (`tdx_verify::dcap`), pure-Rust `dcap-qvl`. | Keep if you verify TDX attestations locally. |
-| `dcap-fetch` | `dcap` + collateral fetching over the PCS/PCCS REST API (`tdx_verify::collateral`): `reqwest`, `asn1_der`, `pem`, `urlencoding`, `getrandom`. | Keep for the `verify-attestation` CLI command. |
+| `dcap-fetch` | `dcap` + collateral fetching over the PCS/PCCS REST API (`tdx_verify::collateral`): `reqwest`, `asn1_der`, `pem`, `urlencoding`. | Keep for the `verify-attestation` CLI command. |
 
 Common configurations:
 - **Default** (everything): `aspens = "0.7"`

@@ -33,27 +33,19 @@ pub mod dcap;
 #[cfg(feature = "dcap-fetch")]
 pub mod collateral;
 
-/// Live end-to-end verification against a running Aspens stack: fetch the
-/// attestation, fetch its collateral, and verify. Requires `client` + `dcap-fetch`.
-#[cfg(all(feature = "client", feature = "dcap-fetch"))]
-pub mod live;
-
 use reportdata::{CurveTag, expected_reportdata};
 use std::fmt;
 
-/// TDX measurement register width (SHA-384): MRTD, RTMR[0..3], MRSEAM, etc.
-pub const MEASUREMENT_LEN: usize = 48;
-/// A 48-byte TDX measurement.
-pub type Measurement = [u8; MEASUREMENT_LEN];
-
 /// The verified contents of a TD Quote, as returned by a [`QuoteVerifier`] after
 /// it has checked the ECDSA chain to the Intel SGX Root CA and the TCB status.
+///
+/// Measurement fields are 48 bytes (SHA-384): MRTD, RTMR[0..3], MRSEAM, etc.
 #[derive(Clone, Debug)]
 pub struct VerifiedQuote {
-    pub mr_td: Measurement,
-    pub rt_mr: [Measurement; 4],
-    pub mr_seam: Measurement,
-    pub mr_signer_seam: Measurement,
+    pub mr_td: [u8; 48],
+    pub rt_mr: [[u8; 48]; 4],
+    pub mr_seam: [u8; 48],
+    pub mr_signer_seam: [u8; 48],
     pub td_attributes: [u8; 8],
     pub xfam: [u8; 8],
     /// The 64-byte REPORTDATA the TD bound into the quote.
@@ -65,10 +57,10 @@ pub struct VerifiedQuote {
 /// effectively mandatory — without it, any genuine TDX TD would pass.
 #[derive(Clone, Default)]
 pub struct MeasurementPolicy {
-    pub mr_td: Option<Measurement>,
-    pub rt_mr: [Option<Measurement>; 4],
-    pub mr_seam: Option<Measurement>,
-    pub mr_signer_seam: Option<Measurement>,
+    pub mr_td: Option<[u8; 48]>,
+    pub rt_mr: [Option<[u8; 48]>; 4],
+    pub mr_seam: Option<[u8; 48]>,
+    pub mr_signer_seam: Option<[u8; 48]>,
     pub td_attributes: Option<[u8; 8]>,
     pub xfam: Option<[u8; 8]>,
 }
@@ -219,8 +211,8 @@ impl std::error::Error for VerifyError {}
 mod tests {
     use super::*;
 
-    fn meas(b: u8) -> Measurement {
-        [b; MEASUREMENT_LEN]
+    fn meas(b: u8) -> [u8; 48] {
+        [b; 48]
     }
 
     /// A stub verifier returning a fixed quote body — lets us exercise the

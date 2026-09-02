@@ -45,12 +45,6 @@ impl DcapQuoteVerifier {
         self.accepted_tcb = statuses;
         self
     }
-
-    /// Allow debug-mode TDs (TDX `TUD.DEBUG`). Default: rejected.
-    pub fn allow_debug(mut self, allow: bool) -> Self {
-        self.allow_debug = allow;
-        self
-    }
 }
 
 impl QuoteVerifier for DcapQuoteVerifier {

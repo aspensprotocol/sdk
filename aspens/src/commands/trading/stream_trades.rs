@@ -4,7 +4,6 @@ use super::arborter_pb::arborter_service_client::ArborterServiceClient;
 use super::arborter_pb::{Trade, TradeRequest, TradeRole};
 use eyre::Result;
 use futures::StreamExt;
-use tokio::sync::mpsc;
 
 use super::{format_timestamp, truncate_address};
 use crate::grpc::create_channel;
@@ -101,34 +100,6 @@ where
     }
 
     Ok(())
-}
-
-/// Stream trades to a channel.
-///
-/// This is an alternative API that returns a receiver channel instead of using a callback.
-/// Useful when you need to integrate with async code that prefers channels.
-///
-/// # Arguments
-/// * `url` - The Aspens Market Stack URL
-/// * `options` - Options for the stream (market_id, historical trades, trader filter)
-///
-/// # Returns
-/// A receiver channel that will receive trades, and a handle to the background task.
-pub async fn stream_trades_channel(
-    url: String,
-    options: StreamTradesOptions,
-) -> Result<(mpsc::Receiver<Trade>, tokio::task::JoinHandle<Result<()>>)> {
-    let (tx, rx) = mpsc::channel(100);
-
-    let handle = tokio::spawn(async move {
-        stream_trades(url, options, |trade| {
-            // Try to send, ignore if receiver is dropped
-            let _ = tx.blocking_send(trade);
-        })
-        .await
-    });
-
-    Ok((rx, handle))
 }
 
 /// Format a trade for CLI display

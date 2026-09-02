@@ -81,10 +81,6 @@ pub fn close_token_account_ix(ata: &Pubkey, dest: &Pubkey, owner: &Pubkey) -> In
 
 /// PDA seeds — must match the on-chain `midrib` program.
 pub mod seeds {
-    /// Seed for the singleton factory PDA.
-    pub const FACTORY_SEED: &[u8] = b"factory";
-    /// Seed for per-market `instance` PDAs (one per trading pair).
-    pub const INSTANCE_SEED: &[u8] = b"instance";
     /// Seed for per-(instance, user) balance PDAs.
     pub const BALANCE_SEED: &[u8] = b"balance";
     /// Seed for the per-instance SPL token vault authority / account.
@@ -93,9 +89,6 @@ pub mod seeds {
     /// program's `SETTLE_NONCE_SEED` so settlement and withdrawal nonce spaces
     /// never collide.
     pub const WITHDRAW_NONCE_SEED: &[u8] = b"withdraw_nonce";
-    /// Seed for the per-(instance, mint) FeeAccrual PDA — running total of
-    /// settle-time fees awaiting `sweep_fees`.
-    pub const FEE_ACCRUAL_SEED: &[u8] = b"fee_accrual";
     /// Seed for the per-(instance, mint) WithdrawEpoch PDA — the per-token
     /// per-epoch withdrawal cap plus the current epoch's running total.
     pub const WITHDRAW_EPOCH_SEED: &[u8] = b"withdraw_epoch";
@@ -149,27 +142,6 @@ fn encode_ix<A: BorshSerialize>(method: &str, args: &A) -> Result<Vec<u8>> {
     Ok(data)
 }
 
-/// Derive the factory PDA — singleton per program.
-pub fn derive_factory_pda(program_id: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[seeds::FACTORY_SEED], program_id)
-}
-
-/// Derive the trading-instance PDA for `(factory, instance_id)`.
-pub fn derive_instance_pda(
-    factory: &Pubkey,
-    instance_id: u64,
-    program_id: &Pubkey,
-) -> (Pubkey, u8) {
-    Pubkey::find_program_address(
-        &[
-            seeds::INSTANCE_SEED,
-            factory.as_ref(),
-            &instance_id.to_le_bytes(),
-        ],
-        program_id,
-    )
-}
-
 /// Derive the user-balance PDA for `(instance, user, mint)`.
 pub fn derive_user_balance_pda(
     instance: &Pubkey,
@@ -184,20 +156,6 @@ pub fn derive_user_balance_pda(
             user.as_ref(),
             mint.as_ref(),
         ],
-        program_id,
-    )
-}
-
-/// Derive the per-(instance, mint) `FeeAccrual` PDA — the running total of
-/// settle-time protocol fees awaiting `sweep_fees`. Seeds:
-/// `[FEE_ACCRUAL_SEED, instance, mint]`.
-pub fn derive_fee_accrual_pda(
-    instance: &Pubkey,
-    mint: &Pubkey,
-    program_id: &Pubkey,
-) -> (Pubkey, u8) {
-    Pubkey::find_program_address(
-        &[seeds::FEE_ACCRUAL_SEED, instance.as_ref(), mint.as_ref()],
         program_id,
     )
 }
@@ -824,13 +782,12 @@ mod tests {
     #[test]
     fn pdas_are_stable() {
         let program_id = Pubkey::new_from_array([9; 32]);
-        let (factory_a, _) = derive_factory_pda(&program_id);
-        let (factory_b, _) = derive_factory_pda(&program_id);
-        assert_eq!(factory_a, factory_b);
-        let (inst, _) = derive_instance_pda(&factory_a, 1, &program_id);
+        let inst = Pubkey::new_from_array([6; 32]);
         let user = Pubkey::new_from_array([7; 32]);
         let mint = Pubkey::new_from_array([8; 32]);
-        let (bal, _) = derive_user_balance_pda(&inst, &user, &mint, &program_id);
-        assert_ne!(bal, inst);
+        let (bal_a, _) = derive_user_balance_pda(&inst, &user, &mint, &program_id);
+        let (bal_b, _) = derive_user_balance_pda(&inst, &user, &mint, &program_id);
+        assert_eq!(bal_a, bal_b);
+        assert_ne!(bal_a, inst);
     }
 }

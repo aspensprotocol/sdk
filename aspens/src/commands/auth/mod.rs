@@ -233,17 +233,6 @@ fn compute_auth_struct_hash(address: Address, timestamp: u64, nonce: &str) -> B2
     keccak256(&encoded)
 }
 
-/// Check if a JWT token is still valid based on its expiry time
-pub fn is_token_valid(expires_at: u64) -> bool {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    // Add a 30 second buffer for clock skew
-    expires_at > now + 30
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,22 +264,5 @@ mod tests {
             msg,
             "Arborter v1 Authentication\n\nAddress: 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU\nTimestamp: 1756800000\nNonce: n-1"
         );
-    }
-
-    #[test]
-    fn test_token_validity() {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Token expiring in 1 hour should be valid
-        assert!(is_token_valid(now + 3600));
-
-        // Token expired 1 minute ago should be invalid
-        assert!(!is_token_valid(now - 60));
-
-        // Token expiring in 10 seconds should be invalid (30 second buffer)
-        assert!(!is_token_valid(now + 10));
     }
 }

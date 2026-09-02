@@ -92,7 +92,7 @@ pub mod attestation {
 #[cfg(feature = "client")]
 pub use chain_client::ChainClient;
 #[cfg(feature = "client")]
-pub use client::{AspensClient, AspensClientBuilder, JwtToken};
+pub use client::{AspensClient, AspensClientBuilder};
 #[cfg(feature = "client")]
 pub use executor::{AsyncExecutor, BlockingExecutor, DirectExecutor};
 pub use wallet::{CurveType, Wallet, load_admin_wallet, load_trader_wallet};

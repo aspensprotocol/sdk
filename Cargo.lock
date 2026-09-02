@@ -1200,7 +1200,6 @@ dependencies = [
  "dcap-qvl",
  "eyre",
  "futures",
- "getrandom 0.4.3",
  "hex",
  "pem 3.0.6",
  "prost",
@@ -1213,13 +1212,11 @@ dependencies = [
  "solana-sdk",
  "tempfile",
  "tokio",
- "tokio-stream",
  "toml",
  "tonic",
  "tonic-build",
  "tonic-prost",
  "tonic-prost-build",
- "tonic-reflection",
  "tracing",
  "url",
  "urlencoding",
@@ -8339,20 +8336,6 @@ dependencies = [
  "syn 2.0.119",
  "tempfile",
  "tonic-build",
-]
-
-[[package]]
-name = "tonic-reflection"
-version = "0.14.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acccd136a4bf19810a1fde9c74edc6129b42a66b44d0c1c8aaa67aeb49a146a7"
-dependencies = [
- "prost",
- "prost-types",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-prost",
 ]
 
 [[package]]

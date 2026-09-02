@@ -35,7 +35,6 @@ dcap-qvl = { workspace = true, optional = true }
 # ourselves — asn1_der (FMSPC extension walk), pem (PCK chain split), urlencoding
 # (issuer-chain header decode). See the `tdx_verify::collateral` module.
 reqwest = { workspace = true, optional = true }
-getrandom = { workspace = true, optional = true }
 asn1_der = { workspace = true, optional = true }
 pem = { workspace = true, optional = true }
 urlencoding = { workspace = true, optional = true }
@@ -63,11 +62,9 @@ alloy-chains = { workspace = true, optional = true }
 alloy-contract = { workspace = true, optional = true }
 solana-client = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
-tonic-reflection = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
-tokio-stream = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
@@ -98,7 +95,7 @@ dcap = ["dep:dcap-qvl"]
 # DCAP collateral fetching (`tdx_verify::collateral`) + live end-to-end
 # verification (`tdx_verify::live`, with `client`). Drives the PCS/PCCS REST API
 # over the SDK's own rustls reqwest (not dcap-qvl's `report`/reqwest-0.13 stack).
-dcap-fetch = ["dcap", "dep:reqwest", "dep:asn1_der", "dep:pem", "dep:urlencoding", "dep:getrandom"]
+dcap-fetch = ["dcap", "dep:reqwest", "dep:asn1_der", "dep:pem", "dep:urlencoding"]
 
 # FCE direct-action transport (`fce` module): POST /direct + poll the ext-proxy.
 # Reuses the SDK's rustls reqwest; tokio/time for the poll backoff. No gRPC deps.
@@ -127,11 +124,9 @@ client = [
     "dep:alloy-chains",
     "dep:alloy-contract",
     "dep:tonic",
-    "dep:tonic-reflection",
     "dep:tonic-prost",
     "dep:prost",
     "dep:tokio",
-    "dep:tokio-stream",
     "dep:futures",
     "dep:toml",
     "dep:url",

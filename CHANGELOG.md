@@ -9,6 +9,60 @@ change before 1.0.
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING (source): dead public API surface with zero consumers in any
+  Aspens binary or example**, found by a dead-code sweep and confirmed by a
+  per-name grep across `aspens-cli`, `aspens-repl`, `aspens-admin`,
+  `aspens-cliutil`, and `aspens`'s own examples/tests. Grouped by module:
+  - **`client` (`AspensClient`)**: the whole JWT-cache cluster —
+    `JwtToken`, `set_jwt_token`, `get_jwt_token`, `is_jwt_valid`,
+    `clear_jwt_token`, `get_jwt_expiry` (and the private `jwt_token` field /
+    `is_jwt_valid_internal`) — nothing ever called `set_jwt_token`, so the
+    cache was never fed. Also `get_chain_info`, `get_token_info`,
+    `get_trade_contract_address`.
+  - **`health`**: `check_grpc_server` (the gRPC-reflection service lister).
+    `ping_grpc_server` / `ping_grpc_server_with_timeout` are unaffected — the
+    latter is `ping_grpc_server`'s own implementation, not a caller. Removing
+    this let `tonic-reflection` come out of `Cargo.toml` entirely.
+  - **`tdx_verify`**: the whole `tdx_verify::live` module —
+    `LiveVerifyParams`, `verify_signer_attestation`, `mint_nonce`,
+    `ChallengeOutcome`, `challenge_signer_attestation` — deleted outright.
+    `aspens-cli`'s `verify-attestation` handler reimplements the same
+    live-verification flow inline rather than calling this module; if a
+    second consumer ever needs it, extract the CLI's version into the
+    library instead of reviving this one. Also `tdx_verify::MEASUREMENT_LEN`
+    and `tdx_verify::Measurement` (inlined to the bare `[u8; 48]` they
+    aliased — nothing outside `tdx_verify/mod.rs` ever named either),
+    `tdx_verify::collateral::PHALA_PCCS_URL`, and
+    `tdx_verify::dcap::DcapQuoteVerifier::allow_debug` (the private
+    `allow_debug` field and its default of `false` are unchanged; only the
+    builder setter is gone).
+  - **`solana`**: `derive_factory_pda` / `seeds::FACTORY_SEED`,
+    `derive_instance_pda` / `seeds::INSTANCE_SEED`, and
+    `derive_fee_accrual_pda` / `seeds::FEE_ACCRUAL_SEED`.
+  - **`commands::config` (`GetConfigResponse`)**: `from_file`,
+    `get_chain_by_id`, and the free function `download_config_to_file`.
+  - **`commands::auth`**: `is_token_valid`.
+  - **`commands::trading::balance`**: `balance_from_config_with_wallet`
+    (singular) — a one-line wrapper around the curve-aware
+    `balance_from_config_with_wallets` (plural), which every caller already
+    uses directly and which is unaffected.
+  - **`commands::trading::stream_trades`**: `stream_trades_channel`.
+  - **`commands::operator`**: `WITHDRAW_EPOCH_SLOTS` (an unused local copy
+    of the on-chain program's constant of the same name; the doc comments
+    referencing it describe the program's constant, not this one, and are
+    still accurate).
+  - **`wallet` (`Wallet`)**: `sign_eip712_digest`.
+  - **`decimals`**: `parse_decimal_amount_u64`.
+
+  These had no consumer in any Aspens binary or example; removing them is a
+  semver-breaking change and the next release is 0.8.0. Two dependencies of
+  `aspens` came out as a direct mechanical consequence — `getrandom` (used
+  only by the deleted `tdx_verify::live::mint_nonce`) and `tokio-stream`
+  (used only by the deleted `health::check_grpc_server`) — alongside
+  `tonic-reflection`, noted above under `health`.
+
 ## [0.7.0] — 2026-08-20
 
 ### Added

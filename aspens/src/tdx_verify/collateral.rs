@@ -30,8 +30,6 @@ use dcap_qvl::quote::Quote;
 /// Intel Provisioning Certification Service (the authoritative source). Direct use
 /// is rate-limited and needs a subscription for some endpoints — prefer a PCCS.
 pub const INTEL_PCS_URL: &str = "https://api.trustedservices.intel.com";
-/// Phala's public PCCS mirror — a convenient default for fetching collateral.
-pub const PHALA_PCCS_URL: &str = "https://pccs.phala.network";
 
 /// DCAP cert-data type for an embedded PCK certificate chain (PEM). Other types
 /// (2/3, encrypted PPID) require a platform-registration fetch we don't do here.
@@ -206,8 +204,9 @@ struct QeIdentityResponse {
 // --- Public API -----------------------------------------------------------------
 
 /// Fetch the DCAP collateral for `raw_quote` from the given PCCS base URL (e.g.
-/// [`PHALA_PCCS_URL`] or an operator-run PCCS). Reads the FMSPC + PCK chain from
-/// the quote, then fetches the PCK CRL, TCB info, QE identity, and root CA CRL.
+/// Phala's public mirror, `https://pccs.phala.network`, or an operator-run
+/// PCCS). Reads the FMSPC + PCK chain from the quote, then fetches the PCK
+/// CRL, TCB info, QE identity, and root CA CRL.
 pub async fn fetch_collateral(
     pccs_url: &str,
     raw_quote: &[u8],

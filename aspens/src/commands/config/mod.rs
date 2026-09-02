@@ -64,25 +64,6 @@ pub async fn download_config(url: String, path: String) -> Result<()> {
 }
 
 impl GetConfigResponse {
-    /// Load a `GetConfigResponse` from a `.json` or `.toml` file on disk.
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref();
-        let contents = fs::read_to_string(path)?;
-
-        // Determine file type based on extension
-        let mut config: Self = match path.extension().and_then(|ext| ext.to_str()) {
-            Some("json") => serde_json::from_str(&contents)?,
-            Some("toml") => toml::from_str(&contents)?,
-            Some(ext) => bail!("Unsupported file extension: {}", ext),
-            None => bail!("No file extension found"),
-        };
-
-        // A file may carry masked endpoint urls (e.g. a download snapshot);
-        // apply the same local override resolution used for a live fetch.
-        config.apply_rpc_overrides();
-        Ok(config)
-    }
-
     /// Rewrite each chain's primary (first enabled) RPC endpoint url to the
     /// client's local override (`ASPENS_RPC_URL_<NETWORK>`) when set;
     /// otherwise keep the server value (an unmasked URL stays usable). The
@@ -157,15 +138,6 @@ impl GetConfigResponse {
         })
     }
 
-    /// Look up a chain by its EIP-155 / Solana cluster `chain_id`.
-    pub fn get_chain_by_id(&self, chain_id: u32) -> Option<&Chain> {
-        self.config
-            .as_ref()?
-            .chains
-            .iter()
-            .find(|chain| chain.chain_id == chain_id)
-    }
-
     /// Look up a market by its canonical `market_id`
     /// (`chain_id::token_address::chain_id::token_address`).
     pub fn get_market_by_id(&self, market_id: &str) -> Option<&Market> {
@@ -175,30 +147,6 @@ impl GetConfigResponse {
             .iter()
             .find(|market| market.market_id == market_id)
     }
-}
-
-/// Download the stack configuration from `url` and write it to `path` as JSON.
-///
-/// Creates parent directories if they do not exist. Unlike
-/// [`download_config`], this always serializes as JSON regardless of the
-/// file extension.
-pub async fn download_config_to_file<P: AsRef<Path>>(url: String, path: P) -> Result<()> {
-    info!("Downloading configuration to {}", path.as_ref().display());
-
-    // Raw fetch (see download_config): keep the saved snapshot's rpc_url masked.
-    let config = fetch_config(url).await?;
-
-    // Create parent directories if they don't exist
-    if let Some(parent) = path.as_ref().parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    // Write config to file
-    let json = serde_json::to_string_pretty(&config)?;
-    fs::write(path, json)?;
-
-    info!("Configuration downloaded successfully");
-    Ok(())
 }
 
 // Re-export types for external use
