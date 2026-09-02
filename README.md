@@ -63,16 +63,21 @@ Most commands below require a JWT (set via `--jwt`, `ASPENS_JWT` in `.env`, or t
 |---------|-------------|
 | `init-admin --address <eth-address>` | Initialize the first admin on a fresh stack (no JWT required) |
 | `login [--chain-id <id>]` | Authenticate via EIP-712 signature using `ADMIN_PRIVKEY` and obtain a JWT |
-| `update-admin --address <eth-address>` | Update the admin address |
-| `set-chain --architecture … --name … --network … --chain-id … --rpc-url … --factory-address … --permit2-address … [--block-explorer-url …] [--instance-signer-address …]` | Add or update a chain entry |
-| `delete-chain --network <network>` | Remove a chain from the configuration |
+| `update-admin <eth-address>` | Update the admin address |
+| `set-chain --architecture … --canonical-name … --network … --chain-id … --rpc-url … --factory-address … [--explorer-url …] [--instance-signer-address …]` | Add or update a chain entry |
+| `delete-chain <network>` | Remove a chain from the configuration |
+| `rpc list <network>` | List a chain's current RPC endpoint set (masked; unauthenticated) |
+| `rpc set <network> --endpoint <endpoint> [--endpoint <endpoint> …]` | Replace a chain's complete RPC endpoint set (full replace, priority = flag order) |
+| `rpc probe <network> <url> [--scheme none\|header\|basic\|bearer] [--key <key>] [--secret <secret>]` | Probe a candidate RPC endpoint before committing it with `rpc set`; never stored |
 | `set-token --network … --name … --symbol … --address … --decimals …` | Add or update a token on a chain |
 | `delete-token --network <network> --symbol <symbol>` | Remove a token from a chain |
-| `set-market --base-network … --quote-network … --base-symbol … --quote-symbol … --base-address … --quote-address … --base-decimals … --quote-decimals … --pair-decimals …` | Add or update a market |
-| `delete-market --market-id <id>` | Remove a market |
-| `deploy-contract --network <network> --fee-pct <bps>` | Deploy a trade contract on a chain (fee in basis points) |
-| `set-trade-contract --address <addr> --network <network>` | Register an existing trade contract address on a chain |
-| `delete-trade-contract --network <network>` | Remove the trade contract association from a chain |
+| `set-market --base-network … --quote-network … --base-symbol … --quote-symbol … --base-address … --quote-address … --pair-decimals …` | Add or update a market (register both tokens with `set-token` first — the market no longer carries token decimals) |
+| `delete-market <market_id>` | Remove a market |
+| `deploy-contract <network> [--fees <bps>]` | Deploy a trade contract on a chain (fee in basis points, default 0) |
+| `set-trade-contract --address <addr> --chain-network <network>` | Register an existing trade contract address on a chain |
+| `set-operator-fee --chain-network <network> --recipient <addr> --bps <bps>` | Set an instance's operator fee (recipient + bps) |
+| `rotate-operator-admin --chain-network <network> --new-admin <addr>` | Rotate an instance's `operator_admin` key |
+| `delete-trade-contract <chain_network>` | Remove the trade contract association from a chain |
 | `version` | Show server version information |
 | `status` | Show current configuration and connection status |
 | `admin-public-key` | Get the public key and address for the admin wallet (from `ADMIN_PRIVKEY`) |
@@ -274,14 +279,20 @@ cargo run --bin aspens-admin -- status
 
 ## Cargo Feature Flags
 
-The `aspens` crate exposes three orthogonal feature groups, all
-default-on. Consumers can trim down to just what they need:
+The `aspens` crate exposes eight feature flags. `evm`, `solana`, `client`,
+and `trader` are on by default; `admin`, `fce`, `dcap`, and `dcap-fetch`
+are opt-in. Consumers can trim down to just what they need:
 
 | Feature | What it pulls in | When to keep / drop |
 |---------|------------------|---------------------|
 | `evm` | `aspens::evm` (sol! bindings, EIP-712 hasher, envelope signer) + `aspens::orders`. Tiny — `alloy-primitives`/`alloy-sol-types`/`alloy-signer-local`. | Keep if you build or sign EVM orders. |
-| `solana` | `aspens::solana` (PDA derivations, instruction builders, borsh payload encoder, Ed25519 precompile ix). Pulls `solana-sdk`, `borsh`, `bs58`, `ed25519-dalek`. | Keep if you build or sign Solana orders. |
-| `client` | Full runtime: `AspensClient`, trading commands, gRPC (`tonic`/`prost`), async runtime (`tokio`), RPC submission (`solana-client`, `alloy-contract`, `alloy-provider`). | Keep for the CLI/REPL/admin experience or anything that talks to the Aspens stack. Drop it for browser / embedded / offline-signing. |
+| `solana` | `aspens::solana` (PDA derivations, instruction builders, borsh payload encoder, Ed25519 precompile ix). Pulls `solana-sdk`, `borsh`, `bs58`. | Keep if you build or sign Solana orders. |
+| `client` | Full runtime: `AspensClient`, trading commands, gRPC (`tonic`/`prost`), async runtime (`tokio`), RPC submission (`solana-client`, `alloy`). | Keep for the CLI/REPL/admin experience or anything that talks to the Aspens stack. Drop it for browser / embedded / offline-signing. |
+| `trader` | `commands::trading` (deposit/withdraw/order/balance/streams) + table formatting (`comfy-table`). | Keep for the trading command surface (needs `client`). |
+| `admin` | `commands::trading`, `commands::admin`, `commands::auth` (chain/token/market registration, JWT login). No extra deps. | Keep for the admin command surface (needs `client`). |
+| `fce` | The FCE direct-action transport (`aspens::fce`): POST `/direct` + poll. Pulls `reqwest`, `tokio`. | Keep only when talking to a stack behind the FCE proxy — parked deployment mode. |
+| `dcap` | The relying-party DCAP quote verifier (`tdx_verify::dcap`), pure-Rust `dcap-qvl`. | Keep if you verify TDX attestations locally. |
+| `dcap-fetch` | `dcap` + collateral fetching over the PCS/PCCS REST API (`tdx_verify::collateral`): `reqwest`, `asn1_der`, `pem`, `urlencoding`. | Keep for the `verify-attestation` CLI command. |
 
 Common configurations:
 - **Default** (everything): `aspens = "0.7"`

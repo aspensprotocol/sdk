@@ -176,7 +176,7 @@ fn display_all_token_balances(
 
 /// Query a token balance on a specific chain using a curve-aware client.
 ///
-/// Used by `balance_from_config_with_wallet`. For Solana chains, locked/deposited
+/// Used by `balance_from_config_with_wallets`. For Solana chains, locked/deposited
 /// balances come from the trade program; for Solana it queries the on-chain
 /// `UserBalance` PDA via the Midrib program.
 #[cfg(feature = "solana")]
@@ -365,19 +365,6 @@ async fn query_token_balance_via_client(
         available_balance,
         locked_balance,
     }
-}
-
-/// Curve-agnostic config-driven balance function.
-///
-/// Dispatches per-chain based on `chain.architecture`:
-/// - EVM chains query via Alloy + MidribV3
-/// - Solana chains query via solana-client (SOL + SPL); deposited/locked
-///   balances are scaffolded as "not deployed" until the on-chain program lands
-pub async fn balance_from_config_with_wallet(
-    config: GetConfigResponse,
-    wallet: &Wallet,
-) -> Result<()> {
-    balance_from_config_with_wallets(config, &[wallet]).await
 }
 
 /// Pick the first wallet matching `chain`'s curve. Returns `None` when no

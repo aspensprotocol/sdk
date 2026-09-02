@@ -60,7 +60,6 @@ aspens> quit
 ## Other Examples
 
 - [`quickstart.rs`](quickstart.rs) — Full SDK workflow (connect, deposit, trade, withdraw)
-- [`transaction_hash_example.rs`](transaction_hash_example.rs) — Working with transaction hashes from order responses
 
 ## Key Concepts
 

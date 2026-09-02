@@ -3,16 +3,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use url::Url;
 
-use crate::commands::config::config_pb::{Chain, GetConfigResponse, Token};
-
-/// JWT token information for authenticated admin operations
-#[derive(Debug, Clone)]
-pub struct JwtToken {
-    /// The JWT token string
-    pub token: String,
-    /// Unix timestamp when the token expires (in seconds)
-    pub expires_at: u64,
-}
+use crate::commands::config::config_pb::GetConfigResponse;
 
 /// Transport for trading actions. Config discovery always uses gRPC; actions
 /// (orders/cancels/withdraws/reads) route through the selected transport.
@@ -43,8 +34,6 @@ pub struct AspensClient {
     pub(crate) env_vars: HashMap<String, String>,
     /// Cached configuration from the server
     pub(crate) config: Arc<RwLock<Option<GetConfigResponse>>>,
-    /// JWT token for admin operations (when authenticated)
-    pub(crate) jwt_token: Arc<RwLock<Option<JwtToken>>>,
     /// Trading-action transport (gRPC unless an FCE proxy is configured).
     #[cfg(feature = "fce")]
     pub(crate) transport: Transport,
@@ -118,76 +107,6 @@ impl AspensClient {
             .ok_or_else(|| eyre::eyre!("Failed to fetch configuration"))
     }
 
-    /// Get chain information by network name
-    pub async fn get_chain_info(&self, network: &str) -> Result<Chain> {
-        let config = self.get_config().await?;
-        config.get_chain(network).cloned().ok_or_else(|| {
-            eyre::eyre!(
-                "Chain '{}' not found in configuration. Available chains: {}",
-                network,
-                config
-                    .config
-                    .as_ref()
-                    .map(|c| c
-                        .chains
-                        .iter()
-                        .map(|ch| ch.network.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "))
-                    .unwrap_or_default()
-            )
-        })
-    }
-
-    /// Get token information by network and symbol
-    pub async fn get_token_info(&self, network: &str, symbol: &str) -> Result<Token> {
-        let config = self.get_config().await?;
-        config.get_token(network, symbol).cloned().ok_or_else(|| {
-            let available_tokens = config
-                .get_chain(network)
-                .map(|chain| {
-                    chain
-                        .tokens
-                        .keys()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_else(|| "none".to_string());
-
-            eyre::eyre!(
-                "Token '{}' not found on chain '{}'. Available tokens: {}",
-                symbol,
-                network,
-                available_tokens
-            )
-        })
-    }
-
-    /// Get trade contract address for a given network
-    pub async fn get_trade_contract_address(&self, network: &str) -> Result<String> {
-        let chain = self.get_chain_info(network).await?;
-        chain
-            .trade_contract
-            .as_ref()
-            .map(|tc| tc.address.clone())
-            .ok_or_else(|| {
-                eyre::eyre!(
-                    "Trade contract not found for chain '{}'. Please ensure the contract is deployed.",
-                    network
-                )
-            })
-    }
-
-    /// Set the JWT token for admin operations
-    pub fn set_jwt_token(&self, token: String, expires_at: u64) {
-        let mut guard = self
-            .jwt_token
-            .write()
-            .expect("AspensClient JWT lock poisoned");
-        *guard = Some(JwtToken { token, expires_at });
-    }
-
     /// The configured trading-action transport.
     #[cfg(feature = "fce")]
     pub fn transport(&self) -> &Transport {
@@ -207,62 +126,6 @@ impl AspensClient {
             Transport::Fce(c) => Some(c),
             Transport::Grpc => None,
         }
-    }
-
-    /// Get the current JWT token if valid
-    pub fn get_jwt_token(&self) -> Option<String> {
-        let guard = self
-            .jwt_token
-            .read()
-            .expect("AspensClient JWT lock poisoned");
-        guard.as_ref().and_then(|jwt| {
-            if self.is_jwt_valid_internal(jwt) {
-                Some(jwt.token.clone())
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Check if the current JWT token is valid
-    pub fn is_jwt_valid(&self) -> bool {
-        let guard = self
-            .jwt_token
-            .read()
-            .expect("AspensClient JWT lock poisoned");
-        guard
-            .as_ref()
-            .map(|jwt| self.is_jwt_valid_internal(jwt))
-            .unwrap_or(false)
-    }
-
-    /// Internal helper to check JWT validity
-    fn is_jwt_valid_internal(&self, jwt: &JwtToken) -> bool {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        // Add a 30 second buffer for clock skew
-        jwt.expires_at > now + 30
-    }
-
-    /// Clear the JWT token
-    pub fn clear_jwt_token(&self) {
-        let mut guard = self
-            .jwt_token
-            .write()
-            .expect("AspensClient JWT lock poisoned");
-        *guard = None;
-    }
-
-    /// Get JWT expiry time (if set)
-    pub fn get_jwt_expiry(&self) -> Option<u64> {
-        let guard = self
-            .jwt_token
-            .read()
-            .expect("AspensClient JWT lock poisoned");
-        guard.as_ref().map(|jwt| jwt.expires_at)
     }
 }
 
@@ -360,7 +223,6 @@ impl AspensClientBuilder {
             stack_url,
             env_vars,
             config: Arc::new(RwLock::new(None)),
-            jwt_token: Arc::new(RwLock::new(None)),
             #[cfg(feature = "fce")]
             transport,
         })

@@ -19,7 +19,7 @@
 //!   the EIP-712 bindings under [`evm`]. Pulls Alloy primitives only.
 //! - **`solana`** (default) — stateless Solana helpers in [`solana`]
 //!   (PDA derivations, instruction builders, borsh payload encoder).
-//!   Pulls `solana-sdk`, `bs58`, `ed25519-dalek`, and `borsh`.
+//!   Pulls `solana-sdk`, `bs58`, and `borsh`.
 //! - **`client`** (default) — full gRPC + RPC runtime: `AspensClient`,
 //!   the `commands` modules, `chain_client`, the `executor`
 //!   abstraction, and Solana RPC submission. Pulls `tonic`, `prost`,
@@ -92,7 +92,7 @@ pub mod attestation {
 #[cfg(feature = "client")]
 pub use chain_client::ChainClient;
 #[cfg(feature = "client")]
-pub use client::{AspensClient, AspensClientBuilder, JwtToken};
+pub use client::{AspensClient, AspensClientBuilder};
 #[cfg(feature = "client")]
 pub use executor::{AsyncExecutor, BlockingExecutor, DirectExecutor};
 pub use wallet::{CurveType, Wallet, load_admin_wallet, load_trader_wallet};

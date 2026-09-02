@@ -90,22 +90,6 @@ pub fn parse_decimal_amount(amount: &str, decimals: u32) -> Result<u128> {
         .ok_or_else(|| eyre!("Amount overflow: {}", amount))
 }
 
-/// Same as [`parse_decimal_amount`] but downcasts to `u64`, returning a
-/// clear error if the parsed value exceeds `u64::MAX`. Use this from
-/// callers (deposit / withdraw) whose lib API takes `u64`.
-pub fn parse_decimal_amount_u64(amount: &str, decimals: u32) -> Result<u64> {
-    let parsed = parse_decimal_amount(amount, decimals)?;
-    u64::try_from(parsed).map_err(|_| {
-        eyre!(
-            "Amount {} exceeds u64::MAX in base units (parsed {}, max {}). \
-             Try a smaller amount.",
-            amount,
-            parsed,
-            u64::MAX
-        )
-    })
-}
-
 /// Inverse of [`parse_decimal_amount`]: format a raw `u128` integer in
 /// `decimals` scale as a human-readable decimal string suitable to feed
 /// back into the CLI's buy-limit / sell-limit (or any caller that
@@ -364,46 +348,6 @@ mod tests {
         // future caller passes a too-large decimals value, the function
         // panics in pow() — explicit guardrail is left to the caller.
         // (No assert here; this is a documentation test of the contract.)
-    }
-
-    // ----- u64 downcast wrapper ----------------------------------------
-
-    #[test]
-    fn u64_at_boundary_succeeds() {
-        // u64::MAX = 18_446_744_073_709_551_615.
-        // 18 * 10^18 = 18_000_000_000_000_000_000 — fits.
-        assert_eq!(
-            parse_decimal_amount_u64("18", 18).unwrap(),
-            18_000_000_000_000_000_000
-        );
-        // u64::MAX itself, expressed in 0 decimals.
-        assert_eq!(
-            parse_decimal_amount_u64("18446744073709551615", 0).unwrap(),
-            u64::MAX
-        );
-    }
-
-    #[test]
-    fn u64_overflow_returns_clear_error() {
-        // 100 WFLR with 18 decimals = 10^20 > u64::MAX (~1.8e19).
-        let err = parse_decimal_amount_u64("100", 18).unwrap_err().to_string();
-        assert!(err.contains("exceeds u64::MAX"), "got: {err}");
-        assert!(err.contains("100"), "should include the input: {err}");
-    }
-
-    #[test]
-    fn u64_at_max_plus_one_overflows() {
-        // u64::MAX + 1 in zero-decimals input form.
-        assert!(parse_decimal_amount_u64("18446744073709551616", 0).is_err());
-    }
-
-    #[test]
-    fn u64_propagates_underlying_parse_errors() {
-        // The wrapper should bubble up the same error categories as the
-        // underlying u128 parser, not mask them as "exceeds u64::MAX".
-        assert!(parse_decimal_amount_u64("abc", 6).is_err());
-        assert!(parse_decimal_amount_u64("-1", 6).is_err());
-        assert!(parse_decimal_amount_u64("", 6).is_err());
     }
 
     // ----- Round-trip property -----------------------------------------

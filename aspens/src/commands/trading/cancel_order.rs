@@ -20,7 +20,7 @@ impl fmt::Display for CancelOrderResponse {
 }
 
 /// Cancel an order using a curve-agnostic wallet (EVM or Solana).
-pub async fn call_cancel_order_with_wallet(
+pub(crate) async fn call_cancel_order_with_wallet(
     url: String,
     market_id: String,
     side: i32,

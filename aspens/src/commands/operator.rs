@@ -22,11 +22,6 @@ use crate::commands::config::config_pb::GetConfigResponse;
 use crate::solana::client::WithdrawEpochState;
 use crate::wallet::Wallet;
 
-/// Epoch length in slots — mirrors the program's `WITHDRAW_EPOCH_SLOTS`
-/// (9,000 slots ≈ 1 hour at Solana's 400 ms target slot time, matching
-/// MidribV3's `WITHDRAW_EPOCH = 1 hours` on EVM).
-pub const WITHDRAW_EPOCH_SLOTS: u64 = 9_000;
-
 /// Minimum lamports the operator-admin wallet needs before we submit: the
 /// transaction fee plus rent for the `WithdrawEpoch` PDA, which this
 /// instruction creates (`init_if_needed`, `payer = operator_admin`) when no

@@ -4,7 +4,6 @@
 //! keys behind a single interface so call sites don't need to branch on
 //! curve type. Solana support is gated behind the `solana` feature.
 
-use alloy_primitives::B256;
 use alloy_signer::Signer;
 use alloy_signer_local::PrivateKeySigner;
 use eyre::{Result, eyre};
@@ -110,20 +109,6 @@ impl Wallet {
                 let sig = kp.sign_message(msg);
                 Ok(sig.as_ref().to_vec())
             }
-        }
-    }
-
-    /// Sign a 32-byte EIP-712 digest. Only valid for EVM wallets.
-    pub async fn sign_eip712_digest(&self, digest: B256) -> Result<Vec<u8>> {
-        match self {
-            Wallet::Evm(s) => {
-                let sig = s.sign_hash(&digest).await?;
-                Ok(sig.as_bytes().to_vec())
-            }
-            #[cfg(feature = "solana")]
-            Wallet::Solana(_) => Err(eyre!(
-                "EIP-712 digest signing is not supported for Ed25519 wallets"
-            )),
         }
     }
 
@@ -342,14 +327,6 @@ mod tests {
         let w = Wallet::from_solana_base58(&fresh_solana_keypair_b58()).unwrap();
         let sig = w.sign_message(b"hello").await.unwrap();
         assert_eq!(sig.len(), 64, "Ed25519 signature should be 64 bytes");
-    }
-
-    #[cfg(feature = "solana")]
-    #[tokio::test]
-    async fn solana_eip712_returns_error() {
-        let w = Wallet::from_solana_base58(&fresh_solana_keypair_b58()).unwrap();
-        let digest = B256::ZERO;
-        assert!(w.sign_eip712_digest(digest).await.is_err());
     }
 
     /// The operator-admin key is loaded format-agnostically (base58 OR a JSON

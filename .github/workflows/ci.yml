@@ -60,6 +60,12 @@ jobs:
       - name: Run clippy (REPL)
         run: cargo clippy -p aspens-repl --all-targets --all-features -- -D warnings
 
+      - name: Run clippy (admin)
+        run: cargo clippy -p aspens-admin --all-targets --all-features -- -D warnings
+
+      - name: Run clippy (cliutil)
+        run: cargo clippy -p aspens-cliutil --all-targets --all-features -- -D warnings
+
   build:
     name: Build
     runs-on: ${{ matrix.os }}
@@ -104,7 +110,7 @@ jobs:
         run: cargo build -p aspens-cli --features admin --verbose
 
       - name: Build examples
-        run: cargo build -p aspens --examples --verbose
+        run: cargo build -p aspens --examples --all-features --verbose
 
   build-lean-signing:
     name: Build (lean signing, no-default-features)

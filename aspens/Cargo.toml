@@ -35,7 +35,6 @@ dcap-qvl = { workspace = true, optional = true }
 # ourselves — asn1_der (FMSPC extension walk), pem (PCK chain split), urlencoding
 # (issuer-chain header decode). See the `tdx_verify::collateral` module.
 reqwest = { workspace = true, optional = true }
-getrandom = { workspace = true, optional = true }
 asn1_der = { workspace = true, optional = true }
 pem = { workspace = true, optional = true }
 urlencoding = { workspace = true, optional = true }
@@ -46,30 +45,36 @@ solana-sdk = { workspace = true, optional = true }
 # Pin transitive solana-keypair to avoid the buggy 3.1.1+ releases.
 solana-keypair = { workspace = true, optional = true }
 bs58 = { workspace = true, optional = true }
-ed25519-dalek = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 
 # --- Client runtime: gRPC (tonic/prost), RPC submission, async runtime,
 # URL/TOML parsing, EVM provider machinery. Pulled in only when the
 # `client` feature is enabled.
 alloy-chains = { workspace = true, optional = true }
+# NOTE: not called by name anywhere in `aspens/src` — the sol! macro's
+# `#[sol(rpc)]` bindings (admin/mod.rs, evm/rpc.rs) expand to code that
+# references `::alloy_contract` directly, so it must stay a direct
+# dependency even though the crate itself never spells the name. Verified
+# 2026-09-02: removing it breaks `cargo check -p aspens --all-features`
+# with E0432 (`no external crate alloy_contract`) despite `alloy`'s own
+# "contract" feature being on — a transitive dep isn't visible under its
+# own name unless it's also a direct one.
 alloy-contract = { workspace = true, optional = true }
 solana-client = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
-tonic-reflection = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
-tokio-stream = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
-# Optional: formatting support (only meaningful alongside `client`).
+# Table formatting for the `trader` command output (only meaningful
+# alongside `client`).
 comfy-table = { workspace = true, optional = true }
 
 [features]
-default = ["trader", "formatting", "client", "evm", "solana"]
+default = ["trader", "client", "evm", "solana"]
 
 # `trader` and `admin` don't pull additional dependencies, but they DO
 # gate which submodules of `commands` are compiled in (see
@@ -79,19 +84,18 @@ default = ["trader", "formatting", "client", "evm", "solana"]
 # A `client`-only build with neither flag enabled gives you the
 # config-fetch surface and nothing else. Binaries enable `trader`
 # (and `admin` for aspens-admin) explicitly — see their Cargo.toml.
-trader = []
+trader = ["dep:comfy-table"]
 admin = []
-formatting = ["dep:comfy-table"]
 
 # Relying-party DCAP backend for `tdx_verify::dcap` — pulls the pure-Rust
 # `dcap-qvl` quote verifier. The rest of `tdx_verify` (reconstruction + pipeline)
 # is always available; only the `QuoteVerifier` impl needs this.
 dcap = ["dep:dcap-qvl"]
 
-# DCAP collateral fetching (`tdx_verify::collateral`) + live end-to-end
-# verification (`tdx_verify::live`, with `client`). Drives the PCS/PCCS REST API
-# over the SDK's own rustls reqwest (not dcap-qvl's `report`/reqwest-0.13 stack).
-dcap-fetch = ["dcap", "dep:reqwest", "dep:asn1_der", "dep:pem", "dep:urlencoding", "dep:getrandom"]
+# DCAP collateral fetching (`tdx_verify::collateral`). Drives the PCS/PCCS
+# REST API over the SDK's own rustls reqwest (not dcap-qvl's
+# `report`/reqwest-0.13 stack).
+dcap-fetch = ["dcap", "dep:reqwest", "dep:asn1_der", "dep:pem", "dep:urlencoding"]
 
 # FCE direct-action transport (`fce` module): POST /direct + poll the ext-proxy.
 # Reuses the SDK's rustls reqwest; tokio/time for the poll backoff. No gRPC deps.
@@ -109,7 +113,6 @@ solana = [
     "dep:solana-sdk",
     "dep:solana-keypair",
     "dep:bs58",
-    "dep:ed25519-dalek",
     "dep:borsh",
 ]
 
@@ -121,11 +124,9 @@ client = [
     "dep:alloy-chains",
     "dep:alloy-contract",
     "dep:tonic",
-    "dep:tonic-reflection",
     "dep:tonic-prost",
     "dep:prost",
     "dep:tokio",
-    "dep:tokio-stream",
     "dep:futures",
     "dep:toml",
     "dep:url",
@@ -155,3 +156,9 @@ required-features = ["fce"]
 [[example]]
 name = "fce_balances"
 required-features = ["fce"]
+
+# cargo-machete cannot see code it does not scan: `tonic-prost` is used by
+# the committed generated bindings under proto/generated/, and
+# `alloy-contract` by the `sol!(#[sol(rpc)])` macro expansion.
+[package.metadata.cargo-machete]
+ignored = ["tonic-prost", "alloy-contract"]

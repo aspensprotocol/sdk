@@ -55,6 +55,7 @@
 use std::env;
 
 use aspens::AspensClient;
+use aspens::chain_client::ARCH_EVM;
 use aspens::commands::trading::send_order::send_order_with_wallet;
 use aspens::wallet::{CurveType, load_trader_wallet};
 use eyre::{Result, eyre};
@@ -63,7 +64,6 @@ const DEFAULT_QUANTITY: &str = "0.001";
 const DEFAULT_SIDE: &str = "ASK";
 
 /// Origin-chain architecture drives which wallet curve we load.
-const ARCH_EVM: &str = "EVM";
 const ARCH_SOLANA: &str = "Solana";
 
 /// Submits a gasless send_order through the SDK and asserts the arborter

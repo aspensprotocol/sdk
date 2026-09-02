@@ -257,14 +257,15 @@ Tests the SDK must ship under `#[cfg(feature = "fce")]`:
 
 ```
 aspens/src/fce/
-  mod.rs         // Transport::Fce plumbing + client entry (cfg(feature="fce"))
+  mod.rs         // module re-exports (cfg(feature="fce"))
   wire.rs        // to_bytes32, OPType/OPCommand consts, DirectInstruction (serde)
-  payloads.rs    // the six request structs (serde, camelCase, decimal-string amounts)
+  payloads.rs    // the seven request structs (serde, camelCase, decimal-string amounts)
   proxy.rs       // POST /direct + poll /action/result (reqwest)
   result.rs      // ActionResult/ActionResponse decode + Data → native types
 ```
 
-The `ExchangeClient` gains a transport selector; `place_order` / `cancel_order` /
-`withdraw` / `my_state` / `book_state` / `export_history` route to gRPC or, under
-`fce` + `Transport::Fce`, to `fce::proxy`. `get_config` stays on gRPC (no
-`GET_CONFIG` OPCommand) — the FCE client is hybrid.
+`Transport` (in `client.rs`) is `AspensClient`'s transport selector; `place_order` /
+`cancel_order` / `withdraw` / `my_state` / `book_state` / `export_history` route to
+gRPC or, under `fce` + `Transport::Fce`, to `fce::proxy`. `get_config` ALSO has an
+FCE path — `GET_CONFIG` is a real OPCommand (`fce/wire.rs:26`, `OP_GET_CONFIG`) —
+so the FCE client is not purely hybrid on that one command.
