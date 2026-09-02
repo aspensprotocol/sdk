@@ -156,3 +156,9 @@ required-features = ["fce"]
 [[example]]
 name = "fce_balances"
 required-features = ["fce"]
+
+# cargo-machete cannot see code it does not scan: `tonic-prost` is used by
+# the committed generated bindings under proto/generated/, and
+# `alloy-contract` by the `sol!(#[sol(rpc)])` macro expansion.
+[package.metadata.cargo-machete]
+ignored = ["tonic-prost", "alloy-contract"]
