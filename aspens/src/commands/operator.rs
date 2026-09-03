@@ -79,8 +79,9 @@ pub async fn set_withdraw_epoch_cap(
         return Err(eyre!(
             "chain '{}' has architecture '{}' — the per-epoch withdrawal cap \
              command targets Solana instances only. On EVM the equivalent is \
-             `MidribV3.setWithdrawEpochCap`, whose authority is the same address \
-             that signs withdrawal vouchers.",
+             `MidribV3.setWithdrawEpochCap`, gated to `operatorAdmin()` — the \
+             same stack-admin authority as Solana's `operator_admin` — and armed \
+             with `just set-withdraw-cap` signing as the operator admin.",
             network,
             chain.architecture
         ));
