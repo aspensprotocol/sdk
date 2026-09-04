@@ -110,7 +110,8 @@ pub struct ExpectedReportData {
 /// status, returning the parsed, verified quote body. The concrete backend is
 /// pluggable (vetted DCAP crate vs Intel QVL FFI vs operator QVE).
 ///
-/// No implementation ships yet — see the module docs (phase 2: DCAP backend).
+/// The shipped backend is `dcap::DcapQuoteVerifier`, behind the `dcap`
+/// feature; see the module docs.
 pub trait QuoteVerifier {
     fn verify_quote(&self, raw_quote: &[u8]) -> Result<VerifiedQuote, VerifyError>;
 }

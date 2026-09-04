@@ -215,8 +215,8 @@ pub fn create_idempotent_ata_ix(
     mint: &Pubkey,
     ata: &Pubkey,
 ) -> Instruction {
-    // Account order is fixed by the ATA program. (Recent ATA-program versions
-    // no longer require the rent sysvar, so it is omitted.)
+    // Account order is fixed by the ATA program. (It does not require the
+    // rent sysvar, so it is omitted.)
     Instruction {
         program_id: ata_program_id(),
         accounts: vec![

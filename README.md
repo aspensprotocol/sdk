@@ -71,7 +71,7 @@ Most commands below require a JWT (set via `--jwt`, `ASPENS_JWT` in `.env`, or t
 | `rpc probe <network> <url> [--scheme none\|header\|basic\|bearer] [--key <key>] [--secret <secret>]` | Probe a candidate RPC endpoint before committing it with `rpc set`; never stored |
 | `set-token --network … --name … --symbol … --address … --decimals …` | Add or update a token on a chain |
 | `delete-token --network <network> --symbol <symbol>` | Remove a token from a chain |
-| `set-market --base-network … --quote-network … --base-symbol … --quote-symbol … --base-address … --quote-address … --pair-decimals …` | Add or update a market (register both tokens with `set-token` first — the market no longer carries token decimals) |
+| `set-market --base-network … --quote-network … --base-symbol … --quote-symbol … --base-address … --quote-address … --pair-decimals …` | Add or update a market (register both tokens with `set-token` first — the market takes its token decimals from them) |
 | `delete-market <market_id>` | Remove a market |
 | `deploy-contract <network> [--fees <bps>]` | Deploy a trade contract on a chain (fee in basis points, default 0) |
 | `set-trade-contract --address <addr> --chain-network <network>` | Register an existing trade contract address on a chain |
@@ -189,9 +189,7 @@ let msg = withdrawal_voucher_signing_message(
 
 Under the optimistic shadow ledger, orders never lock on-chain, so there is no
 per-order EIP-712 lock signature: a client signs the outer envelope over the
-encoded request, and that is all. The gasless on-chain-lock helpers
-(`GaslessLockParams`, `gasless_lock_signing_hash`, Permit2, the ERC-7683 settler
-bindings) were removed with the on-chain order model.
+encoded request, and that is all.
 
 The pure modules:
 - **`aspens::orders`** — chain-agnostic `derive_order_id`, destination-token parsing.

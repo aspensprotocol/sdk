@@ -46,10 +46,8 @@ pub(crate) async fn call_cancel_order_with_wallet(
 
     // Sign the cancel request. Send the full curve-native length — the
     // arborter's curve-aware verifier requires exactly 64 bytes for
-    // Ed25519 and 65 for secp256k1 (r||s||v). Previously this code
-    // truncated to 64 unconditionally, which dropped the v byte for EVM
-    // signatures and would fail verification once the server starts
-    // enforcing it.
+    // Ed25519 and 65 for secp256k1 (r||s||v); truncating to 64 would drop
+    // the v byte of an EVM signature and fail verification.
     let signature_bytes = wallet.sign_message(&buffer).await?;
 
     // Create the request
@@ -71,10 +69,9 @@ pub(crate) async fn call_cancel_order_with_wallet(
 
 /// Classify the outcome of a `cancel_order` RPC call.
 ///
-/// Matching moved inside the arborter's single-writer actor: a cancel of an
-/// order no longer live in the book — replayed, or racing a fill that just
-/// landed — now answers gRPC `NOT_FOUND` instead of the old server's
-/// `order_canceled: true` on a replay. The order is gone and its collateral
+/// Matching runs inside the arborter's single-writer actor, so a cancel of an
+/// order not live in the book — replayed, or racing a fill that just
+/// landed — answers gRPC `NOT_FOUND`. The order is gone and its collateral
 /// released either way, so this is an outcome to report, not a failure to
 /// propagate. `order_canceled: false` never occurs on the arborter's `Ok`
 /// path (it only ever replies `Ok` with `order_canceled: true`), so a
@@ -143,10 +140,9 @@ mod resolve_side_tests {
     use super::super::arborter_pb::Side;
     use super::*;
 
-    /// A BID locked quote-chain funds; the CURVE that signs the cancel still
-    /// depends on side (see `origin_network_for_side`), but the token to
-    /// release is no longer resolved or sent — the arborter derives it from
-    /// the resting order.
+    /// A BID committed quote-chain funds, so the CURVE that signs the cancel
+    /// follows the side (see `origin_network_for_side`); the token to release
+    /// is not sent — the arborter derives it from the resting order.
     #[test]
     fn a_bid_resolves_to_the_bid_side() {
         for side in ["buy", "bid", "BUY", "Bid"] {
@@ -175,10 +171,10 @@ mod resolve_side_tests {
 mod classify_cancel_result_tests {
     use super::*;
 
-    /// Matching moved inside the arborter's single-writer actor: a cancel of
-    /// an order no longer live in the book — replayed, or racing a fill that
-    /// just landed — now answers gRPC NOT_FOUND. That's an outcome, not a
-    /// failure: the order is gone and its collateral released either way.
+    /// Matching runs inside the arborter's single-writer actor, so a cancel of
+    /// an order not live in the book — replayed, or racing a fill that just
+    /// landed — answers gRPC NOT_FOUND. That's an outcome, not a failure: the
+    /// order is gone and its collateral released either way.
     #[test]
     fn a_not_found_cancel_reports_already_gone_not_failure() {
         let result = classify_cancel_result(Err(tonic::Status::not_found("order not found")));

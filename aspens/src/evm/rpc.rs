@@ -5,8 +5,8 @@
 //! (deposit, withdraw-voucher, tradeBalance). Pulls `alloy-contract`,
 //! which is why this submodule is gated on the `client` feature.
 //!
-//! MidribV3 is the optimistic-ledger contract — the V2 on-chain order
-//! machinery is burned. The kept surface the SDK calls here is deposit /
+//! MidribV3 is the optimistic-ledger contract: it has no on-chain order
+//! machinery. The surface the SDK calls here is deposit /
 //! withdraw(voucher, sig) / tradeBalance.
 
 use alloy_sol_types::sol;

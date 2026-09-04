@@ -295,7 +295,7 @@ pub fn format_orderbook_entry(entry: &OrderbookEntry) -> String {
         _ => "UNKNOWN  ",
     };
 
-    // The wire id is now the full 32-byte handle, not a small integer, so
+    // The wire id is the full 32-byte handle, not a small integer, so
     // there is no fixed width to right-align it into — truncate it the same
     // way addresses are truncated, for a readable fixed-width column.
     let order_id_hex = truncate_address(&format!("0x{}", hex::encode(&entry.order_id)));

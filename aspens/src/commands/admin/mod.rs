@@ -600,14 +600,13 @@ pub async fn delete_token(
 
 /// Parameters for setting a market
 ///
-/// No token decimals here. They were removed from `SetMarketRequest` (fields 7
-/// and 8): a token's decimals belong to the token, their one home is the
-/// `tokens` table, and a second copy on the market could disagree with nothing
-/// to reconcile it. Register the token first with [`set_token`]; the arborter
-/// reads the decimals from it.
+/// No token decimals here: a token's decimals belong to the token, their one
+/// home is the `tokens` table, and a second copy on the market could disagree
+/// with nothing to reconcile it. Register the token first with [`set_token`];
+/// the arborter reads the decimals from it.
 ///
-/// The token ADDRESSES stay, and are now load-bearing in a way they were not:
-/// the arborter matches them against the `tokens` row **byte-for-byte,
+/// The token ADDRESSES are load-bearing: the arborter matches them against the
+/// `tokens` row **byte-for-byte,
 /// including case**, and rejects the market if they differ. EIP-55 checksummed
 /// and lowercase spellings of one address are different byte strings. Nothing
 /// on this path normalises case, deliberately — pass the same spelling to

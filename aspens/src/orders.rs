@@ -23,12 +23,11 @@ use sha2::{Digest, Sha256};
 /// **What checks it: the arborter, on every order.** It runs this recipe
 /// itself (`chain_traits::market::derive_order_id`) over the `Order` it
 /// verified the signature against, and uses the result throughout match,
-/// settle and cancel. A caller no longer supplies an id — the
-/// `OrderAuthorization` message that carried one was deleted — so what a
-/// client derives here is its own copy, useful only insofar as it agrees.
+/// settle and cancel. A caller supplies no id, so what a client derives here
+/// is its own copy, useful only insofar as it agrees.
 ///
 /// Which is why it must not drift, and why the drift is nasty: every input is
-/// a field of the signed order (`client_nonce` is `Order.nonce`, added for
+/// a field of the signed order (`client_nonce` is `Order.nonce`, signed for
 /// exactly this reason), so a client hashing anything else still sends a
 /// perfectly valid, perfectly accepted order — it simply tracks an id the
 /// venue never issued, and the id is the key the ledger and `settleBatch`
@@ -355,7 +354,7 @@ mod tests {
     #[test]
     fn settle_address_rejects_a_bad_evm_checksum() {
         // Swap the case of the first `aA` pair; the result is still
-        // mixed-case (later letters keep their casing) but no longer the
+        // mixed-case (later letters keep their casing) but not the
         // checksum.
         let good = checksummed();
         let bad = good.replacen("aA", "Aa", 1);
@@ -408,9 +407,9 @@ mod tests {
 
     /// Regression: Solana's System Program / null pubkey base58-encodes as
     /// 32 `'1'` characters, which is *also* syntactically valid hex (16
-    /// bytes of `0x11`). Previously the hex path won and silently
-    /// truncated. The unprefixed input must decode as base58 → 32 zero
-    /// bytes; the `0x`-prefixed form must still go down the hex path.
+    /// bytes of `0x11`). The unprefixed input must decode as base58 → 32
+    /// zero bytes, not win the hex path and silently truncate; the
+    /// `0x`-prefixed form must still go down the hex path.
     /// Mirrors the same regression test in chain-traits.
     #[cfg(feature = "solana")]
     #[test]

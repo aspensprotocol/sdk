@@ -4,22 +4,18 @@
 //!
 //! Under the optimistic shadow ledger, order entry never touches the chain:
 //! the arborter authenticates the order via the **outer envelope** signature
-//! (`aspens::evm::sign_send_order_envelope`) alone. The legacy gasless
-//! on-chain-lock signing (EVM EIP-712 `GaslessCrossChainOrder` / Solana
-//! `OpenForSignedPayload`) is gone with the on-chain order machinery, so this
-//! helper no longer signs a lock or dispatches per chain architecture.
+//! (`aspens::evm::sign_send_order_envelope`) alone, so this helper signs
+//! nothing and does not dispatch per chain architecture.
 //!
-//! # Nothing here goes on the wire any more
+//! # Nothing here goes on the wire
 //!
-//! The id this module derives is **not sent**. The `OrderAuthorization`
-//! message that used to carry it — and `SendOrderRequest.authorization` with
-//! it — was deleted: the arborter now derives the id itself from the signed
-//! `Order`, so a caller cannot choose one. What is derived here is the
-//! caller's own copy, for tracking a fill it has not yet seen an id for, and
-//! it matches the server's only while every input to the recipe is one the
-//! server can read off the message it verified. `nonce` is the input that had
-//! to move: it is now `Order.nonce`, signed, and it is passed in here rather
-//! than minted here so that one value reaches both places. See
+//! The id this module derives is **not sent**: the arborter derives the id
+//! itself from the signed `Order`, so a caller cannot choose one. What is
+//! derived here is the caller's own copy, for tracking a fill it has not yet
+//! seen an id for, and it matches the server's only while every input to the
+//! recipe is one the server can read off the message it verified. `nonce` is
+//! `Order.nonce`, signed, and it is passed in here rather than minted here so
+//! that one value reaches both places. See
 //! [`crate::commands::trading::send_order`]'s `prepare_order`, which binds it
 //! once.
 //!
@@ -78,12 +74,11 @@ use crate::wallet::{CurveType, Wallet};
 /// canonical order id, the budget it was derived over, and the nonce that went
 /// into it.
 ///
-/// None of it is sent to the arborter — `OrderAuthorization` is gone, field
-/// numbers and all, and the arborter derives the id and the budget from the
-/// signed `Order`. These are the caller's numbers, kept so it can recognise
-/// its own order and so the FCE direct-action JSON (which still declares
-/// `orderId` / `amountIn` for a not-yet-resynced adapter) has something to
-/// fill in. See `commands::trading::fce_actions`.
+/// None of it is sent to the arborter, which derives the id and the budget
+/// from the signed `Order`. These are the caller's numbers, kept so it can
+/// recognise its own order and so the FCE direct-action JSON (which declares
+/// `orderId` / `amountIn`) has something to fill in. See
+/// `commands::trading::fce_actions`.
 //
 // Deliberately a code span, not an intra-doc link: this module is always
 // compiled, `fce_actions` is behind `feature = "fce"`, and a link from
@@ -818,10 +813,9 @@ pub(crate) mod tests {
     #[test]
     fn resolve_buy_limit_high_pair_decimals_market() {
         // pair=18, quote=6, base=18 (WFLR-on-Coston2 / USDC-on-Solana). The
-        // SDK used to sign in pair_decimals (10^17 for 0.1) while the
-        // arborter rebuilt in quote_token_decimals (10^5) — 12 orders of
-        // magnitude off, INVALID_SIGNER. Now both sides agree on the
-        // arborter's scale (token_decimals).
+        // SDK must sign in the arborter's scale (quote_token_decimals, 10^5
+        // for 0.1), not pair_decimals (10^17) — 12 orders of magnitude off,
+        // INVALID_SIGNER.
         let (config, market) = config_with_market(18, 6, 18);
         // qty 0.1 WFLR → quantity_pair = 0.1 * 10^18 = 10^17.
         // price 1.0 USDC/WFLR → price_pair = 10^18.
@@ -925,9 +919,8 @@ pub(crate) mod tests {
     }
 
     /// A market ask needs no price: it gives base, and its budget IS its
-    /// quantity, converted to the BASE token's own units. Used to be refused
-    /// outright ("requires a limit price"), which was never true of the ask
-    /// side — only the bid lacked a derivable number.
+    /// quantity, converted to the BASE token's own units. Only the bid side
+    /// lacks a derivable number, so only the bid is refused.
     #[test]
     fn resolve_market_ask_budgets_its_quantity_in_base_units() {
         let (config, market) = config_with_market(BASE_DEC, QUOTE_DEC, PAIR_DEC);

@@ -188,10 +188,10 @@ enum Commands {
     // ========================================================================
     /// Set a market
     ///
-    /// Register both tokens with `set-token` FIRST. The market no longer
-    /// carries token decimals — the arborter reads them from the `tokens`
-    /// table — and it matches the addresses below against that table
-    /// byte-for-byte, case included, rejecting the market when they differ.
+    /// Register both tokens with `set-token` FIRST. The market carries no
+    /// token decimals — the arborter reads them from the `tokens` table —
+    /// and it matches the addresses below against that table byte-for-byte,
+    /// case included, rejecting the market when they differ.
     SetMarket {
         /// Base chain network (e.g., "base-sepolia")
         #[arg(long)]

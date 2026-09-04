@@ -203,17 +203,17 @@ pub async fn place_order(
         execution_type: None,
         post_only: if post_only { Some(true) } else { None },
         signature_hash,
-        // Also inert on arrival, and for the same reason as `amount_in` below:
-        // the adapter forwards it into `OrderAuthorization.order_id`, and the
-        // arborter now derives its own id from the signed order. Keep sending
-        // the real one — it is what this caller will match a fill against.
+        // Inert on arrival, for the same reason as `amount_in` below: the
+        // arborter derives its own id from the signed order and has no field
+        // to receive this one. Keep sending the real one — it is what this
+        // caller will match a fill against.
         order_id: commitment.order_id,
-        // The adapter's JSON still has this field (infra
-        // `stacks/fcc/extension/pkg/types/types.go`), and it forwards it into
-        // `OrderAuthorization.amount_in` — a proto field the arborter has since
-        // deleted, so the value is now inert on arrival. Keep sending the real
-        // budget until infra syncs the proto and drops the field: an omitted key
-        // would reach a deployed adapter as `""`.
+        // The adapter's JSON declares this field (infra
+        // `stacks/fcc/extension/pkg/types/types.go`), but the arborter derives
+        // the budget from the signed order and has no field to receive it, so
+        // the value is inert on arrival. Keep sending the real budget while the
+        // adapter declares the field: an omitted key would reach a deployed
+        // adapter as `""`.
         amount_in: commitment.input_amount.to_string(),
     };
     fce.place_order(&req).await
@@ -276,9 +276,8 @@ pub async fn withdraw(
 /// Cancel an order via FCE.
 ///
 /// Resolves the market's canonical id from config the way the gRPC path
-/// does; the released token is no longer resolved or sent — the arborter
-/// derives it from the resting order it matches on the signed
-/// `OrderToCancel`.
+/// does; the released token is not sent — the arborter derives it from the
+/// resting order it matches on the signed `OrderToCancel`.
 pub async fn cancel_order_from_config(
     client: &AspensClient,
     wallet: &Wallet,

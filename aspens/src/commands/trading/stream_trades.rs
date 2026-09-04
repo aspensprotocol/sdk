@@ -115,7 +115,7 @@ pub fn format_trade(trade: &Trade) -> String {
         _ => "???  ",
     };
 
-    // As in `format_orderbook_entry`: the id is now a full 32-byte handle,
+    // As in `format_orderbook_entry`: the id is a full 32-byte handle,
     // so it's truncated for the column rather than right-aligned as a number.
     let order_hit_hex = truncate_address(&format!("0x{}", hex::encode(&trade.order_hit)));
     format!(

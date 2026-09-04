@@ -130,11 +130,11 @@ encoder must match (empty bytes → `"0x"`).
   "executionType": "DIRECT",       // optional: DIRECT | DISCRETIONARY
   "postOnly": false,               // optional
   "signatureHash": "0x<eip712-sig>",
-  "orderId": "0x<sdk-derived>",    // also inert now, same reason as amountIn
-  "amountIn": "5"                  // the order's budget; both fields are now
-                                   // inert at the arborter (the adapter
-                                   // forwards them into OrderAuthorization,
-                                   // which was deleted), kept for the adapter
+  "orderId": "0x<sdk-derived>",    // inert at the arborter, as amountIn
+  "amountIn": "5"                  // the order's budget; both fields are
+                                   // inert at the arborter, which derives id
+                                   // and budget from the signed Order; kept
+                                   // because the adapter declares them
 }
 
 // NOTE: this wire has no `quoteBudget`, and `Order.quote_budget` is what a
@@ -143,7 +143,7 @@ encoder must match (empty bytes → `"0x"`).
 // and fail signature verification. The SDK refuses a market BID over FCE
 // rather than send one; a limit buy is unaffected.
 
-// NOTE: nor does it have a `nonce`, and `Order.nonce` (field 12) is now hashed
+// NOTE: nor does it have a `nonce`, and `Order.nonce` (field 12) is hashed
 // into the canonical order id. Same rebuild problem, different answer: the SDK
 // signs nonce = 0 over FCE (`FCE_ORDER_NONCE`), the proto3 default, which is
 // wire-skipped and so is exactly what the adapter's rebuild produces. The cost

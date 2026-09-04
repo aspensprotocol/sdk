@@ -154,13 +154,12 @@ impl VoucherSource<'_> {
 /// Branches on `chain.architecture`:
 /// - **EVM**: requests a TEE-signed withdrawal voucher from the arborter
 ///   (`url`) over gRPC, then submits `MidribV3.withdraw(voucher, signature)`
-///   on-chain (the wallet pays gas). The permissionless on-chain `withdraw`
-///   was removed; the voucher is the authorization.
+///   on-chain (the wallet pays gas). There is no permissionless on-chain
+///   `withdraw`; the voucher is the authorization.
 /// - **Solana**: requests a TEE-signed withdrawal voucher from the arborter,
 ///   then submits the Midrib program's `withdraw_voucher` instruction
-///   on-chain (the wallet pays gas). The permissionless on-chain `withdraw`
-///   instruction was removed from the program; the voucher is the
-///   authorization, mirroring the EVM path.
+///   on-chain (the wallet pays gas). The voucher is the authorization,
+///   mirroring the EVM path.
 pub async fn call_withdraw_from_config_with_wallet(
     url: String,
     network: String,
@@ -518,9 +517,9 @@ async fn solana_withdraw(
 }
 
 /// EVM withdraw via the TEE voucher flow: authenticate the request, get an
-/// owner-signed voucher from the arborter, submit it on-chain. The
-/// permissionless on-chain `withdraw` was removed; the voucher is now the
-/// only authorization for an exit.
+/// owner-signed voucher from the arborter, submit it on-chain. There is no
+/// permissionless on-chain `withdraw`; the voucher is the only authorization
+/// for an exit.
 async fn call_withdraw_from_config_evm(
     source: VoucherSource<'_>,
     network: String,
