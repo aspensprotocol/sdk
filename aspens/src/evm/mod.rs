@@ -3,9 +3,7 @@
 //! Ported from `arborter/app/chain-evm/src/market.rs`. Under the optimistic
 //! shadow ledger, orders never lock on-chain — the only thing a client signs
 //! for order entry is the **outer envelope** over the encoded `SendOrderRequest`
-//! (the counterpart to the arborter's `is_signature_valid`). The legacy gasless
-//! on-chain-lock signing (EIP-712 `GaslessCrossChainOrder` / Permit2) is gone
-//! with the on-chain order machinery.
+//! (the counterpart to the arborter's `is_signature_valid`).
 //!
 //! # Typical usage
 //!

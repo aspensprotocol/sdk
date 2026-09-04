@@ -21,9 +21,9 @@ use crate::grpc::create_channel;
 /// that gets signed, and the caller's own copy of the id derived over it.
 ///
 /// They are built together, in [`prepare_order`], because they must agree.
-/// The commitment is no longer transmitted — the arborter derives the id and
-/// the budget from the signed `Order` — so agreement is not a courtesy any
-/// more: `order.nonce` is an input to the recipe, and a `PreparedOrder` whose
+/// The commitment is not transmitted — the arborter derives the id and the
+/// budget from the signed `Order` — so agreement is not a courtesy:
+/// `order.nonce` is an input to the recipe, and a `PreparedOrder` whose
 /// two halves disagree about it is one where the caller tracks an id the venue
 /// never issues, with nothing on the wire to reveal the split.
 #[cfg_attr(test, derive(Debug))]
@@ -108,7 +108,7 @@ pub(crate) fn prepare_order(
         quote_budget: quote_budget_raw,
         // The same `u64` the id was hashed over, three lines up. It is signed
         // here so the arborter can reproduce that hash from the message it
-        // verified — which is the whole reason a caller no longer sends an id.
+        // verified — which is the whole reason a caller sends no id.
         nonce,
     };
 
@@ -216,10 +216,9 @@ async fn call_send_order(
     let signature_bytes = super::sign_encoded(&order_for_sending, wallet).await?;
 
     // Create the request with the original order and signature. That pair is
-    // the whole request now: `authorization` (and its `OrderAuthorization`
-    // message) is gone, because both fields it carried — the budget and the
-    // order id — sat outside the signature and are now derived by the arborter
-    // from the order below.
+    // the whole request: the budget and the order id are derived by the
+    // arborter from the signed order below, so nothing may accompany it
+    // outside the signature.
     let request = SendOrderRequest {
         order: Some(order_for_sending),
         signature_hash: signature_bytes,
@@ -253,9 +252,9 @@ async fn query_deposited_balance(
     let rpc_url = Url::parse(rpc_url)?;
 
     // Chain metadata only when alloy knows the id; `tradeBalance` is a plain
-    // eth_call and needs none. This used to `unwrap_or(BaseSepolia)`, silently
-    // reading balances through another chain's provider config on any id
-    // outside alloy's registry (HyperEVM testnet 998, anvil, a new rollup).
+    // eth_call and needs none, and an id outside alloy's registry (HyperEVM
+    // testnet 998, anvil, a new rollup) must not fall back to another chain's
+    // provider config.
     let provider = match named_chain_for(chain_id as u64) {
         Some(named) => ProviderBuilder::new()
             .with_chain(named)
@@ -497,8 +496,8 @@ pub async fn send_order_with_wallet(
 /// both an EVM hex address and a Solana base58 pubkey). Pass all available
 /// wallets in `wallets`; the function selects the matching curve for each
 /// leg of the market by reading chain architectures from `config`. The
-/// origin chain's wallet (the side that locks tokens for this order) is
-/// used to sign both the gasless lock and the outer envelope.
+/// origin chain's wallet (the side that commits tokens for this order)
+/// signs the outer envelope.
 ///
 /// Errors if a wallet of the right curve is missing for either chain.
 ///
@@ -660,10 +659,9 @@ pub async fn send_order_with_wallets(
     // Build what gets signed, plus the caller's own copy of the derived id.
     // Under the optimistic ledger the arborter authenticates via the outer
     // envelope signature alone — there is no per-order on-chain lock
-    // signature, and nothing accompanies the order on the wire. Both numbers
-    // that used to ride alongside it, the declared amount and the order id,
-    // are derived by the arborter from the signed `Order`; the commitment
-    // below is kept locally, for tracking.
+    // signature, and nothing accompanies the order on the wire: the budget
+    // and the order id are derived by the arborter from the signed `Order`;
+    // the commitment below is kept locally, for tracking.
     let prepared = prepare_order(
         &config,
         market,
@@ -771,19 +769,18 @@ async fn enhance_balance_error(
 
     // The figure has to end up in the TOKEN's native decimals, because that is
     // what `deposited_balance` is in and what `format_balance_for_display` is
-    // told below. Both sides used to skip that conversion and hand a
-    // PAIR-decimal number straight to a native-decimal comparison: on any market
-    // where the two differ (the WFLR/USDC shape the rest of this file guards
-    // against) the check and the printed "Required:" were wrong by orders of
-    // magnitude, so this could invent an "insufficient balance" that was not, or
-    // hide one that was. It decorates an error and cannot place a bad order —
-    // but a wrong number in an error message is how someone diagnoses the wrong
-    // thing for an afternoon.
+    // told below. Handing a PAIR-decimal number straight to a native-decimal
+    // comparison is wrong by orders of magnitude on any market where the two
+    // differ (the WFLR/USDC shape the rest of this file guards against), which
+    // would invent an "insufficient balance" that is not, or hide one that is.
+    // This only decorates an error and cannot place a bad order — but a wrong
+    // number in an error message is how someone diagnoses the wrong thing for
+    // an afternoon.
     //
     // `normalize` is the same conversion the signing path uses, so this figure
     // and the one actually committed agree by construction rather than by two
-    // implementations happening to match. The multiply is checked: `qty * prc`
-    // was unchecked, which panics in debug and wraps in release — inside an
+    // implementations happening to match. The multiply is checked: an
+    // unchecked `qty * prc` panics in debug and wraps in release — inside an
     // error handler, which is the worst place to find out.
     let required_amount = if side == 1 {
         // BUY: gives quote, needs quantity x price.

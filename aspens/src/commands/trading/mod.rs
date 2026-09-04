@@ -27,8 +27,7 @@ pub mod cancel_order;
 pub mod deposit;
 /// Resolve an order's budget and derive its canonical id — the client's own
 /// copy of the id the arborter derives from the signed order. Nothing here
-/// goes on the wire. (The module name is a leftover from the retired
-/// on-chain-lock "gasless" flow.)
+/// goes on the wire. (Despite the name, nothing here signs or locks.)
 pub mod gasless;
 /// Build, sign, and submit a buy/sell order envelope.
 pub mod send_order;

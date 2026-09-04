@@ -109,10 +109,10 @@ impl ChainClient {
                 use crate::evm::rpc::IERC20;
                 let url = Url::parse(rpc_url)?;
                 // Apply alloy's chain metadata only when the id is one it
-                // knows. This used to `unwrap_or(BaseSepolia)`, which meant an
-                // unknown id (HyperEVM testnet 998, anvil, any new rollup) read
-                // balances through a DIFFERENT chain's provider config.
-                // `balanceOf` is a plain eth_call, so no metadata is needed.
+                // knows. An unknown id (HyperEVM testnet 998, anvil, any new
+                // rollup) must not fall back to a DIFFERENT chain's provider
+                // config. `balanceOf` is a plain eth_call, so no metadata is
+                // needed.
                 let provider = match named_chain_for(*chain_id as u64) {
                     Some(named) => ProviderBuilder::new()
                         .with_chain(named)
@@ -342,17 +342,13 @@ mod rpc_resolve_tests {
         assert!(resolve_rpc_url_with("net", None, "").is_err());
     }
 
-    /// RPC-MASK-2 regression. `from_chain_config` used to take
-    /// `chain.rpc_url` verbatim, so against a masking server it happily
-    /// returned a client holding `"********"`. Every read through it then died
-    /// in `Url::parse` with `relative URL without a base` — and because the
-    /// deposited/locked reads resolve the endpoint separately, `balance`
-    /// printed `error` in the wallet column next to a correct deposited
-    /// figure. Fail at construction instead, naming the env key to set.
-    ///
-    /// `chain.rpc_url` is gone (replaced by `chain.rpcs`), but the sentinel
-    /// this test pins is the same shape a masked endpoint's `url` can still
-    /// take, so it's kept as a single-endpoint `rpcs` list.
+    /// RPC-MASK-2 regression. Against a masking server an endpoint's `url`
+    /// reads as `"********"`; `from_chain_config` must fail at construction,
+    /// naming the env key to set, rather than return a client holding the
+    /// sentinel. Otherwise every read through it dies in `Url::parse` with
+    /// `relative URL without a base` — and because the deposited/locked reads
+    /// resolve the endpoint separately, `balance` prints `error` in the
+    /// wallet column next to a correct deposited figure.
     ///
     /// The network name is unique to this test so the override key cannot be
     /// set by another test running in parallel (`resolve_rpc_url` reads the

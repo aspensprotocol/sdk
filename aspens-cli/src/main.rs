@@ -1199,7 +1199,7 @@ async fn run() -> Result<()> {
             if result.order_canceled {
                 info!("Order {} canceled successfully", order_id_hex);
             } else {
-                // The arborter answered NOT_FOUND: the order is no longer
+                // The arborter answered NOT_FOUND: the order is not
                 // live in the book (replayed cancel, or racing a fill that
                 // just landed). `cancel_order::call_cancel_order_with_wallet`
                 // classifies that as this outcome rather than an error — the

@@ -2,12 +2,9 @@
 //!
 //! Under the optimistic ledger the only client-derived values that must match
 //! the arborter byte-for-byte are the canonical `order_id`
-//! (`aspens::orders::derive_order_id`) and the EIP-712 domain constants. The
-//! legacy gasless on-chain-lock signing parity (EVM `GaslessCrossChainOrder`
-//! EIP-712 digest, Solana `OpenForSignedPayload` borsh layout) was retired with
-//! the on-chain order machinery — order authentication is now the outer
-//! envelope signature, covered by `aspens::evm::sign_send_order_envelope`'s
-//! own round-trip test.
+//! (`aspens::orders::derive_order_id`) and the EIP-712 domain constants.
+//! Order authentication is the outer envelope signature, covered by
+//! `aspens::evm::sign_send_order_envelope`'s own round-trip test.
 //!
 //! If an arborter refactor changes the order-id recipe or the domain
 //! constants, **regenerate these snapshots from arborter's code** rather than

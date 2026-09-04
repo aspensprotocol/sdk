@@ -23,9 +23,9 @@ Aspens SDK — a Rust Cargo workspace for cross-chain trading. Crates:
 - **Protocol buffers are internal.** The `proto/` types are an implementation
   detail; the public API exposes clean Rust types. Don't leak `prost` types.
 - **`*_with_wallet` (and `*_with_wallets`) is the only public trading/auth
-  shape.** The earlier `privkey: String` wrappers are gone — callers go
-  through `Wallet` (`aspens/src/wallet.rs`, the EVM/Solana curve
-  enum). Don't reintroduce string-key entry points.
+  shape.** Callers go through `Wallet` (`aspens/src/wallet.rs`, the
+  EVM/Solana curve enum). Don't reintroduce string-key (`privkey: String`)
+  entry points.
 
 ## Feature gating (non-obvious; preserve the dependency separation)
 
@@ -61,25 +61,22 @@ must be mirrored on the other, plus the snapshot tests in
   (`sha256("global:<method>")[..8]`) in `aspens/src/solana/mod.rs` must stay in
   lock-step with the on-chain `midrib` program.
 
-## Optimistic-ledger model (post-burn)
+## Optimistic-ledger model
 
 Trading is off-chain in the TEE; the chain only sees deposits, net settlement
 (`settleBatch`), and TEE-voucher withdrawals. Consequences for the SDK:
 
 - **Order entry is authenticated by the outer envelope signature only**
   (`aspens::evm::sign_send_order_envelope`, EIP-191 over the encoded order — the
-  counterpart to arborter's `is_signature_valid`). `SendOrderRequest` is now
-  just the order and that signature: `OrderAuthorization` is gone. There is
-  **no per-order on-chain lock signature** — the legacy gasless `open`/`open_for`
-  lock signing (EVM `GaslessCrossChainOrder`, Solana `OpenForSignedPayload`)
-  was burned.
+  counterpart to arborter's `is_signature_valid`). `SendOrderRequest` is just
+  the order and that signature. There is **no per-order on-chain lock
+  signature**.
 - **Anything the arborter acts on must be INSIDE `Order`**, where the envelope
-  signature covers it. Both fields `OrderAuthorization` carried failed that
-  test and were deleted with it: `amount_in` set an encumbrance from outside
-  the signature, and `order_id` was taken verbatim from the caller. The
-  arborter derives both from the signed order now, and the id's last unsigned
-  input moved in as **`Order.nonce`** (field 12). A caller still derives its
-  own copy of the id (`aspens::orders::derive_order_id`) but only for tracking
+  signature covers it. The arborter derives the budget and the order id from
+  the signed order — nothing beside the signature may set an encumbrance or
+  name an id — and the id's one caller-chosen input is signed as
+  **`Order.nonce`** (field 12). A caller still derives its own copy of the id
+  (`aspens::orders::derive_order_id`) but only for tracking
   — see the parity note above, and note the failure mode: hash anything the
   arborter doesn't, and the order is accepted while the two sides track
   different ids, with nothing on the wire to say so.
@@ -94,9 +91,8 @@ Trading is off-chain in the TEE; the chain only sees deposits, net settlement
   adapter rebuilds `Order` without one, so anything else fails signature
   verification there. Consequence: over FCE, two identical orders from one
   wallet derive the same id and the second is refused as a replay.
-- **Markets no longer carry token decimals.** `SetMarketRequest` lost
-  `base_/quote_chain_token_decimals`; register the token first and the
-  arborter reads them from the `tokens` table. It also matches the market's
+- **Markets carry no token decimals.** Register the token first; the
+  arborter reads its decimals from the `tokens` table. It also matches the market's
   token addresses against that table **byte-for-byte, case included** — and
   nothing on the SDK's admin path normalises case, deliberately.
 - **The order id's token strings are cut out of `Order.market_id`**, and never

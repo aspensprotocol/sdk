@@ -7,12 +7,11 @@
 //! next, with the original error appended as the "Underlying error"
 //! footer. If no branch matches, a generic fallback is returned.
 //!
-//! The branches and their order are the union of what `aspens-cli`,
-//! `aspens-repl`, and `aspens-admin` historically each carried. The
-//! cli/repl branches dominate for trading-path errors; the admin
+//! One battery serves `aspens-cli`, `aspens-repl`, and `aspens-admin`.
+//! The cli/repl branches dominate for trading-path errors; the admin
 //! branches dominate for JWT / auth / config-mutation errors. Most
 //! branches are inert for binaries they don't apply to (e.g. cli never
-//! sees `"invalid token"`), so leaving them in the shared helper is
+//! sees `"invalid token"`), so keeping them in the shared helper is
 //! cheap and avoids drift.
 
 use crate::BinaryContext;

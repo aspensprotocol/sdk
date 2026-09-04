@@ -190,8 +190,8 @@ message Order {
   // cross any opposing confirmed order at submission time the request
   // is rejected with FAILED_PRECONDITION and nothing is reserved. Limit
   // orders only — incompatible with market (no price) and with
-  // DISCRETIONARY execution_type. Defaults to false, which preserves
-  // legacy take-or-rest behavior.
+  // DISCRETIONARY execution_type. Defaults to false: the order takes what
+  // it crosses and rests the remainder.
   bool post_only = 9;
   // Hidden ("invisible") order: matched, settled, and canceled exactly
   // like a visible order (normal price-time priority), but never exposed
@@ -200,8 +200,8 @@ message Order {
   // not even to its owner: track via SendOrderResponse.order_id. When a
   // hidden order fills, the trade prints publicly with the hidden side's
   // identity fields (ids + addresses) redacted to empty/zero.
-  // Defaults to false (wire-skipped), so pre-feature signed envelopes
-  // are byte-identical.
+  // Defaults to false and is skipped on the wire when false, so an
+  // envelope that omits it signs identically to one that sets it false.
   bool hidden = 10;
   // The maximum QUOTE this order may spend, in the quote token's native base
   // units (NOT pair decimals) — the same denomination the ledger reserves in.
@@ -219,9 +219,8 @@ message Order {
   // REJECTED on every other order, where the budget is derived and a
   // caller-supplied figure could only disagree with it.
   //
-  // It lives in `Order` rather than beside it precisely so `signature_hash`
-  // covers it: this number authorises spending, and the retired
-  // `OrderAuthorization.amount_in` was unsigned.
+  // It lives in `Order` rather than beside it so `signature_hash` covers
+  // it: a number that authorises spending must be signed.
   optional string quote_budget = 11;
   // Caller-chosen nonce, folded into the order id so one wallet's otherwise
   // identical orders get distinct ids. Millis-since-epoch is the SDK's choice;
@@ -374,13 +373,6 @@ message OrderToCancel {
   // bids and asks are separate trees, and the side also selects which
   // wallet must sign (see `CancelOrderRequest.signature_hash`).
   Side side = 2;
-  // NOTE: a `token_address` field used to sit between `side` and `order_id`.
-  // The server never read it — it was fully determined by `market_id` and
-  // `side` — yet it was inside the signed bytes, so every caller had to
-  // resolve it exactly as the server would have (BID → quote-chain token,
-  // ASK → base-chain token) or its cancel silently matched nothing. A value
-  // derived once and used directly does not belong in a signed message.
-  //
   // The order's canonical identifier: the full 32-byte order id, shown as
   // `0x`-prefixed hex, exactly as returned in `SendOrderResponse.order_id`.
   // Server-derived at order entry — the caller only echoes it back here to
