@@ -420,10 +420,13 @@ message GetSignerRecoveryRequest {}
 
 // The venue's key set and the latest cold wrap of it.
 message GetSignerRecoveryResponse {
-  // The key set's manifest hash, lower hex of sha256 over the sorted
-  // "{name}:{curve}:{pubkey_hex}" lines joined with "\n" — byte for byte the
-  // value the signer appliance prints on its APPLIANCE-STATUS console line, so
-  // the deployer can compare the two without either side re-deriving it.
+  // The key set's manifest hash, lower hex of sha256 over the
+  // "{name}:{curve}:{pubkey_hex}" lines in NAME order, joined with "\n" — the
+  // keys are sorted by NAME and then formatted, never the other way round:
+  // sorting the formatted lines gives a different answer whenever one name is
+  // a prefix of another ("evm" beside "evm-tx"). Byte for byte the value the
+  // signer appliance prints on its APPLIANCE-STATUS console line, so the
+  // deployer can compare the two without either side re-deriving it.
   string key_set_id = 1;
   // The keyring sealed to the recovery public key baked into the appliance's
   // image. Opaque here: the arborter cannot read it and neither can the
