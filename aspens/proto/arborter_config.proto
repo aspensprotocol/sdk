@@ -51,6 +51,14 @@ service ConfigService {
   rpc GetSignerPublicKey(GetSignerPublicKeyRequest) returns (GetSignerPublicKeyResponse);
   // rpc service to get TEE attestation from the signer
   rpc GetAttestation(xyz.aspens.attestation.v1.GetAttestationRequest) returns (xyz.aspens.attestation.v1.GetAttestationResponse);
+  // Read back the venue's signer key set and the latest cold wrap of it that
+  // the arborter has persisted. AUTHENTICATED, like every other RPC here that
+  // is not one of the four bootstrap reads: the wrap is the encrypted-to-the-
+  // recovery-key backup of the venue's keyring, and while only the recovery
+  // private key can open it, who may COPY it is still an operator decision.
+  // NOT_FOUND when the arborter has never seen a wrap (a TPM-custody signer
+  // never emits one).
+  rpc GetSignerRecovery(GetSignerRecoveryRequest) returns (GetSignerRecoveryResponse);
   // rpc service to delete a market
   rpc DeleteMarket(DeleteMarketRequest) returns (DeleteMarketResponse) {}
   // rpc service to delete a token
@@ -404,6 +412,28 @@ message ChainPublicKey {
 message GetSignerPublicKeyResponse {
   // Map of chain network name to public key info
   map<string, ChainPublicKey> chain_keys = 1;
+}
+
+// Read the persisted signer recovery record. Takes no arguments: an arborter
+// serves exactly one venue, and that venue has exactly one key set.
+message GetSignerRecoveryRequest {}
+
+// The venue's key set and the latest cold wrap of it.
+message GetSignerRecoveryResponse {
+  // The key set's manifest hash, lower hex of sha256 over the sorted
+  // "{name}:{curve}:{pubkey_hex}" lines joined with "\n" — byte for byte the
+  // value the signer appliance prints on its APPLIANCE-STATUS console line, so
+  // the deployer can compare the two without either side re-deriving it.
+  string key_set_id = 1;
+  // The keyring sealed to the recovery public key baked into the appliance's
+  // image. Opaque here: the arborter cannot read it and neither can the
+  // operator — only the recovery private key, reassembled from its Shamir
+  // shares at the ceremony threshold, can.
+  bytes cold_wrap = 2;
+  // When this wrap was first persisted, RFC 3339 UTC. A key set can have more
+  // than one wrap (a restore, or a genesis re-emission, wraps the SAME keys
+  // afresh); this response carries the latest.
+  string created_at = 3;
 }
 
 // Delete market request
