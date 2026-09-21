@@ -47,7 +47,7 @@ pub mod fce_actions;
 /// Encode a prost message and sign the bytes with `wallet` — the outer
 /// envelope signature the arborter authenticates. Shared by the gRPC and FCE
 /// paths so the signed bytes are byte-identical (the cross-repo parity
-/// invariant; see CLAUDE.md). Order entry / cancel both authenticate this way.
+/// invariant; see AGENTS.md). Order entry / cancel both authenticate this way.
 pub(crate) async fn sign_encoded<M: prost::Message>(
     msg: &M,
     wallet: &crate::Wallet,

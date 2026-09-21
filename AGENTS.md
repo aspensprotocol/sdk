@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Guidance for working in this repo. This file is deliberately limited to things
 you **can't** infer from the code, `README.md`, or config — invariants,

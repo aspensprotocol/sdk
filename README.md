@@ -402,7 +402,7 @@ Withdrawal vouchers carry an `args.deadline` slot. The on-chain tombstone PDA ma
 
 - [Decimal Conversion Guide](decimals.md) - Understanding decimal handling
 - [CHANGELOG.md](CHANGELOG.md) - Release notes per version
-- [CLAUDE.md](CLAUDE.md) - Architecture guide for development
+- [AGENTS.md](AGENTS.md) - Architecture guide for development
 
 ## Versioning
 
