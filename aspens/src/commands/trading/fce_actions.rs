@@ -4,7 +4,7 @@
 //! `lookup_market`, `convert_to_pair_decimals`, `build_order_commitment`,
 //! and the shared `sign_encoded` — then submits them through the
 //! ext-proxy ([`crate::fce::FceClient`]) instead of arborter gRPC. Signing is
-//! byte-identical to the gRPC path (the cross-repo parity invariant, CLAUDE.md):
+//! byte-identical to the gRPC path (the cross-repo parity invariant, AGENTS.md):
 //! the adapter reconstructs the arborter `Order`/`OrderToCancel` from these
 //! fields with `hidden=false` and no `matching_order_ids`, so this path signs
 //! the same bytes (DIRECT execution, non-hidden orders only — the FCE
