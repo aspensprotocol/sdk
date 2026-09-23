@@ -254,7 +254,10 @@ enum Commands {
     },
 
     /// Set an instance's operator fee (recipient + bps). The arborter submits the
-    /// on-chain setOperatorFee as the instance's operator_admin.
+    /// on-chain setOperatorFee with its own key, so it only succeeds on an older
+    /// instance whose operator_admin is still the arborter signer; current
+    /// contracts refuse that pairing, and the operator admin signs the setter
+    /// itself.
     SetOperatorFee {
         /// Chain network whose instance to update (e.g., "base-sepolia")
         #[arg(long)]
@@ -269,8 +272,10 @@ enum Commands {
         bps: u32,
     },
 
-    /// Rotate an instance's operator_admin key. After rotation the new admin
-    /// (not the arborter) gates operator-fee changes.
+    /// Rotate an instance's operator_admin key. The arborter submits it with its
+    /// own key, so — like set-operator-fee — it only succeeds on an older
+    /// instance whose operator_admin is still the arborter signer. The new admin
+    /// may be neither zero nor the instance signer.
     RotateOperatorAdmin {
         /// Chain network whose instance to update
         #[arg(long)]

@@ -300,9 +300,14 @@ pub async fn set_trade_contract(
 
 /// Set an instance's operator fee — recipient + bps (requires auth).
 ///
-/// The arborter submits the on-chain `setOperatorFee` as the instance's
-/// `operator_admin` (the arborter signer, while unrotated). Returns the on-chain
-/// tx hash/signature.
+/// The arborter submits the on-chain `setOperatorFee` with its own signer key,
+/// but the contract gates it on the instance's `operator_admin`, which the
+/// current contracts (EVM factory + `setOperatorAdmin`, Solana program) never
+/// allow to be the arborter signer. Against any instance they minted this call
+/// therefore fails on-chain (`UNAUTHORIZED_CALLER` / `Unauthorized`); the
+/// operator admin must sign the setter itself. Returns the on-chain tx
+/// hash/signature when it does succeed (an older instance whose operator admin
+/// is still the arborter signer).
 ///
 /// # Arguments
 /// * `url` - The Aspens stack gRPC URL
@@ -335,8 +340,11 @@ pub async fn set_operator_fee(
 
 /// Rotate an instance's `operator_admin` key (requires auth).
 ///
-/// Signed by the current admin (the arborter, while unrotated). After this the
-/// new admin — not the arborter — gates operator-fee changes. Returns the
+/// Submitted by the arborter with its own signer key, so — like
+/// [`set_operator_fee`] — it fails on-chain against any instance whose
+/// operator admin is not the arborter signer, which the current contracts
+/// guarantee for every instance they mint. The program also refuses a
+/// `new_admin` equal to the instance signer or the zero address. Returns the
 /// on-chain tx hash/signature.
 ///
 /// # Arguments
