@@ -92,6 +92,12 @@ pub mod seeds {
     /// Seed for the per-(instance, mint) WithdrawEpoch PDA — the per-token
     /// per-epoch withdrawal cap plus the current epoch's running total.
     pub const WITHDRAW_EPOCH_SEED: &[u8] = b"withdraw_epoch";
+    /// Seed for the per-(instance, mint) SettleEpoch PDA — the per-token
+    /// per-epoch settlement cap plus the current epoch's credited total.
+    pub const SETTLE_EPOCH_SEED: &[u8] = b"settle_epoch";
+    /// Seed for the per-instance Termination PDA. The account exists (holds
+    /// data) exactly when the instance has been `terminate`d.
+    pub const TERMINATION_SEED: &[u8] = b"terminated";
 }
 
 /// Sysvar Rent — `"SysvarRent111111111111111111111111111111111"`.
@@ -177,6 +183,30 @@ pub fn derive_withdraw_epoch_pda(
     )
 }
 
+/// Derive the per-(instance, mint) `SettleEpoch` PDA — the per-token per-epoch
+/// settlement cap and the current epoch's running credited total. Seeds:
+/// `[SETTLE_EPOCH_SEED, instance, mint]`.
+pub fn derive_settle_epoch_pda(
+    instance: &Pubkey,
+    mint: &Pubkey,
+    program_id: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[seeds::SETTLE_EPOCH_SEED, instance.as_ref(), mint.as_ref()],
+        program_id,
+    )
+}
+
+/// Derive the instance's `Termination` PDA (`[TERMINATION_SEED, instance]`).
+///
+/// `deposit`, `withdraw_voucher` and `settle_batch` take this address as their
+/// last named account and refuse once it holds data (the instance has been
+/// terminated). Before termination the account does not exist; it is still
+/// passed, read-only.
+pub fn derive_termination_pda(instance: &Pubkey, program_id: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[seeds::TERMINATION_SEED, instance.as_ref()], program_id)
+}
+
 /// Derive the per-(instance, mint) SPL vault PDA.
 pub fn derive_instance_vault(
     instance: &Pubkey,
@@ -238,7 +268,8 @@ struct AmountArgs {
 
 /// Build the `deposit` instruction. User-signed — the user's Ed25519 key must
 /// sign the resulting transaction. Initializes UserBalance / instance_vault
-/// PDAs on first call (init_if_needed on-chain).
+/// PDAs on first call (init_if_needed on-chain). Fails on-chain with
+/// `Terminated` once the instance has been terminated.
 pub fn deposit_ix(
     program_id: &Pubkey,
     instance: &Pubkey,
@@ -250,7 +281,10 @@ pub fn deposit_ix(
     let (user_balance, _) = derive_user_balance_pda(instance, user, mint, program_id);
     let (instance_vault, _) = derive_instance_vault(instance, mint, program_id);
     let (vault_authority, _) = derive_vault_authority(instance, program_id);
+    let (termination, _) = derive_termination_pda(instance, program_id);
     let data = encode_ix("deposit", &AmountArgs { amount })?;
+    // Account order MUST match the program's `Deposit` accounts struct — Anchor
+    // binds POSITIONALLY. `deposit_accounts_match_program` pins this list.
     Ok(Instruction {
         program_id: *program_id,
         accounts: vec![
@@ -264,6 +298,9 @@ pub fn deposit_ix(
             AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
             AccountMeta::new_readonly(sysvar_rent_id(), false),
+            // Must be empty (not yet created): a terminated instance refuses
+            // deposits.
+            AccountMeta::new_readonly(termination, false),
         ],
         data,
     })
@@ -355,6 +392,7 @@ pub fn withdraw_voucher_ix(
     let (vault_authority, _) = derive_vault_authority(instance, program_id);
     let (used_nonce, _) = derive_withdraw_nonce_pda(instance, account, args.nonce, program_id);
     let (withdraw_epoch, _) = derive_withdraw_epoch_pda(instance, mint, program_id);
+    let (termination, _) = derive_termination_pda(instance, program_id);
     let data = encode_ix("withdraw_voucher", args)?;
     // Account order MUST match the program's `WithdrawVoucher` accounts struct —
     // Anchor binds POSITIONALLY, so a missing or misordered entry is not a
@@ -378,6 +416,9 @@ pub fn withdraw_voucher_ix(
             AccountMeta::new_readonly(sysvar_instructions_id(), false),
             AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            // Must be empty (not yet created): a terminated instance honors no
+            // vouchers.
+            AccountMeta::new_readonly(termination, false),
         ],
         data,
     })
@@ -404,8 +445,9 @@ pub struct SetWithdrawEpochCapArgs {
 ///
 /// This is deliberately NOT signed by the instance's TEE `signer` key: the cap
 /// exists to bound a misbehaving TEE, so a TEE able to raise its own cap would
-/// defeat it. Sign this with an offline operator key, never through the
-/// arborter.
+/// defeat it. The program keeps `operator_admin` distinct from `signer`
+/// (`create_instance` and `set_operator_admin` refuse that pairing). Sign this
+/// with an offline operator key, never through the arborter.
 ///
 /// `cap` is in the mint's BASE units (same scale the program accumulates
 /// withdrawals in), and `0` means unlimited. The epoch is a tumbling window of
@@ -436,6 +478,111 @@ pub fn set_withdraw_epoch_cap_ix(
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ],
         data,
+    })
+}
+
+// -- Per-epoch settlement cap (operator-admin authority) -------------------
+
+/// Args to the Midrib `set_settle_epoch_cap` instruction.
+#[derive(borsh::BorshSerialize, Debug)]
+pub struct SetSettleEpochCapArgs {
+    /// Base-unit ceiling on what `settle_batch` may credit (the sum of its
+    /// positive deltas) per `(instance, mint)` per epoch, across all batches.
+    /// `0` = unlimited, matching MidribV3's `setSettleEpochCap`.
+    pub cap: u64,
+}
+
+/// Build the `set_settle_epoch_cap` instruction — arm (or disarm) the
+/// per-`(instance, mint)` per-epoch settlement ceiling.
+///
+/// Same authority and shape as [`set_withdraw_epoch_cap_ix`]: `operator_admin`
+/// is the sole signer and fee payer, must equal the on-chain
+/// `instance.operator_admin` (else `Unauthorized`), and is writable because the
+/// `settle_epoch` PDA is `init_if_needed` with `payer = operator_admin`. The
+/// program writes only `cap`, so arming or raising it never wipes the current
+/// epoch's tally — and the tally runs while uncapped, so a cap armed mid-epoch
+/// counts what already moved.
+///
+/// `cap` is in the mint's BASE units; `0` means unlimited. The epoch is the same
+/// tumbling 9,000-slot (~1 hour) window as the withdrawal cap. A batch that
+/// would push the epoch total past the cap fails `SettleEpochCapExceeded`; the
+/// arborter reads the remaining allowance first and holds a mint's settlement
+/// that would not fit until it does (the epoch rolls over or the cap is raised).
+pub fn set_settle_epoch_cap_ix(
+    program_id: &Pubkey,
+    instance: &Pubkey,
+    mint: &Pubkey,
+    operator_admin: &Pubkey,
+    cap: u64,
+) -> Result<Instruction> {
+    let (settle_epoch, _) = derive_settle_epoch_pda(instance, mint, program_id);
+    let data = encode_ix("set_settle_epoch_cap", &SetSettleEpochCapArgs { cap })?;
+    // Account order MUST match the program's `SetSettleEpochCap` accounts
+    // struct (Anchor binds POSITIONALLY). `set_settle_epoch_cap_accounts_match_program`
+    // pins this list; update both together.
+    Ok(Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(*instance, false),
+            AccountMeta::new_readonly(*mint, false),
+            // `init_if_needed` on the program side → writable, not a signer.
+            AccountMeta::new(settle_epoch, false),
+            // `mut` (rent payer) + `Signer` on the program side.
+            AccountMeta::new(*operator_admin, true),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data,
+    })
+}
+
+// -- Program errors a client can hit ---------------------------------------
+
+/// Anchor custom error codes (`6000 + variant index` of the program's
+/// `MidribError`, in `chains/solana/programs/midrib/src/errors.rs`) that a
+/// client-submitted instruction can fail with and that deserve a plain-English
+/// explanation. Reordering that enum changes these numbers.
+pub mod midrib_error {
+    /// `withdraw_voucher` would exceed the mint's per-epoch withdrawal cap.
+    pub const WITHDRAW_EPOCH_CAP_EXCEEDED: u32 = 6031;
+    /// `deposit` / `withdraw_voucher` / `settle_batch` on a terminated instance.
+    pub const TERMINATED: u32 = 6037;
+    /// `withdraw_terminated` before `TERMINATION_DELAY_SLOTS` have passed.
+    pub const TERMINATION_DELAY_PENDING: u32 = 6038;
+    /// An operator admin equal to the instance signer was supplied.
+    pub const OPERATOR_ADMIN_IS_SIGNER: u32 = 6039;
+}
+
+/// Explain a Midrib program error found in a transaction-failure message, if it
+/// is one of [`midrib_error`]. Matches the runtime's
+/// `custom program error: 0x<hex>` rendering, which is what RPC preflight and
+/// confirmation errors carry.
+pub fn explain_midrib_error(message: &str) -> Option<&'static str> {
+    const PREFIX: &str = "custom program error: 0x";
+    let start = message.find(PREFIX)? + PREFIX.len();
+    let hex: String = message[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_hexdigit())
+        .collect();
+    let code = u32::from_str_radix(&hex, 16).ok()?;
+    Some(match code {
+        midrib_error::WITHDRAW_EPOCH_CAP_EXCEEDED => {
+            "the instance's per-epoch withdrawal cap for this token is used up; \
+             retry after the current ~1h epoch ends"
+        }
+        midrib_error::TERMINATED => {
+            "this trading instance has been terminated: it takes no deposits, honors \
+             no withdrawal vouchers and settles nothing. Balances are reclaimed with \
+             `withdraw_terminated` once the termination delay (~24h) has passed"
+        }
+        midrib_error::TERMINATION_DELAY_PENDING => {
+            "the instance was terminated less than TERMINATION_DELAY_SLOTS (216,000 \
+             slots, ~24h) ago; `withdraw_terminated` opens at terminated_at_slot + \
+             216,000 (the program logs the exact slot)"
+        }
+        midrib_error::OPERATOR_ADMIN_IS_SIGNER => {
+            "the operator admin must not be the instance's TEE signer"
+        }
+        _ => return None,
     })
 }
 
@@ -489,15 +636,157 @@ mod tests {
         assert_eq!(&a[..], &h.finalize()[..8]);
     }
 
+    /// Assert `ix.accounts` equals `expected` — `(name, pubkey, writable,
+    /// signer)` per index — including the count.
+    fn assert_accounts(ix: &Instruction, expected: &[(&str, Pubkey, bool, bool)], what: &str) {
+        assert_eq!(
+            ix.accounts.len(),
+            expected.len(),
+            "{what} account COUNT drifted from the program's accounts struct \
+             (expected {}, got {})",
+            expected.len(),
+            ix.accounts.len()
+        );
+        for (i, (name, pubkey, writable, signer)) in expected.iter().enumerate() {
+            let got = &ix.accounts[i];
+            assert_eq!(
+                got.pubkey, *pubkey,
+                "{what}: account {i} should be `{name}`"
+            );
+            assert_eq!(got.is_writable, *writable, "{what}: `{name}` writable flag");
+            assert_eq!(got.is_signer, *signer, "{what}: `{name}` signer flag");
+        }
+    }
+
+    /// Pin `deposit`'s account list against the on-chain `Deposit` accounts
+    /// struct (`arborter/chains/solana/programs/midrib/src/instructions/
+    /// deposit.rs`, field order top to bottom). The Termination PDA is the LAST
+    /// named account, after the rent sysvar; without it every deposit fails
+    /// account validation. REGENERATE whenever that struct changes.
     #[test]
-    fn deposit_has_signer_at_user_slot() {
+    fn deposit_accounts_match_program() {
         let pid = Pubkey::new_from_array([1; 32]);
-        let inst = Pubkey::new_from_array([2; 32]);
+        let instance = Pubkey::new_from_array([2; 32]);
         let user = Pubkey::new_from_array([3; 32]);
         let mint = Pubkey::new_from_array([4; 32]);
         let ata = Pubkey::new_from_array([5; 32]);
-        let dep = deposit_ix(&pid, &inst, &user, &mint, &ata, 100).unwrap();
-        assert!(dep.accounts.iter().any(|a| a.is_signer && a.pubkey == user));
+        let ix = deposit_ix(&pid, &instance, &user, &mint, &ata, 100).unwrap();
+
+        let (user_balance, _) = derive_user_balance_pda(&instance, &user, &mint, &pid);
+        let (instance_vault, _) = derive_instance_vault(&instance, &mint, &pid);
+        let (vault_authority, _) = derive_vault_authority(&instance, &pid);
+        let (termination, _) = derive_termination_pda(&instance, &pid);
+        let expected: &[(&str, Pubkey, bool, bool)] = &[
+            ("instance", instance, false, false),
+            ("mint", mint, false, false),
+            ("user_balance", user_balance, true, false),
+            ("user_token_account", ata, true, false),
+            ("instance_vault", instance_vault, true, false),
+            ("vault_authority", vault_authority, false, false),
+            ("user", user, true, true),
+            ("token_program", SPL_TOKEN_PROGRAM_ID, false, false),
+            ("system_program", SYSTEM_PROGRAM_ID, false, false),
+            ("rent", sysvar_rent_id(), false, false),
+            ("termination", termination, false, false),
+        ];
+        assert_accounts(&ix, expected, "deposit");
+        assert_eq!(&ix.data[..8], &anchor_ix_discriminator("deposit"));
+        assert_eq!(&ix.data[8..], &100u64.to_le_bytes());
+    }
+
+    /// The new PDA seeds, spelled out against the program's literals
+    /// (`Termination::SEED = b"terminated"`, `SettleEpoch::SEED =
+    /// b"settle_epoch"` in `midrib/src/state.rs`) rather than the constants they
+    /// are derived from here, so a typo in either constant fails.
+    #[test]
+    fn termination_and_settle_epoch_seeds_match_program() {
+        let pid = Pubkey::new_from_array([9; 32]);
+        let instance = Pubkey::new_from_array([6; 32]);
+        let mint = Pubkey::new_from_array([8; 32]);
+        assert_eq!(
+            derive_termination_pda(&instance, &pid),
+            Pubkey::find_program_address(&[b"terminated", instance.as_ref()], &pid)
+        );
+        assert_eq!(
+            derive_settle_epoch_pda(&instance, &mint, &pid),
+            Pubkey::find_program_address(
+                &[b"settle_epoch", instance.as_ref(), mint.as_ref()],
+                &pid
+            )
+        );
+        assert_ne!(
+            derive_settle_epoch_pda(&instance, &mint, &pid).0,
+            derive_withdraw_epoch_pda(&instance, &mint, &pid).0
+        );
+    }
+
+    /// Pin `set_settle_epoch_cap`'s account list against the on-chain
+    /// `SetSettleEpochCap` accounts struct (`midrib/src/instructions/
+    /// set_settle_epoch_cap.rs`): instance, mint, settle_epoch
+    /// (`init_if_needed`), operator_admin (`mut` signer, rent payer),
+    /// system_program. The signer slot IS the authority check.
+    #[test]
+    fn set_settle_epoch_cap_accounts_match_program() {
+        let pid = Pubkey::new_from_array([1; 32]);
+        let instance = Pubkey::new_from_array([2; 32]);
+        let mint = Pubkey::new_from_array([3; 32]);
+        let operator_admin = Pubkey::new_from_array([4; 32]);
+        let ix = set_settle_epoch_cap_ix(&pid, &instance, &mint, &operator_admin, 2_500)
+            .expect("build set_settle_epoch_cap ix");
+
+        let (settle_epoch, _) = derive_settle_epoch_pda(&instance, &mint, &pid);
+        let expected: &[(&str, Pubkey, bool, bool)] = &[
+            ("instance", instance, false, false),
+            ("mint", mint, false, false),
+            ("settle_epoch", settle_epoch, true, false),
+            ("operator_admin", operator_admin, true, true),
+            ("system_program", SYSTEM_PROGRAM_ID, false, false),
+        ];
+        assert_accounts(&ix, expected, "set_settle_epoch_cap");
+
+        // sha256("global:set_settle_epoch_cap")[..8], computed independently,
+        // then the u64 cap little-endian.
+        assert_eq!(
+            &ix.data[..8],
+            &[122, 175, 126, 206, 41, 92, 63, 63],
+            "discriminator drifted from set_settle_epoch_cap"
+        );
+        assert_eq!(&ix.data[8..], &2_500u64.to_le_bytes());
+        assert_eq!(ix.program_id, pid);
+    }
+
+    #[test]
+    fn explain_midrib_error_names_the_new_refusals() {
+        let wrap = |code: &str| {
+            format!(
+                "Transaction simulation failed: Error processing Instruction 1: custom program error: {code}"
+            )
+        };
+        assert!(
+            explain_midrib_error(&wrap("0x1795"))
+                .unwrap()
+                .contains("terminated")
+        );
+        assert!(
+            explain_midrib_error(&wrap("0x1796"))
+                .unwrap()
+                .contains("216,000")
+        );
+        assert!(
+            explain_midrib_error(&wrap("0x178f"))
+                .unwrap()
+                .contains("withdrawal cap")
+        );
+        assert!(
+            explain_midrib_error(&wrap("0x1797"))
+                .unwrap()
+                .contains("TEE signer")
+        );
+        // InsufficientBalance (0x1771) and unrelated text stay unexplained.
+        assert_eq!(explain_midrib_error(&wrap("0x1771")), None);
+        assert_eq!(explain_midrib_error("connection refused"), None);
+        // Codes are decimal 6000 + variant index; pin the hex spelling.
+        assert_eq!(midrib_error::TERMINATED, 0x1795);
     }
 
     #[test]
@@ -556,6 +845,7 @@ mod tests {
         let (vault_authority, _) = derive_vault_authority(&instance, &pid);
         let (used_nonce, _) = derive_withdraw_nonce_pda(&instance, &account, args.nonce, &pid);
         let (withdraw_epoch, _) = derive_withdraw_epoch_pda(&instance, &mint, &pid);
+        let (termination, _) = derive_termination_pda(&instance, &pid);
 
         // (name, pubkey, writable, signer) — index i here is account i on-chain.
         let expected: &[(&str, Pubkey, bool, bool)] = &[
@@ -572,6 +862,7 @@ mod tests {
             ("instructions", sysvar_instructions_id(), false, false),
             ("token_program", SPL_TOKEN_PROGRAM_ID, false, false),
             ("system_program", SYSTEM_PROGRAM_ID, false, false),
+            ("termination", termination, false, false),
         ];
 
         assert_eq!(
