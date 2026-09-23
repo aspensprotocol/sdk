@@ -85,7 +85,13 @@ pub async fn submit_user_signed_multi(
     let sig = client
         .send_and_confirm_transaction(&tx)
         .await
-        .map_err(|e| eyre!("send_and_confirm_transaction: {}", e))?;
+        .map_err(|e| {
+            let message = e.to_string();
+            match crate::solana::explain_midrib_error(&message) {
+                Some(hint) => eyre!("send_and_confirm_transaction: {message}\n  -> {hint}"),
+                None => eyre!("send_and_confirm_transaction: {message}"),
+            }
+        })?;
     Ok(sig.to_string())
 }
 
@@ -96,8 +102,9 @@ pub struct InstanceAuthorities {
     /// vouchers.
     pub signer: Pubkey,
     /// The stack-admin key gating `set_operator_fee` / `set_operator_admin` /
-    /// `set_withdraw_epoch_cap`. Equal to `signer` in the default deploy shape,
-    /// in which case the withdrawal cap contains bugs but not a compromised TEE.
+    /// `set_withdraw_epoch_cap` / `set_settle_epoch_cap` / `terminate`. The
+    /// program refuses to create or rotate to an `operator_admin` equal to
+    /// `signer`; an instance created before that check may still carry one.
     pub operator_admin: Pubkey,
 }
 
@@ -198,6 +205,58 @@ pub async fn fetch_withdraw_epoch(
     }))
 }
 
+/// The per-`(instance, mint)` settlement rate-limit state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettleEpochState {
+    /// Epoch index (`slot / 9_000`) the running total belongs to.
+    pub epoch: u64,
+    /// Base units credited (sum of positive settlement deltas) within `epoch`.
+    /// Accumulates even while uncapped.
+    pub settled: u128,
+    /// The ceiling; `0` = unlimited.
+    pub cap: u64,
+}
+
+/// Fetch the `SettleEpoch` PDA state for `(instance, mint)`. Returns `None` if
+/// the account does not exist — the state for every mint until a cap is armed
+/// or the first batch settles, equivalent to an unlimited cap and a zero total.
+pub async fn fetch_settle_epoch(
+    rpc_url: &str,
+    instance: &Pubkey,
+    mint: &Pubkey,
+    program_id: &Pubkey,
+) -> Result<Option<SettleEpochState>> {
+    use solana_client::nonblocking::rpc_client::RpcClient;
+    let client = RpcClient::new(rpc_url.to_string());
+    let (pda, _) = crate::solana::derive_settle_epoch_pda(instance, mint, program_id);
+    let response = client
+        .get_account_with_commitment(&pda, client.commitment())
+        .await
+        .map_err(|e| eyre!("get_account (SettleEpoch PDA): {}", e))?;
+    let Some(acc) = response.value else {
+        return Ok(None);
+    };
+    decode_settle_epoch(&acc.data).map(Some)
+}
+
+/// Decode a `SettleEpoch` account. Layout (after the 8-byte Anchor
+/// discriminator): `instance(32) mint(32) epoch(u64) settled(u128) cap(u64)
+/// bump(u8)` — note `settled` is 16 bytes, unlike `WithdrawEpoch.withdrawn`.
+fn decode_settle_epoch(data: &[u8]) -> Result<SettleEpochState> {
+    const EPOCH_OFFSET: usize = 8 + 32 + 32;
+    const SETTLED_OFFSET: usize = EPOCH_OFFSET + 8;
+    const CAP_OFFSET: usize = SETTLED_OFFSET + 16;
+    if data.len() < CAP_OFFSET + 8 {
+        return Err(eyre!("SettleEpoch account too small: {} bytes", data.len()));
+    }
+    let bytes = |offset: usize, len: usize| &data[offset..offset + len];
+    Ok(SettleEpochState {
+        epoch: u64::from_le_bytes(bytes(EPOCH_OFFSET, 8).try_into()?),
+        settled: u128::from_le_bytes(bytes(SETTLED_OFFSET, 16).try_into()?),
+        cap: u64::from_le_bytes(bytes(CAP_OFFSET, 8).try_into()?),
+    })
+}
+
 /// Fetch on-chain `(deposited, locked)` from the UserBalance PDA. Returns
 /// `(0, 0)` if the account does not exist (user has never deposited on this
 /// instance/mint).
@@ -246,4 +305,32 @@ pub async fn fetch_user_balance(
         u64::from_le_bytes(deposited_bytes),
         u64::from_le_bytes(locked_bytes),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `SettleEpoch` is `disc(8) instance(32) mint(32) epoch(u64) settled(u128)
+    /// cap(u64) bump(u8)` = 105 bytes (`SettleEpoch::LEN` in the program). Every
+    /// field gets a distinct value so an offset slip cannot read the right
+    /// number from the wrong place.
+    #[test]
+    fn decode_settle_epoch_reads_each_field_at_its_offset() {
+        let mut data = vec![0xAAu8; 8 + 32 + 32];
+        data.extend_from_slice(&7u64.to_le_bytes());
+        data.extend_from_slice(&(u64::MAX as u128 + 5).to_le_bytes());
+        data.extend_from_slice(&1_234u64.to_le_bytes());
+        data.push(254);
+        assert_eq!(data.len(), 105);
+        assert_eq!(
+            decode_settle_epoch(&data).unwrap(),
+            SettleEpochState {
+                epoch: 7,
+                settled: u64::MAX as u128 + 5,
+                cap: 1_234,
+            }
+        );
+        assert!(decode_settle_epoch(&data[..100]).is_err());
+    }
 }

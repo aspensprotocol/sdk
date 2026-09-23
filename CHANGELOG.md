@@ -9,6 +9,32 @@ change before 1.0.
 
 ## [Unreleased]
 
+### Added
+
+- `aspens::solana::set_settle_epoch_cap_ix` + `derive_settle_epoch_pda`,
+  `aspens::operator::set_settle_epoch_cap`,
+  `aspens::solana::client::fetch_settle_epoch`, and the
+  `aspens-cli set-settle-epoch-cap` command: arm the Solana midrib program's
+  per-`(instance, mint)` per-epoch settlement cap with the offline
+  operator-admin key (EVM equivalent: `MidribV3.setSettleEpochCap`).
+- `aspens::solana::derive_termination_pda` and
+  `aspens::solana::explain_midrib_error`; Solana transaction failures now
+  carry a plain-English line for `Terminated`, `TerminationDelayPending`,
+  `WithdrawEpochCapExceeded` and `OperatorAdminIsSigner`.
+
+### Changed
+
+- **BREAKING (wire): `deposit_ix` and `withdraw_voucher_ix` append the
+  instance's Termination PDA** (`[b"terminated", instance]`, read-only) as
+  their last account, matching the midrib program's new `Deposit` /
+  `WithdrawVoucher` structs. Older SDKs cannot deposit or withdraw against
+  the new program, and this SDK cannot against the old one.
+- `artifacts/MidribV3.json` / `MidribFactory.json` regenerated: adds
+  `setSettleEpochCap`, `settleEpochCap`, `settledInEpoch`, `terminatedAt`,
+  `TERMINATION_DELAY`, the `SettleEpochCapSet` event and the
+  `SETTLE_RATE_LIMITED`, `TERMINATION_DELAY_PENDING`,
+  `OPERATOR_ADMIN_IS_SIGNER` errors.
+
 ### Removed
 
 - **BREAKING (source): dead public API surface with zero consumers in any

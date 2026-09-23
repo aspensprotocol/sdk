@@ -782,11 +782,10 @@ enum Commands {
     ///   guarantee at most X per hour, SET CAP = X/2. EVM behaves identically.
     ///
     /// * The signer must equal the instance's on-chain `operator_admin`
-    ///   (checked before submitting). IF THAT IS THE ARBORTER'S OWN KEY — the
-    ///   default the Solana deployer takes when no operator admin is
-    ///   configured — THE CAP PROVIDES NO CONTAINMENT against a compromised
-    ///   signer, which can simply raise it again. It still bounds bugs and
-    ///   operator error. The command warns when it detects that shape.
+    ///   (checked before submitting). The program refuses an operator admin
+    ///   equal to the TEE signer, so the TEE cannot raise the cap that bounds
+    ///   it. An instance created before that check may still carry one; the
+    ///   command warns when it detects that shape.
     ///
     /// Reads the key from OPERATOR_ADMIN_PRIVKEY_SOLANA (base58 or JSON byte
     /// array) — deliberately NOT the trader or admin key. Never goes through
@@ -800,6 +799,44 @@ enum Commands {
         /// token's `decimals` from the chain config. "0" = UNLIMITED.
         cap: String,
     },
+    /// Arm the per-token per-epoch SETTLEMENT cap on a Solana instance,
+    /// signing DIRECTLY with the offline operator-admin key.
+    ///
+    /// The cap bounds what `settle_batch` may credit to accounts (the sum of
+    /// its positive deltas) per token per epoch, across all batches — without
+    /// it one TEE-signed batch could move every balance of a token to one
+    /// account. Same authority, key, epoch (9,000 slots, ~1 hour, TUMBLING)
+    /// and "0 = UNLIMITED" sentinel as set-withdraw-epoch-cap; the EVM
+    /// equivalent is MidribV3.setSettleEpochCap.
+    ///
+    /// SIZE IT ABOVE the venue's legitimate hourly settled volume in the
+    /// token: a batch that would exceed it is refused on chain, and the
+    /// arborter holds that token's settlement until it fits (the epoch rolls
+    /// over or the cap is raised).
+    ///
+    /// Reads the key from OPERATOR_ADMIN_PRIVKEY_SOLANA. Never goes through
+    /// the arborter.
+    SetSettleEpochCap {
+        /// The Solana network name (e.g. solana-local, solana-devnet)
+        network: String,
+        /// Token symbol the cap applies to (e.g. USDC, WSOL)
+        token: String,
+        /// Cap in human-readable units (e.g. "50000", "12.5"), scaled by the
+        /// token's `decimals` from the chain config. "0" = UNLIMITED.
+        cap: String,
+    },
+}
+
+/// An operator admin equal to the TEE signer is refused by the program at
+/// `create_instance` / `set_operator_admin`; seeing it means an instance
+/// created before that check.
+fn warn_admin_is_tee_signer() {
+    eprintln!(
+        "warning: this instance's operator_admin IS its TEE signer (it predates the \
+         program's refusal of that pairing), so the cap bounds bugs and operator error \
+         but NOT a compromised signer — that key can raise the cap again. Rotate to a \
+         distinct operator-admin key for real containment."
+    );
 }
 
 #[tokio::main]
@@ -1799,12 +1836,68 @@ async fn run() -> Result<()> {
                 ),
             }
             if outcome.admin_is_tee_signer {
-                eprintln!(
-                    "warning: this instance's operator_admin IS its TEE signer, so the cap \
-                     bounds bugs and operator error but NOT a compromised signer — that key \
-                     can raise the cap again. Configure a distinct operator-admin key for \
-                     real containment."
+                warn_admin_is_tee_signer();
+            }
+        }
+        Commands::SetSettleEpochCap {
+            network,
+            token,
+            cap,
+        } => {
+            let config = client
+                .get_config()
+                .await
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
+            let context = format!("set settle epoch cap for {} on {}", token, network);
+            let cap_base = resolve_token_amount(&config, &network, &token, &cap)
+                .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
+            let cap_base: u64 = cap_base.try_into().map_err(|_| {
+                eyre::eyre!(
+                    "cap {} {} is {} base units, which exceeds u64 — Solana amounts \
+                     are u64 (pass 0 for unlimited)",
+                    cap,
+                    token,
+                    cap_base
+                )
+            })?;
+            if cap_base == 0 {
+                info!(
+                    "Setting {token} settlement cap on {network} to 0 = UNLIMITED \
+                     (this DISARMS the cap)"
                 );
+            } else {
+                info!(
+                    "Setting {token} settlement cap on {network} to {cap} ({cap_base} \
+                     base units credited) per ~1h epoch."
+                );
+            }
+            // Same direct-signing path and key handling as SetWithdrawEpochCap.
+            let wallet = aspens::load_operator_admin_wallet_solana()?;
+            let outcome = executor.execute(async move {
+                aspens::operator::set_settle_epoch_cap(&config, &network, &token, cap_base, &wallet)
+                    .await
+            })?;
+
+            info!("Transaction: {}", outcome.signature);
+            info!("  instance:     {}", outcome.instance);
+            info!("  mint:         {}", outcome.mint);
+            info!("  settle_epoch: {}", outcome.settle_epoch);
+            match outcome.state {
+                Some(state) if state.cap == 0 => info!(
+                    "  cap on chain: 0 (UNLIMITED); epoch {} has {} base units credited",
+                    state.epoch, state.settled
+                ),
+                Some(state) => info!(
+                    "  cap on chain: {} base units; epoch {} has {} credited",
+                    state.cap, state.epoch, state.settled
+                ),
+                None => info!(
+                    "  cap on chain: could not be read back (the transaction confirmed; \
+                     re-check with a fresh RPC read)"
+                ),
+            }
+            if outcome.admin_is_tee_signer {
+                warn_admin_is_tee_signer();
             }
         }
     }

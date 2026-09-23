@@ -238,10 +238,11 @@ pub fn load_admin_wallet(curve: CurveType) -> Result<Wallet> {
 }
 
 /// Env var holding the Solana operator-admin keypair — the authority on
-/// `instance.operator_admin`, which gates `set_withdraw_epoch_cap`.
+/// `instance.operator_admin`, which gates `set_withdraw_epoch_cap` and
+/// `set_settle_epoch_cap`.
 ///
 /// Deliberately its OWN variable, not `TRADER_PRIVKEY_SOLANA` or
-/// `ADMIN_PRIVKEY_SOLANA`: the withdrawal cap only contains a compromised or
+/// `ADMIN_PRIVKEY_SOLANA`: the caps only contain a compromised or
 /// buggy TEE while its authority is a key nothing else in the stack holds, so
 /// conflating it with the trading wallet would quietly dissolve the guarantee
 /// the cap exists to provide. Keep this key offline.

@@ -75,8 +75,8 @@ Most commands below require a JWT (set via `--jwt`, `ASPENS_JWT` in `.env`, or t
 | `delete-market <market_id>` | Remove a market |
 | `deploy-contract <network> [--fees <bps>]` | Deploy a trade contract on a chain (fee in basis points, default 0) |
 | `set-trade-contract --address <addr> --chain-network <network>` | Register an existing trade contract address on a chain |
-| `set-operator-fee --chain-network <network> --recipient <addr> --bps <bps>` | Set an instance's operator fee (recipient + bps) |
-| `rotate-operator-admin --chain-network <network> --new-admin <addr>` | Rotate an instance's `operator_admin` key |
+| `set-operator-fee --chain-network <network> --recipient <addr> --bps <bps>` | Set an instance's operator fee (recipient + bps). Arborter-submitted, so it fails on-chain unless the instance's `operator_admin` is the arborter signer — which current contracts refuse |
+| `rotate-operator-admin --chain-network <network> --new-admin <addr>` | Rotate an instance's `operator_admin` key. Same limitation as `set-operator-fee` |
 | `delete-trade-contract <chain_network>` | Remove the trade contract association from a chain |
 | `version` | Show server version information |
 | `status` | Show current configuration and connection status |
@@ -335,12 +335,14 @@ just clean                 # Clean build artifacts
 
 Command-line interface for scripted trading operations.
 
-It also carries the one **operator** command that must NOT go through the
-arborter, `set-withdraw-epoch-cap`:
+It also carries the two **operator** commands that must NOT go through the
+arborter, `set-withdraw-epoch-cap` and `set-settle-epoch-cap`:
 
 ```bash
 OPERATOR_ADMIN_PRIVKEY_SOLANA=<base58 or id.json contents> \
   aspens-cli set-withdraw-epoch-cap <network> <token> <cap>
+OPERATOR_ADMIN_PRIVKEY_SOLANA=<base58 or id.json contents> \
+  aspens-cli set-settle-epoch-cap <network> <token> <cap>
 ```
 
 This arms the Solana midrib program's per-`(instance, mint)` per-epoch
@@ -350,13 +352,21 @@ and **`0` means unlimited** — the shipped default for every mint, matching
 the window is **tumbling, not sliding**, so up to `2 × cap` can leave across a
 boundary; for at most X per hour, set `cap = X/2`.
 
-The authority is the instance's on-chain `operator_admin`, so the command
-builds, signs and submits the transaction locally with an offline key
+`set-settle-epoch-cap` arms the matching ceiling on settlement: the most
+`settle_batch` may credit to accounts (the sum of its positive deltas) per
+`(instance, mint)` per epoch, across all batches — `MidribV3.setSettleEpochCap`
+on EVM. Same units, epoch and `0` = unlimited. Size it above the venue's
+legitimate hourly settled volume: a batch that would exceed it is refused on
+chain, and the arborter holds that token's settlement until it fits (the
+epoch rolls over or the cap is raised).
+
+The authority for both is the instance's on-chain `operator_admin`, so the
+commands build, sign and submit the transaction locally with an offline key
 (`OPERATOR_ADMIN_PRIVKEY_SOLANA`, base58 or JSON keypair) — deliberately not
-the trader or admin key, and never the arborter's. A cap whose authority is the
-arborter's own signer bounds bugs and operator error but provides no
-containment against a compromised TEE; the command warns when it sees that
-shape. `aspens-cli set-withdraw-epoch-cap --help` restates all of this.
+the trader or admin key, and never the arborter's. The program refuses an
+`operator_admin` equal to the TEE signer, so the TEE cannot raise the caps that
+bound it; an instance created before that check may still carry one, and the
+commands warn when they see it. `--help` on each command restates all of this.
 
 ### REPL Binary (`aspens-repl/`)
 
