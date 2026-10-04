@@ -24,6 +24,8 @@ change before 1.0.
 
 ### Changed
 
+- Toolchain raised to Rust **1.99.0** (`rust-toolchain.toml`; CI reads it).
+
 - **BREAKING (wire): `deposit_ix` and `withdraw_voucher_ix` append the
   instance's Termination PDA** (`[b"terminated", instance]`, read-only) as
   their last account, matching the midrib program's new `Deposit` /
