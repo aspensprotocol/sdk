@@ -120,6 +120,11 @@ tonic-prost-build = "0.14.6"
 
 # Dev dependencies
 tempfile = "3.27.0"
+# Test-only: a raw HTTP/2 fake gRPC server (the generated bindings have no
+# server stubs). Same versions tonic already pulls in.
+h2 = "0.4.16"
+http = "1.5"
+bytes = "1.12"
 
 [profile.release]
 opt-level = 3

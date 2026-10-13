@@ -71,13 +71,14 @@ where
     // returning an already-ready future for each entry.
     stream_orderbook_with(url, options, |entry| {
         callback(entry);
-        std::future::ready(())
+        std::future::ready(true)
     })
     .await
 }
 
 /// Internal core: stream orderbook entries, invoking an **async** callback
-/// per entry.
+/// per entry. The callback returns whether to keep streaming; `false` drops
+/// the gRPC stream and returns `Ok(())`.
 ///
 /// Both the sync-callback [`stream_orderbook`] and the channel-based
 /// [`stream_orderbook_channel`] delegate here. The async callback is what
@@ -90,7 +91,7 @@ async fn stream_orderbook_with<F, Fut>(
 ) -> Result<()>
 where
     F: FnMut(OrderbookEntry) -> Fut,
-    Fut: std::future::Future<Output = ()>,
+    Fut: std::future::Future<Output = bool>,
 {
     // Create a channel to connect to the gRPC server
     let channel = create_channel(&url).await?;
@@ -118,7 +119,9 @@ where
     while let Some(entry_result) = stream.next().await {
         match entry_result {
             Ok(entry) => {
-                callback(entry).await;
+                if !callback(entry).await {
+                    break;
+                }
             }
             Err(e) => {
                 tracing::error!("Stream error: {}", e);
@@ -161,7 +164,7 @@ pub async fn fetch_top_of_book(
     market_id: String,
     collection_window: std::time::Duration,
 ) -> Result<TopOfBook> {
-    let (mut rx, _handle) = stream_orderbook_channel(
+    let (mut rx, handle) = stream_orderbook_channel(
         url,
         StreamOrderbookOptions {
             market_id,
@@ -206,6 +209,11 @@ pub async fn fetch_top_of_book(
             }
         }
     }
+
+    // The orderbook stream never ends on its own (live updates follow the
+    // snapshot), so stop it now rather than leave it open for the life of the
+    // process.
+    handle.abort();
 
     Ok(top)
 }
@@ -253,7 +261,9 @@ pub fn apply_slippage(reference_price: u128, slippage_bps: u32, is_buy: bool) ->
 /// * `options` - Options for the stream (market_id, historical orders, trader filter)
 ///
 /// # Returns
-/// A receiver channel that will receive orderbook entries, and a handle to the background task.
+/// A receiver channel that will receive orderbook entries, and a handle to the
+/// background task. The task ends at the next entry after the receiver is
+/// dropped; abort the handle to end it immediately.
 pub async fn stream_orderbook_channel(
     url: String,
     options: StreamOrderbookOptions,
@@ -270,10 +280,9 @@ pub async fn stream_orderbook_channel(
             // tokio runtime. Clone the sender so the returned future owns
             // it (the callback is `FnMut`, so the future can't borrow).
             let tx = tx.clone();
-            async move {
-                // Ignore the error if the receiver has been dropped.
-                let _ = tx.send(entry).await;
-            }
+            // A send error means the receiver was dropped: stop streaming
+            // rather than hold the gRPC stream open with no one reading it.
+            async move { tx.send(entry).await.is_ok() }
         })
         .await
     });
