@@ -409,7 +409,6 @@ message OrderbookEntry {
   string market_id = 8;
   // The order's lifecycle state; see `OrderState`.
   OrderState state = 9;
-  // Mirrors Order.post_only for the resting order. Lets streaming
-  // clients distinguish post-only liquidity from regular limits.
-  bool post_only = 10;
+  // How the maker chose to place it (`Order.post_only`) is deliberately not
+  // published: it is visible only to the order's creator.
 }
