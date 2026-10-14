@@ -51,18 +51,10 @@ async fn main() -> Result<()> {
             if chain.architecture != "evm" {
                 continue;
             }
-            // The arborter MASKS each endpoint's url in GetConfig (query
-            // values / userinfo become "***") — RPC URLs can carry API keys.
-            // `resolve_rpc_url` takes the client-side `ASPENS_RPC_URL_<NETWORK>`
-            // override and rejects an unusable masked value, so each chain
-            // needs its own override in the .env.
-            let primary_url = chain
-                .rpcs
-                .iter()
-                .find(|e| e.enabled)
-                .map(|e| e.url.as_str())
-                .unwrap_or("");
-            let rpc = match resolve_rpc_url(&chain.network, primary_url) {
+            // The arborter MASKS each endpoint's url in GetConfig — RPC URLs
+            // can carry API keys — so each chain needs its own
+            // `ASPENS_RPC_URL_<NETWORK>` override in the .env.
+            let rpc = match resolve_rpc_url(&chain.network) {
                 Ok(u) => u,
                 Err(e) => {
                     println!("\n  {} (chain {})", chain.network, chain.chain_id);

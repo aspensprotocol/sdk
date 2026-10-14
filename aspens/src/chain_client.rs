@@ -5,6 +5,7 @@ use alloy::primitives::{Address, Uint};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy_chains::NamedChain;
 use eyre::Result;
+use std::time::Duration;
 use url::Url;
 
 #[cfg(feature = "solana")]
@@ -47,15 +48,10 @@ impl ChainClient {
     /// - `"EVM"` (or empty/anything else for backward compat) → Alloy provider
     /// - `"Solana"` → Solana RPC client (requires the `solana` feature)
     ///
-    /// The endpoint goes through [`resolve_rpc_url`], NOT `chain.rpcs`
-    /// directly: the server masks each endpoint's `url` (query values and
-    /// userinfo become `"***"`; it can embed an API key), so the raw field is
-    /// often unusable as-is. Resolving here rather than at each call site
-    /// means no caller can reintroduce that — reaching for `chain.rpcs`
-    /// directly was what silently broke every wallet and native balance read
-    /// while the deposited column beside them stayed correct.
+    /// The endpoint is [`chain_rpc_url`] — the client's own override — never
+    /// `chain.rpcs`, which the server masks (see [`chain_rpc_url`]).
     pub fn from_chain_config(chain: &Chain) -> Result<Self> {
-        let rpc_url = resolve_rpc_url(&chain.network, primary_endpoint_url(chain))?;
+        let rpc_url = chain_rpc_url(chain)?;
         if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
             #[cfg(feature = "solana")]
             {
@@ -147,35 +143,133 @@ impl ChainClient {
     }
 }
 
-/// The usable RPC endpoint for `chain`, honouring the client-side override.
+/// The RPC endpoint for `chain`: the client's own `ASPENS_RPC_URL_<NETWORK>`.
 ///
-/// Prefer this over reading `chain.rpcs` directly. The arborter MASKS each
-/// endpoint's `url` in `GetConfig` (query values / userinfo become `"***"`;
-/// it can embed an API key), so the raw value is often unusable as-is —
-/// parsing a masked query string can still succeed and yield a URL that
-/// simply doesn't authenticate, several layers from the cause.
+/// There is no fallback to `chain.rpcs`. The arborter MASKS each endpoint's
+/// `url` in `GetConfig` (an RPC URL can embed an API key), and a masked URL
+/// can still parse — `https://base-mainnet.g.alchemy.com/***/***` is a valid
+/// URL that simply fails to authenticate. Falling back to it once sent a
+/// deposit to the placeholder, where the provider's HTTP 401 surfaced as a
+/// JWT problem. Every client therefore supplies its own endpoint per network.
 ///
-/// `chain.rpcs` is priority-ordered and may list several endpoints (the
-/// arborter fails over between them internally); the SDK talks to the chain
-/// directly for its own wallet/deposit/withdraw/balance calls and only needs
-/// one workable URL, so this resolves against the FIRST enabled endpoint.
-pub fn chain_rpc_url(chain: &crate::commands::config::config_pb::Chain) -> Result<String> {
-    resolve_rpc_url(&chain.network, primary_endpoint_url(chain))
+/// This only checks the variable is set to an http(s) URL; it makes no
+/// network call. Use [`checked_chain_rpc_url`] before anything that signs or
+/// sends, so an unreachable endpoint fails up front with a clear message.
+pub fn chain_rpc_url(chain: &Chain) -> Result<String> {
+    Ok(resolve_rpc_url(&chain.network)?)
 }
 
-/// The url of the first enabled endpoint in `chain.rpcs` (priority order), or
-/// `""` when there is none (an empty or all-disabled set). Internal helper
-/// for [`chain_rpc_url`] / [`ChainClient::from_chain_config`]; an empty
-/// result flows into [`resolve_rpc_url`], which turns it into the same
-/// actionable "set your override" error as a masked value would.
-fn primary_endpoint_url(chain: &Chain) -> &str {
-    chain
-        .rpcs
-        .iter()
-        .find(|endpoint| endpoint.enabled)
-        .map(|endpoint| endpoint.url.as_str())
-        .unwrap_or("")
+/// [`chain_rpc_url`], then a probe that the endpoint answers for this chain
+/// (`eth_chainId` on EVM, `getVersion` on Solana), within
+/// [`RPC_PROBE_TIMEOUT`]. On EVM the probe also refuses an endpoint that
+/// serves a different chain id than `chain.chain_id`.
+pub async fn checked_chain_rpc_url(chain: &Chain) -> Result<String> {
+    let url = chain_rpc_url(chain)?;
+    probe_rpc(chain, &url).await?;
+    Ok(url)
 }
+
+/// How long [`checked_chain_rpc_url`] waits for the endpoint to answer.
+pub const RPC_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Why a chain's RPC endpoint can't be used.
+///
+/// Its `Display` is the whole user-facing message, so CLIs print it as-is
+/// rather than guessing a cause from substrings of it. Endpoints are shown as
+/// `scheme://host[:port]` only: the path and query often hold an API key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RpcEndpointError {
+    /// The override variable is unset or blank.
+    NotSet {
+        /// Chain network name, e.g. `base`.
+        network: String,
+        /// The variable to set, e.g. `ASPENS_RPC_URL_BASE`.
+        env_key: String,
+    },
+    /// The override is set but isn't an http(s) URL.
+    Invalid {
+        /// Chain network name.
+        network: String,
+        /// The variable holding the bad value.
+        env_key: String,
+        /// What is wrong with the value (never the value itself).
+        reason: String,
+    },
+    /// The endpoint didn't answer, or answered with an error.
+    Unreachable {
+        /// Chain network name.
+        network: String,
+        /// The variable the endpoint came from.
+        env_key: String,
+        /// The endpoint, reduced to `scheme://host[:port]`.
+        endpoint: String,
+        /// What went wrong, with the full URL scrubbed out.
+        reason: String,
+    },
+    /// The endpoint answered for a different chain.
+    WrongChain {
+        /// Chain network name.
+        network: String,
+        /// The variable the endpoint came from.
+        env_key: String,
+        /// The endpoint, reduced to `scheme://host[:port]`.
+        endpoint: String,
+        /// The chain id the venue lists for `network`.
+        expected: u64,
+        /// The chain id the endpoint reported.
+        actual: u64,
+    },
+}
+
+impl std::fmt::Display for RpcEndpointError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RpcEndpointError::NotSet { network, env_key } => write!(
+                f,
+                "no RPC endpoint is set for chain '{network}'.\n\n\
+                 The Aspens server doesn't share its RPC URLs (they can contain API keys), \
+                 so each client brings its own. Please set {env_key} to an RPC URL for \
+                 '{network}', for example in your .env:\n\n    \
+                 {env_key}=https://your-{network}-rpc"
+            ),
+            RpcEndpointError::Invalid {
+                network,
+                env_key,
+                reason,
+            } => write!(
+                f,
+                "{env_key} is set, but it isn't a usable RPC URL: {reason}.\n\n\
+                 Please set it to an http:// or https:// RPC URL for '{network}'."
+            ),
+            RpcEndpointError::Unreachable {
+                network,
+                env_key,
+                endpoint,
+                reason,
+            } => write!(
+                f,
+                "couldn't reach the RPC endpoint for chain '{network}' ({endpoint}, \
+                 from {env_key}): {reason}.\n\n\
+                 Please check that the URL in {env_key} is right, that any API key in it is \
+                 valid, and that the provider is up."
+            ),
+            RpcEndpointError::WrongChain {
+                network,
+                env_key,
+                endpoint,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "the RPC endpoint in {env_key} ({endpoint}) serves chain id {actual}, but \
+                 '{network}' is chain id {expected}.\n\n\
+                 Please point {env_key} at an RPC for '{network}'."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RpcEndpointError {}
 
 /// alloy's [`NamedChain`] for `chain_id`, or `None` when alloy does not know it.
 ///
@@ -212,42 +306,156 @@ pub fn rpc_override_env_key(network: &str) -> String {
     format!("ASPENS_RPC_URL_{suffix}")
 }
 
-/// Resolve the RPC endpoint to use for `network`.
-///
-/// The arborter masks each endpoint's `url` in its `GetConfig` response (it
-/// can embed an API key), so the server value is often unusable. Resolution
-/// order:
-/// 1. the per-network override env var ([`rpc_override_env_key`]), if set; else
-/// 2. `server_rpc_url`, when it is a real URL (an unmasked server / local
-///    fixture); else
-/// 3. an actionable error naming the env var to set.
-pub fn resolve_rpc_url(network: &str, server_rpc_url: &str) -> Result<String> {
-    let override_val = std::env::var(rpc_override_env_key(network)).ok();
-    resolve_rpc_url_with(network, override_val.as_deref(), server_rpc_url)
+/// The RPC endpoint for `network`, read from [`rpc_override_env_key`]. See
+/// [`chain_rpc_url`] for why there is no other source.
+pub fn resolve_rpc_url(network: &str) -> Result<String, RpcEndpointError> {
+    let value = std::env::var(rpc_override_env_key(network)).ok();
+    resolve_rpc_url_with(network, value.as_deref())
 }
 
-/// Core of [`resolve_rpc_url`] with the override value injected, so the
-/// precedence logic is testable without mutating the process environment.
-fn resolve_rpc_url_with(
-    network: &str,
-    override_val: Option<&str>,
-    server_rpc_url: &str,
-) -> Result<String> {
-    if let Some(v) = override_val {
-        let v = v.trim();
-        if !v.is_empty() {
-            return Ok(v.to_string());
+/// Core of [`resolve_rpc_url`] with the variable's value injected, so it is
+/// testable without mutating the process environment.
+fn resolve_rpc_url_with(network: &str, value: Option<&str>) -> Result<String, RpcEndpointError> {
+    let env_key = rpc_override_env_key(network);
+    let value = value.map(str::trim).unwrap_or("");
+    if value.is_empty() {
+        return Err(RpcEndpointError::NotSet {
+            network: network.to_string(),
+            env_key,
+        });
+    }
+    let invalid = |reason: &str| RpcEndpointError::Invalid {
+        network: network.to_string(),
+        env_key: env_key.clone(),
+        reason: reason.to_string(),
+    };
+    // A value copied from `config` output still carries the server's mask.
+    if value.contains("***") {
+        return Err(invalid(
+            "it still contains the server's *** mask (copied from the stack's config?)",
+        ));
+    }
+    let url =
+        Url::parse(value).map_err(|e| invalid(&format!("it doesn't parse as a URL ({e})")))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(invalid(&format!(
+            "scheme '{}' isn't http or https",
+            url.scheme()
+        )));
+    }
+    if url.host_str().is_none() {
+        return Err(invalid("it has no host"));
+    }
+    Ok(value.to_string())
+}
+
+/// `url` reduced to `scheme://host[:port]`, safe to print.
+pub fn redact_rpc_url(url: &str) -> String {
+    match Url::parse(url) {
+        Ok(u) => match (u.host_str(), u.port()) {
+            (Some(h), Some(p)) => format!("{}://{h}:{p}", u.scheme()),
+            (Some(h), None) => format!("{}://{h}", u.scheme()),
+            (None, _) => "<no host>".to_string(),
+        },
+        Err(_) => "<unparseable url>".to_string(),
+    }
+}
+
+/// Probe `url` for `chain`; see [`checked_chain_rpc_url`].
+async fn probe_rpc(chain: &Chain, url: &str) -> Result<(), RpcEndpointError> {
+    let unreachable = |reason: String| RpcEndpointError::Unreachable {
+        network: chain.network.clone(),
+        env_key: rpc_override_env_key(&chain.network),
+        endpoint: redact_rpc_url(url),
+        reason,
+    };
+
+    let answer = if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
+        probe_solana(url).await
+    } else {
+        probe_evm(url).await
+    };
+    let reported = match answer {
+        Err(_elapsed) => {
+            return Err(unreachable(format!(
+                "no answer within {}s",
+                RPC_PROBE_TIMEOUT.as_secs()
+            )));
         }
+        Ok(Err(cause)) => return Err(unreachable(describe_rpc_failure(&cause, url))),
+        Ok(Ok(id)) => id,
+    };
+
+    match reported {
+        Some(actual) if actual != chain.chain_id as u64 => Err(RpcEndpointError::WrongChain {
+            network: chain.network.clone(),
+            env_key: rpc_override_env_key(&chain.network),
+            endpoint: redact_rpc_url(url),
+            expected: chain.chain_id as u64,
+            actual,
+        }),
+        _ => Ok(()),
     }
-    let server = server_rpc_url.trim();
-    if !server.is_empty() && Url::parse(server).is_ok() {
-        return Ok(server.to_string());
+}
+
+/// `eth_chainId` against `url`, bounded by [`RPC_PROBE_TIMEOUT`].
+async fn probe_evm(url: &str) -> Result<Result<Option<u64>, String>, tokio::time::error::Elapsed> {
+    let parsed = match Url::parse(url) {
+        Ok(u) => u,
+        Err(e) => return Ok(Err(e.to_string())),
+    };
+    let provider = ProviderBuilder::new().connect_http(parsed);
+    tokio::time::timeout(RPC_PROBE_TIMEOUT, provider.get_chain_id())
+        .await
+        .map(|r| r.map(Some).map_err(|e| e.to_string()))
+}
+
+/// `getVersion` against `url`, bounded by [`RPC_PROBE_TIMEOUT`]. Solana has
+/// no numeric chain id to compare, so this proves reachability only.
+#[cfg(feature = "solana")]
+async fn probe_solana(
+    url: &str,
+) -> Result<Result<Option<u64>, String>, tokio::time::error::Elapsed> {
+    let client = SolanaRpcClient::new(url.to_string());
+    tokio::time::timeout(RPC_PROBE_TIMEOUT, client.get_version())
+        .await
+        .map(|r| r.map(|_| None).map_err(|e| e.to_string()))
+}
+
+#[cfg(not(feature = "solana"))]
+async fn probe_solana(
+    _url: &str,
+) -> Result<Result<Option<u64>, String>, tokio::time::error::Elapsed> {
+    Ok(Err("the `solana` feature is disabled".to_string()))
+}
+
+/// A short, plain reason for a failed probe. The full URL (which may hold an
+/// API key) is scrubbed from the transport's own message.
+fn describe_rpc_failure(cause: &str, url: &str) -> String {
+    let scrubbed = cause.replace(url, &redact_rpc_url(url));
+    let lower = scrubbed.to_lowercase();
+    let status = |code: &str| {
+        lower.contains(&format!("http error {code}")) || lower.contains(&format!("status {code}"))
+    };
+    if status("401") || status("403") {
+        return "the provider refused the request (HTTP 401/403), so the API key in the URL \
+                is probably missing, wrong, or not allowed for this chain"
+            .to_string();
     }
-    Err(eyre::eyre!(
-        "no usable RPC endpoint for chain '{network}': the server masks each endpoint's url in \
-         its config (it can embed an API key). Set {} to your own RPC URL for '{network}'.",
-        rpc_override_env_key(network)
-    ))
+    if status("429") {
+        return "the provider is rate-limiting this key (HTTP 429)".to_string();
+    }
+    if lower.contains("dns") || lower.contains("failed to lookup") || lower.contains("no such host")
+    {
+        return "the host name doesn't resolve".to_string();
+    }
+    if lower.contains("connection refused")
+        || lower.contains("connect error")
+        || lower.contains("error sending request")
+    {
+        return "nothing accepted the connection at that address".to_string();
+    }
+    scrubbed.chars().take(200).collect()
 }
 
 #[cfg(test)]
@@ -309,100 +517,179 @@ mod rpc_resolve_tests {
     }
 
     #[test]
-    fn override_wins_over_masked_server_value() {
-        let got = resolve_rpc_url_with("net", Some("https://my.rpc/v2/key"), "********").unwrap();
+    fn a_set_override_is_used() {
+        let got = resolve_rpc_url_with("net", Some(" https://my.rpc/v2/key ")).unwrap();
         assert_eq!(got, "https://my.rpc/v2/key");
     }
 
     #[test]
-    fn blank_override_falls_through_to_usable_server_value() {
-        let got = resolve_rpc_url_with("net", Some("   "), "https://server.example").unwrap();
-        assert_eq!(got, "https://server.example");
-    }
-
-    #[test]
-    fn no_override_uses_unmasked_server_value() {
-        let got = resolve_rpc_url_with("net", None, "http://localhost:8545").unwrap();
-        assert_eq!(got, "http://localhost:8545");
-    }
-
-    #[test]
-    fn masked_value_without_override_errors_with_env_key() {
-        let err = resolve_rpc_url_with("base-sepolia", None, "********")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("ASPENS_RPC_URL_BASE_SEPOLIA"),
-            "actionable: {err}"
-        );
-    }
-
-    #[test]
-    fn empty_server_without_override_errors() {
-        assert!(resolve_rpc_url_with("net", None, "").is_err());
-    }
-
-    /// RPC-MASK-2 regression. Against a masking server an endpoint's `url`
-    /// reads as `"********"`; `from_chain_config` must fail at construction,
-    /// naming the env key to set, rather than return a client holding the
-    /// sentinel. Otherwise every read through it dies in `Url::parse` with
-    /// `relative URL without a base` — and because the deposited/locked reads
-    /// resolve the endpoint separately, `balance` prints `error` in the
-    /// wallet column next to a correct deposited figure.
-    ///
-    /// The network name is unique to this test so the override key cannot be
-    /// set by another test running in parallel (`resolve_rpc_url` reads the
-    /// process env, which is global).
-    #[test]
-    fn from_chain_config_rejects_a_masked_url_rather_than_building_a_broken_client() {
-        let chain = Chain {
-            network: "rpc-mask-2-regression".to_string(),
-            rpcs: vec![RpcEndpoint {
-                label: "primary".to_string(),
-                url: "********".to_string(),
-                enabled: true,
-                ..Default::default()
-            }],
-            chain_id: 114,
-            ..Default::default()
-        };
-        // Matched rather than `expect_err`: that needs `T: Debug`, and adding
-        // `Debug` to a public client type just to satisfy a test is the wrong
-        // trade — the Solana variant would have to derive it too.
-        let err = match ChainClient::from_chain_config(&chain) {
-            Ok(_) => panic!("a masked rpc_url must not yield a client"),
-            Err(e) => e.to_string(),
-        };
-        assert!(
-            err.contains("ASPENS_RPC_URL_RPC_MASK_2_REGRESSION"),
-            "error should name the env key to set, got: {err}"
-        );
-    }
-
-    /// The unmasked case is unchanged: a stack that serves a real endpoint
-    /// url (local anvil, any non-masking server) still works with no
-    /// override set.
-    #[test]
-    fn from_chain_config_keeps_using_a_usable_server_url() {
-        let chain = Chain {
-            network: "rpc-mask-2-unmasked".to_string(),
-            rpcs: vec![RpcEndpoint {
-                label: "primary".to_string(),
-                url: "http://localhost:8545".to_string(),
-                enabled: true,
-                ..Default::default()
-            }],
-            chain_id: 31337,
-            ..Default::default()
-        };
-        match ChainClient::from_chain_config(&chain).expect("usable url builds a client") {
-            ChainClient::Evm { rpc_url, chain_id } => {
-                assert_eq!(rpc_url, "http://localhost:8545");
-                assert_eq!(chain_id, 31337);
-            }
-            #[cfg(feature = "solana")]
-            ChainClient::Solana { .. } => panic!("expected an EVM client"),
+    fn unset_or_blank_is_not_set_and_names_the_variable() {
+        for value in [None, Some(""), Some("   ")] {
+            let err = resolve_rpc_url_with("base-sepolia", value).unwrap_err();
+            assert_eq!(
+                err,
+                RpcEndpointError::NotSet {
+                    network: "base-sepolia".into(),
+                    env_key: "ASPENS_RPC_URL_BASE_SEPOLIA".into(),
+                },
+                "value {value:?}"
+            );
+            assert!(
+                err.to_string().contains("ASPENS_RPC_URL_BASE_SEPOLIA="),
+                "{err}"
+            );
         }
+    }
+
+    #[test]
+    fn a_copied_masked_url_is_rejected_even_though_it_parses() {
+        let masked = "https://base-mainnet.g.alchemy.com/***/***";
+        assert!(Url::parse(masked).is_ok(), "premise: the masked url parses");
+        let err = resolve_rpc_url_with("base", Some(masked)).unwrap_err();
+        assert!(matches!(err, RpcEndpointError::Invalid { .. }), "{err:?}");
+        assert!(err.to_string().contains("mask"), "{err}");
+    }
+
+    #[test]
+    fn non_http_values_are_rejected() {
+        for value in ["not a url", "ws://node.example", "file:///etc/passwd"] {
+            let err = resolve_rpc_url_with("net", Some(value)).unwrap_err();
+            assert!(
+                matches!(err, RpcEndpointError::Invalid { .. }),
+                "{value}: {err:?}"
+            );
+        }
+    }
+
+    /// The bug this replaces: with no override set, the server's masked url
+    /// was used whenever it still parsed, so a deposit went to
+    /// `https://base-mainnet.g.alchemy.com/***/***` and the provider's 401
+    /// read as a JWT failure. The server's value must never be used.
+    ///
+    /// The network name is unique to this test so no other test can set its
+    /// override (the process env is global).
+    #[test]
+    fn chain_rpc_url_never_falls_back_to_the_server_url() {
+        for server_url in [
+            "https://base-mainnet.g.alchemy.com/***/***",
+            "http://localhost:8545",
+        ] {
+            let chain = Chain {
+                network: "rpc-no-fallback".to_string(),
+                rpcs: vec![RpcEndpoint {
+                    label: "primary".to_string(),
+                    url: server_url.to_string(),
+                    enabled: true,
+                    ..Default::default()
+                }],
+                chain_id: 8453,
+                ..Default::default()
+            };
+            let err = chain_rpc_url(&chain).expect_err(server_url).to_string();
+            assert!(err.contains("ASPENS_RPC_URL_RPC_NO_FALLBACK"), "{err}");
+            // Matched rather than `expect_err`: that needs `T: Debug`, and
+            // adding `Debug` to a public client type just for a test is the
+            // wrong trade — the Solana variant would have to derive it too.
+            if ChainClient::from_chain_config(&chain).is_ok() {
+                panic!("{server_url}: built a client from the server's url");
+            }
+        }
+    }
+
+    fn evm_chain(chain_id: u32) -> Chain {
+        Chain {
+            network: "probe-net".to_string(),
+            architecture: ARCH_EVM.to_string(),
+            chain_id,
+            ..Default::default()
+        }
+    }
+
+    /// A one-shot-per-connection HTTP server answering every request with
+    /// `status` and `body`. Returns its base url.
+    async fn fake_rpc(status: &'static str, body: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n\
+                         content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    const CHAIN_ID_8453: &str = r#"{"jsonrpc":"2.0","id":0,"result":"0x2105"}"#;
+
+    #[tokio::test]
+    async fn probe_accepts_an_endpoint_on_the_right_chain() {
+        let url = fake_rpc("200 OK", CHAIN_ID_8453).await;
+        probe_rpc(&evm_chain(8453), &url).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_refuses_an_endpoint_on_another_chain() {
+        let url = fake_rpc("200 OK", CHAIN_ID_8453).await;
+        let err = probe_rpc(&evm_chain(1), &url).await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                RpcEndpointError::WrongChain {
+                    expected: 1,
+                    actual: 8453,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// The failure from the live run: the provider answers 401. The message
+    /// must blame the RPC key, not a JWT, and must not echo the key.
+    #[tokio::test]
+    async fn probe_explains_a_refused_key_without_printing_it() {
+        let base = fake_rpc("401 Unauthorized", "Must be authenticated!").await;
+        let url = format!("{base}/v2/SECRET-KEY-123");
+        let err = probe_rpc(&evm_chain(8453), &url).await.unwrap_err();
+        let RpcEndpointError::Unreachable { reason, .. } = &err else {
+            panic!("expected Unreachable, got {err:?}");
+        };
+        assert!(reason.contains("API key"), "{reason}");
+        let shown = err.to_string();
+        assert!(!shown.contains("SECRET-KEY-123"), "key leaked: {shown}");
+        assert!(!shown.to_lowercase().contains("jwt"), "{shown}");
+    }
+
+    /// A transport error that echoes the full URL (reqwest's do) must not
+    /// carry the API key into the message. Uses a cause no friendly branch
+    /// matches, so the scrubbed text itself is what's returned.
+    #[test]
+    fn failure_reasons_scrub_the_url() {
+        let url = "https://rpc.example/v2/SECRET-KEY-123?k=SECRET-KEY-123";
+        let reason = describe_rpc_failure(&format!("unexpected reply from {url}"), url);
+        assert!(!reason.contains("SECRET-KEY-123"), "{reason}");
+        assert!(reason.contains("https://rpc.example"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn probe_reports_a_closed_port_as_unreachable() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let err = probe_rpc(&evm_chain(8453), &url).await.unwrap_err();
+        assert!(
+            matches!(err, RpcEndpointError::Unreachable { .. }),
+            "{err:?}"
+        );
     }
 }
 

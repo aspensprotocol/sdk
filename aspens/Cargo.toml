@@ -64,7 +64,7 @@ solana-client = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["time"] }
 futures = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 url = { workspace = true, optional = true }

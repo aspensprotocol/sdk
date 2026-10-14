@@ -65,12 +65,11 @@ pub async fn download_config(url: String, path: String) -> Result<()> {
 
 impl GetConfigResponse {
     /// Rewrite each chain's primary (first enabled) RPC endpoint url to the
-    /// client's local override (`ASPENS_RPC_URL_<NETWORK>`) when set;
-    /// otherwise keep the server value (an unmasked URL stays usable). The
+    /// client's local override (`ASPENS_RPC_URL_<NETWORK>`) when set. The
     /// arborter masks each endpoint's `url` in its response (it can embed an
-    /// API key), so this is where a client supplies its own endpoint. A chain
-    /// left masked (no override) is logged at WARN — on-chain operations for
-    /// it will fail until the env var is set.
+    /// API key), so the server value is never used: a chain without an
+    /// override is logged at WARN, and on-chain operations for it fail with
+    /// an error naming the env var until it is set.
     ///
     /// Only the first enabled endpoint is overridden: the SDK talks to the
     /// chain directly for its own wallet/deposit/withdraw/balance calls and
@@ -90,9 +89,8 @@ impl GetConfigResponse {
                 Err(_) => tracing::warn!(
                     network = %chain.network,
                     env = %crate::chain_client::rpc_override_env_key(&chain.network),
-                    "chain has no usable RPC endpoint (masked/unset, or no enabled endpoint) \
-                     and no local RPC override is set; on-chain operations for this chain will \
-                     fail until you set this env var"
+                    "no RPC endpoint set for this chain (or the one set isn't a usable URL); \
+                     on-chain operations for it will fail until you set this env var"
                 ),
             }
         }
