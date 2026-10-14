@@ -28,6 +28,18 @@ pub fn format_error(err: &eyre::Report, context: &str, ctx: &BinaryContext) -> S
 
     let with_underlying = |msg: String| -> String { format!("{msg}\n\nUnderlying error: {err}") };
 
+    // -- RPC endpoint (client-side) --------------------------------------
+
+    // A chain RPC problem carries its own complete message. It must not reach
+    // the substring battery below: a provider's "HTTP error 401" once matched
+    // the JWT branch and sent the user to `login` for a bad RPC key.
+    if let Some(rpc) = err
+        .chain()
+        .find_map(|e| e.downcast_ref::<aspens::chain_client::RpcEndpointError>())
+    {
+        return format!("Failed to {context}: {rpc}");
+    }
+
     // -- Transport / network ---------------------------------------------
 
     if err_string.contains("failed to connect")
@@ -363,6 +375,28 @@ mod tests {
 
     fn report(msg: &'static str) -> eyre::Report {
         eyre::eyre!(msg)
+    }
+
+    /// The live-run failure: a chain RPC refusing its key must read as an
+    /// RPC problem, even though its text contains "401".
+    #[test]
+    fn rpc_endpoint_errors_print_their_own_message_not_the_jwt_hint() {
+        use aspens::chain_client::RpcEndpointError;
+        let e = eyre::Report::new(RpcEndpointError::Unreachable {
+            network: "base".into(),
+            env_key: "ASPENS_RPC_URL_BASE".into(),
+            endpoint: "https://base-mainnet.g.alchemy.com".into(),
+            reason: "HTTP error 401 with body: Must be authenticated!".into(),
+        })
+        .wrap_err("depositing 0.0045 ETH on base");
+        let out = format_error(&e, "deposit 0.0045 ETH on base", &BinaryContext::TRADER_CLI);
+        assert!(
+            out.starts_with("Failed to deposit 0.0045 ETH on base: couldn't reach"),
+            "{out}"
+        );
+        assert!(out.contains("ASPENS_RPC_URL_BASE"), "{out}");
+        assert!(!out.contains("JWT"), "{out}");
+        assert!(!out.contains("Authentication failed"), "{out}");
     }
 
     #[test]

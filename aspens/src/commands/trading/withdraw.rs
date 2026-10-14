@@ -327,6 +327,9 @@ async fn solana_withdraw(
     })?;
 
     let (program_id, instance) = crate::solana::client::resolve_program_and_instance(chain)?;
+    // Before requesting a voucher (which places a hold): a missing or dead
+    // endpoint fails here, politely, with nothing held.
+    let rpc_url = crate::chain_client::checked_chain_rpc_url(chain).await?;
     let user = solana_sdk::signer::Signer::pubkey(keypair);
     let mint = Pubkey::from_str(&token.address)
         .map_err(|e| eyre::eyre!("invalid Solana mint '{}': {}", token.address, e))?;
@@ -341,7 +344,7 @@ async fn solana_withdraw(
     //    the funds stay immediately withdrawable.
     {
         use solana_client::nonblocking::rpc_client::RpcClient;
-        let rpc = RpcClient::new(crate::chain_client::chain_rpc_url(chain)?);
+        let rpc = RpcClient::new(rpc_url.clone());
         let lamports = rpc.get_balance(&user).await.unwrap_or(0);
         if lamports < MIN_SOL_LAMPORTS {
             return Err(eyre::eyre!(
@@ -451,13 +454,7 @@ async fn solana_withdraw(
     let mut last_err = None;
     let mut sig = None;
     for attempt in 0..VOUCHER_SUBMIT_MAX_ATTEMPTS {
-        match crate::solana::client::submit_user_signed_multi(
-            &crate::chain_client::chain_rpc_url(chain)?,
-            keypair,
-            &ixs,
-        )
-        .await
-        {
+        match crate::solana::client::submit_user_signed_multi(&rpc_url, keypair, &ixs).await {
             Ok(s) => {
                 sig = Some(s);
                 break;
@@ -585,13 +582,17 @@ async fn call_withdraw_from_config_evm(
     // no metadata. The RPC reports its own id and the tx is signed here.
     let named_chain = named_chain_for(chain.chain_id as u64);
 
+    // Before requesting a voucher (which places a hold): a missing or dead
+    // endpoint fails here, politely, with nothing held.
+    let rpc_url = crate::chain_client::checked_chain_rpc_url(chain).await?;
+
     tracing::info!(
         "Withdrawing {} {} from {} (chain_id: {}, rpc: {})",
         amount,
         token_symbol,
         network,
         chain.chain_id,
-        crate::chain_client::chain_rpc_url(chain).unwrap_or_default()
+        crate::chain_client::redact_rpc_url(&rpc_url)
     );
 
     let contract_addr: Address = contract_address.parse()?;
@@ -601,8 +602,7 @@ async fn call_withdraw_from_config_evm(
     // Build the wallet-enabled provider up front so the gas pre-check and the
     // submit share it.
     let wallet = EthereumWallet::new(signer.clone());
-    // The arborter masks each endpoint's url; the client-side override is authoritative.
-    let rpc_url = Url::parse(&crate::chain_client::chain_rpc_url(chain)?)?;
+    let rpc_url = Url::parse(&rpc_url)?;
     let provider = match named_chain {
         Some(named) => ProviderBuilder::new()
             .with_chain(named)

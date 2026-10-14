@@ -1046,6 +1046,18 @@ async fn run() -> Result<()> {
                     )
                 })?;
 
+                // Before fetching calldata or signing: a missing or dead
+                // endpoint fails here, politely.
+                let probe_chain = chain.clone();
+                let rpc_url = executor
+                    .execute(async move { chain_client::checked_chain_rpc_url(&probe_chain).await })
+                    .map_err(|e| {
+                        eyre::eyre!(format_error(
+                            &e,
+                            &format!("reach the RPC endpoint for '{}'", network)
+                        ))
+                    })?;
+
                 info!("Fetching deploy calldata from server for: {}", network);
                 let calldata_response = executor
                     .execute(admin::get_deploy_calldata(
@@ -1075,7 +1087,7 @@ async fn run() -> Result<()> {
                 let params = CreateInstanceParams {
                     factory_address: calldata_response.factory_address.clone(),
                     calldata: calldata_response.calldata.clone(),
-                    rpc_url: chain_client::chain_rpc_url(chain)?,
+                    rpc_url: rpc_url.clone(),
                     chain_id: calldata_response.chain_id as u64,
                     privkey: privkey.clone(),
                 };
@@ -1094,10 +1106,7 @@ async fn run() -> Result<()> {
                     signed_tx.len()
                 );
                 let tx_hash = executor
-                    .execute(admin::broadcast_transaction(
-                        chain_client::chain_rpc_url(chain)?,
-                        signed_tx,
-                    ))
+                    .execute(admin::broadcast_transaction(rpc_url.clone(), signed_tx))
                     .map_err(|e| {
                         eyre::eyre!(format_error(
                             &e,

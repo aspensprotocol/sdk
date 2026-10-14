@@ -88,6 +88,8 @@ async fn solana_deposit(
     })?;
 
     let (program_id, instance) = crate::solana::client::resolve_program_and_instance(chain)?;
+    // Before building or signing anything: a missing or dead endpoint fails here, politely.
+    let rpc_url = crate::chain_client::checked_chain_rpc_url(chain).await?;
     let user = solana_sdk::signer::Signer::pubkey(keypair);
     let mint = Pubkey::from_str(&token.address)
         .map_err(|e| eyre::eyre!("invalid Solana mint '{}': {}", token.address, e))?;
@@ -115,7 +117,7 @@ async fn solana_deposit(
         // fast with a clear error instead of an opaque simulation failure.
         // Headroom: tx fee + possible ATA rent (~0.002 SOL).
         const WRAP_FEE_HEADROOM: u64 = 3_000_000;
-        let rpc = RpcClient::new(crate::chain_client::chain_rpc_url(chain)?);
+        let rpc = RpcClient::new(rpc_url.clone());
         let lamports = rpc.get_balance(&user).await.unwrap_or(0);
         let required = amount.saturating_add(WRAP_FEE_HEADROOM);
         if lamports < required {
@@ -129,22 +131,12 @@ async fn solana_deposit(
         let wrap_ix = crate::solana::system_transfer_ix(&user, &user_ata, amount);
         let sync_ix = crate::solana::sync_native_ix(&user_ata);
         let ixs = [ata_ix, wrap_ix, sync_ix, ix];
-        let sig = crate::solana::client::submit_user_signed_multi(
-            &crate::chain_client::chain_rpc_url(chain)?,
-            keypair,
-            &ixs,
-        )
-        .await?;
+        let sig = crate::solana::client::submit_user_signed_multi(&rpc_url, keypair, &ixs).await?;
         tracing::info!("Solana native (wrapped-SOL) deposit confirmed: {}", sig);
         return Ok(());
     }
 
-    let sig = crate::solana::client::submit_user_signed(
-        &crate::chain_client::chain_rpc_url(chain)?,
-        keypair,
-        ix,
-    )
-    .await?;
+    let sig = crate::solana::client::submit_user_signed(&rpc_url, keypair, ix).await?;
     tracing::info!("Solana deposit confirmed: {}", sig);
     Ok(())
 }
@@ -228,13 +220,16 @@ async fn call_deposit_from_config_evm(
     // no metadata. The RPC reports its own id and the tx is signed here.
     let named_chain = named_chain_for(chain.chain_id as u64);
 
+    // Before building or signing anything: a missing or dead endpoint fails here, politely.
+    let rpc_url = crate::chain_client::checked_chain_rpc_url(chain).await?;
+
     tracing::info!(
         "Depositing {} {} on {} (chain_id: {}, rpc: {})",
         amount,
         token_symbol,
         network,
         chain.chain_id,
-        crate::chain_client::chain_rpc_url(chain).unwrap_or_default()
+        crate::chain_client::redact_rpc_url(&rpc_url)
     );
 
     // Perform the deposit
@@ -245,8 +240,7 @@ async fn call_deposit_from_config_evm(
     let token_addr: Address = token.address.parse()?;
     let signer_address = signer.address();
     let wallet = EthereumWallet::new(signer);
-    // The arborter masks each endpoint's url; the client-side override is authoritative.
-    let rpc_url = Url::parse(&crate::chain_client::chain_rpc_url(chain)?)?;
+    let rpc_url = Url::parse(&rpc_url)?;
 
     // Set up the provider
     let provider = match named_chain {

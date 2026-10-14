@@ -308,7 +308,7 @@ impl<'a> CapContext<'a> {
         let (program_id, instance) = crate::solana::client::resolve_program_and_instance(chain)?;
         let mint = Pubkey::from_str(&token.address)
             .map_err(|e| eyre!("invalid Solana mint '{}': {}", token.address, e))?;
-        let rpc_url = crate::chain_client::chain_rpc_url(chain)?;
+        let rpc_url = crate::chain_client::checked_chain_rpc_url(chain).await?;
 
         // Pre-flight 1: the signer must BE the instance's operator_admin. The
         // program's check fails with a bare `Unauthorized` custom error, which

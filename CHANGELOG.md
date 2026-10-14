@@ -24,6 +24,19 @@ change before 1.0.
 
 ### Changed
 
+- **BREAKING: `ASPENS_RPC_URL_<NETWORK>` is required; the server's RPC url is
+  never used.** A masked url can still parse
+  (`https://base-mainnet.g.alchemy.com/***/***`), so the old fallback sent a
+  deposit to the placeholder and the provider's 401 surfaced as a JWT error.
+  `chain_client::resolve_rpc_url` now takes only the network name and returns
+  the typed `RpcEndpointError`, whose message names the variable to set.
+  Deposit, withdraw (before requesting a voucher), the operator epoch-cap
+  commands and `aspens-admin deploy-contract` first probe the endpoint via the
+  new `chain_client::checked_chain_rpc_url` (`eth_chainId` / `getVersion`,
+  10 s), refusing an unreachable endpoint or one serving another chain id.
+  The CLIs print these errors as-is instead of guessing from their text, and
+  deposit/withdraw logs show the endpoint as `scheme://host` only.
+
 - Toolchain raised to Rust **1.99.0** (`rust-toolchain.toml`; CI reads it).
 
 - **BREAKING (wire): `deposit_ix` and `withdraw_voucher_ix` append the
