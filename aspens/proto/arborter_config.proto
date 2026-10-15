@@ -240,6 +240,11 @@ message Configuration {
   repeated Chain chains = 1;
   // List of supported markets
   repeated Market markets = 2;
+  // The venue's current session. A new session begins every time the
+  // arborter starts; every order must carry it in `Order.session`, so an
+  // order signed before a restart is refused after it. Clients re-read it
+  // when an order is refused with "session changed".
+  uint64 session = 3;
 }
 
 // Represents the trading instance details

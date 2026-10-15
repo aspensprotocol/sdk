@@ -222,27 +222,35 @@ message Order {
   // It lives in `Order` rather than beside it so `signature_hash` covers
   // it: a number that authorises spending must be signed.
   optional string quote_budget = 11;
-  // Caller-chosen nonce, folded into the order id so one wallet's otherwise
-  // identical orders get distinct ids. Millis-since-epoch is the SDK's choice;
-  // any value works, and the caller may reuse one deliberately — a repeat
-  // derives the same id and is refused as a replay.
+  // The signer's nonce. It is folded into the order id, so one wallet's
+  // otherwise identical orders get distinct ids, and it is the order's
+  // replay guard: within a session (see `session`) the arborter admits a
+  // nonce only if this signer has not used it and it is above the lowest of
+  // the signer's 32 highest used nonces. A used or too-low nonce is refused
+  // with ALREADY_EXISTS ("replay"), whatever became of the order that used it.
+  // Use `max(unix millis, last nonce + 1)`, as the SDKs do: increasing values
+  // never collide, and a little out-of-order arrival is tolerated.
   //
-  // Over the FCE direct-action transport both shipped clients sign
-  // `nonce = 0` for every order, so two otherwise-identical orders from one
-  // wallet collide there and the second is refused; vary a field, or use the
-  // gRPC path where the SDK stamps a fresh nonce.
+  // The signer is the account the signature verifies against. Refused orders
+  // use their nonce up too, so a signed order can never be placed later.
   //
   // It lives HERE, inside the signed `Order`, and that is the whole point. The
   // arborter derives the canonical order id itself from this message and stops
   // trusting a caller-supplied one, which is only possible if every input to
-  // the derivation is signed. While the nonce sat outside, the id depended on a
-  // value the server never saw and the signature never covered.
-  //
-  // What that buys, beyond tidiness: the derivation hashes the caller's own
+  // the derivation is signed. The derivation also hashes the caller's own
   // address, so an order signed by an attacker cannot derive to a victim's id.
-  // Pre-claiming someone else's id — refusing their order by reserving its id
-  // first — stops being expressible rather than being defended against.
+  //
+  // Over the parked FCE direct-action transport the shipped clients sign
+  // `nonce = 0`; that transport does not carry `session` either.
   uint64 nonce = 12;
+  // The venue session this order was signed for: `Configuration.session`
+  // from GetConfig. The arborter starts a new session every time it starts,
+  // and refuses an order for any other session with FAILED_PRECONDITION
+  // ("session changed"), so nothing signed before a restart can be placed
+  // after it. Re-read GetConfig and re-sign.
+  //
+  // Signed (it is part of `Order`), but NOT part of the order-id derivation.
+  uint64 session = 13;
 }
 
 enum Side {
