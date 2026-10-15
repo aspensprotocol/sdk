@@ -179,6 +179,9 @@ pub async fn place_order(
         // Zero for the same reason, and it must match the nonce the commitment
         // below is derived over — see `FCE_ORDER_NONCE`.
         nonce: FCE_ORDER_NONCE,
+        // The FCE direct-action payload carries no session (FCE is parked);
+        // the arborter refuses this order until that transport learns one.
+        session: 0,
     };
     let signature_hash = super::sign_encoded(&order, signing_wallet).await?;
 

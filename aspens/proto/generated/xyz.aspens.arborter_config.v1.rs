@@ -52,8 +52,8 @@ pub struct DeployContractRequest {
     pub tx_hash: ::prost::alloc::string::String,
     /// Refuse the deploy if the chain already has a trade_contract
     /// registered. Defaults to false (refuse). Set to true to overwrite the
-    /// existing registration — note that previously deposited balances live on
-    /// the *old* contract/instance and become orphaned.
+    /// existing registration — note that balances already deposited stay on
+    /// the replaced contract/instance and become orphaned.
     #[prost(bool, tag = "3")]
     pub force: bool,
     /// Trading fee in basis points. Used by the Solana server-side path,
@@ -122,13 +122,13 @@ pub struct SetMarketRequest {
     /// The quote chain token address
     #[prost(string, tag = "6")]
     pub quote_chain_token_address: ::prost::alloc::string::String,
-    /// NOTE: `base_chain_token_decimals` and `quote_chain_token_decimals`
-    /// were removed. A token's decimals are a property of the TOKEN, and their one
-    /// home is the `tokens` table, which `GetConfig` already serves. Carrying a
-    /// second copy on the market let the two disagree with nothing to reconcile
-    /// them — harmless while the server only mis-scaled amounts, but a silent
-    /// total outage once the order id is derived from amounts computed through
-    /// them. Set the token first; the market reads its decimals from it.
+    /// No token decimals here. A token's decimals are a property of the TOKEN
+    /// and their one home is the `tokens` table, which `GetConfig` serves; the
+    /// market reads them from there, so register both tokens first. A second
+    /// copy on the market could disagree with nothing to reconcile it, and
+    /// because the order id is derived from amounts scaled through the
+    /// decimals, a disagreement would be a silent total outage, not a
+    /// mis-priced order.
     ///
     /// The pair decimals below are NOT a duplicate: they belong to the market, not
     /// to either token, and nothing else knows them.
@@ -217,6 +217,12 @@ pub struct Configuration {
     /// List of supported markets
     #[prost(message, repeated, tag = "2")]
     pub markets: ::prost::alloc::vec::Vec<Market>,
+    /// The venue's current session. A new session begins every time the
+    /// arborter starts; every order must carry it in `Order.session`, so an
+    /// order signed before a restart is refused after it. Clients re-read it
+    /// when an order is refused with "session changed".
+    #[prost(uint64, tag = "3")]
+    pub session: u64,
 }
 /// Represents the trading instance details
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -429,6 +435,34 @@ pub struct GetSignerPublicKeyResponse {
         ::prost::alloc::string::String,
         ChainPublicKey,
     >,
+}
+/// Read the persisted signer recovery record. Takes no arguments: an arborter
+/// serves exactly one venue, and that venue has exactly one key set.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetSignerRecoveryRequest {}
+/// The venue's key set and the latest cold wrap of it.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetSignerRecoveryResponse {
+    /// The key set's manifest hash, lower hex of sha256 over the
+    /// "{name}:{curve}:{pubkey_hex}" lines in NAME order, joined with "\n" — the
+    /// keys are sorted by NAME and then formatted, never the other way round:
+    /// sorting the formatted lines gives a different answer whenever one name is
+    /// a prefix of another ("evm" beside "evm-tx"). Byte for byte the value the
+    /// signer appliance prints on its APPLIANCE-STATUS console line, so the
+    /// deployer can compare the two without either side re-deriving it.
+    #[prost(string, tag = "1")]
+    pub key_set_id: ::prost::alloc::string::String,
+    /// The keyring sealed to the recovery public key baked into the appliance's
+    /// image. Opaque here: the arborter cannot read it and neither can the
+    /// operator — only the recovery private key, reassembled from its Shamir
+    /// shares at the ceremony threshold, can.
+    #[prost(bytes = "vec", tag = "2")]
+    pub cold_wrap: ::prost::alloc::vec::Vec<u8>,
+    /// When this wrap was first persisted, RFC 3339 UTC. A key set can have more
+    /// than one wrap (a restore, or a genesis re-emission, wraps the SAME keys
+    /// afresh); this response carries the latest.
+    #[prost(string, tag = "3")]
+    pub created_at: ::prost::alloc::string::String,
 }
 /// Delete market request
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -970,8 +1004,12 @@ pub mod config_service_client {
             self.inner.unary(req, path, codec).await
         }
         /// rpc service to set an instance's operator fee (recipient + bps). The
-        /// arborter submits the on-chain setOperatorFee/set_operator_fee as the
-        /// instance's operator_admin (the arborter signer, while unrotated).
+        /// arborter submits the on-chain setOperatorFee/set_operator_fee signed by
+        /// its own (TEE) key, which the contracts accept only from the instance's
+        /// operator_admin. Instances refuse an operator_admin equal to the signer
+        /// (OPERATOR_ADMIN_IS_SIGNER), so this call fails on-chain on every instance
+        /// created by the current factory and program; the operator admin signs the
+        /// contract call directly instead.
         pub async fn set_operator_fee(
             &mut self,
             request: impl tonic::IntoRequest<super::SetOperatorFeeRequest>,
@@ -1001,8 +1039,9 @@ pub mod config_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// rpc service to rotate an instance's operator_admin key. After rotation the
-        /// new admin (not the arborter) gates operator-fee changes.
+        /// rpc service to rotate an instance's operator_admin key. Signed by the
+        /// arborter's key like SetOperatorFee, and so refused on-chain for the same
+        /// reason; the current operator admin rotates by calling the contract.
         pub async fn set_operator_admin(
             &mut self,
             request: impl tonic::IntoRequest<super::SetOperatorAdminRequest>,
@@ -1149,6 +1188,42 @@ pub mod config_service_client {
                     GrpcMethod::new(
                         "xyz.aspens.arborter_config.v1.ConfigService",
                         "GetAttestation",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Read back the venue's signer key set and the latest cold wrap of it that
+        /// the arborter has persisted. AUTHENTICATED, like every other RPC here that
+        /// is not one of the four bootstrap reads: the wrap is the encrypted-to-the-
+        /// recovery-key backup of the venue's keyring, and while only the recovery
+        /// private key can open it, who may COPY it is still an operator decision.
+        /// NOT_FOUND when the arborter has never seen a wrap (a TPM-custody signer
+        /// never emits one).
+        pub async fn get_signer_recovery(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetSignerRecoveryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetSignerRecoveryResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter_config.v1.ConfigService/GetSignerRecovery",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter_config.v1.ConfigService",
+                        "GetSignerRecovery",
                     ),
                 );
             self.inner.unary(req, path, codec).await

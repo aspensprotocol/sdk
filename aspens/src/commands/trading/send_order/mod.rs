@@ -57,6 +57,14 @@ pub(crate) fn prepare_order(
     // order it verified, so these must be the same `u64` — mint it twice and
     // the two ids differ with nothing on the wire to say so.
     let nonce = super::gasless::client_nonce()?;
+    // The venue session to sign: the arborter opens a new one every boot and
+    // refuses an order for any other, so nothing signed before a restart is
+    // placed after it.
+    let session = config
+        .config
+        .as_ref()
+        .ok_or_else(|| eyre::eyre!("GetConfig returned no configuration"))?
+        .session;
 
     // The budget the arborter will reserve, and the id derived over it. This
     // is also where a budget on the wrong cell (or a missing one on a market
@@ -110,6 +118,8 @@ pub(crate) fn prepare_order(
         // here so the arborter can reproduce that hash from the message it
         // verified — which is the whole reason a caller sends no id.
         nonce,
+        // Signed, but not part of the id derivation.
+        session,
     };
 
     Ok(PreparedOrder { order, commitment })
@@ -227,8 +237,21 @@ async fn call_send_order(
     // Create a tonic request
     let request = tonic::Request::new(request);
 
-    // Call the send_order endpoint
-    let response = client.send_order(request).await?;
+    // Call the send_order endpoint. A "session changed" refusal means the
+    // venue restarted after `config` was fetched: nothing was placed, and a
+    // NEW order signed for the new session is the way on — never these bytes.
+    let response = client.send_order(request).await.map_err(|s| {
+        if s.code() == tonic::Code::FailedPrecondition && s.message().starts_with("session changed")
+        {
+            eyre::eyre!(
+                "{} — the venue restarted since the configuration was fetched; fetch it again \
+                 (AspensClient::fetch_config) and send a new order",
+                s.message()
+            )
+        } else {
+            eyre::Report::new(s)
+        }
+    })?;
 
     // Get the response data
     let response_data = response.into_inner();
@@ -896,6 +919,7 @@ mod tests {
             hidden: false,
             quote_budget: None,
             nonce: 0,
+            session: 0,
         };
 
         let response = SendOrderResponse {
@@ -1041,6 +1065,14 @@ mod tests {
         )
     }
 
+    /// The order is signed for the session the configuration names — the one
+    /// the arborter will compare it against.
+    #[test]
+    fn prepare_order_signs_the_configured_session() {
+        let p = prepared(1, Some("2000000000"), None).expect("a limit bid prepares");
+        assert_eq!(p.order.session, 4_242);
+    }
+
     /// The budget has to land in TWO places at once: on the `Order` (where
     /// the envelope signature covers it and the arborter reserves against
     /// it) and in the id derived beside it. Dropping either one is silent —
@@ -1098,6 +1130,7 @@ mod tests {
             hidden: p.order.hidden,
             quote_budget: p.order.quote_budget.clone(),
             nonce: p.order.nonce,
+            session: p.order.session,
         };
 
         let mut buf_real = Vec::new();
@@ -1232,6 +1265,7 @@ mod order_flag_wire_pinning_tests {
             hidden: false,
             quote_budget: None,
             nonce: 0,
+            session: 0,
         }
     }
 
