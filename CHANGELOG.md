@@ -9,6 +9,20 @@ change before 1.0.
 
 ## [Unreleased]
 
+### Changed
+
+- **Orders carry the venue session (breaking on the wire).** `prepare_order`
+  signs `Order.session` from the fetched configuration
+  (`Configuration.session`). The arborter opens a new session every time it
+  starts and refuses an order for any other one; a "session changed" refusal
+  now says to fetch the configuration again and send a new order.
+- **`client_nonce()` returns `max(unix millis, last + 1)`.** The arborter now
+  admits each signer's nonce once per session, and only above the lowest of
+  its 32 highest used nonces, so nonces must increase.
+- Regenerated the committed protobuf bindings, which also picks up the
+  earlier removal of `OrderbookEntry.post_only` and the `GetSignerRecovery`
+  messages.
+
 ### Added
 
 - `aspens::solana::set_settle_epoch_cap_ix` + `derive_settle_epoch_pda`,

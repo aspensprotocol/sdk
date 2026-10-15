@@ -184,6 +184,7 @@ mod order_id_composition_parity {
                     ),
                 ],
                 markets: vec![market.clone()],
+                session: 0,
             }),
         };
         (config, market)
@@ -325,6 +326,7 @@ mod order_wire {
             hidden: false,
             quote_budget: quote_budget.map(str::to_string),
             nonce,
+            session: 0,
         }
     }
 

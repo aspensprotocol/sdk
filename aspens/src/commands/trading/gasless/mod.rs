@@ -487,24 +487,37 @@ fn wallet_pubkey_bytes(wallet: &Wallet) -> Vec<u8> {
     }
 }
 
-/// The SDK's choice of `Order.nonce`: millis since the Unix epoch.
+/// The SDK's choice of `Order.nonce`: `max(unix millis, last + 1)`.
 ///
-/// Any `u64` is a legal nonce — it exists only to separate a wallet's
-/// otherwise identical orders, since the id is derived from the order's
-/// content plus the signer's address. Millis gives 1000x the collision
-/// headroom of a unix-seconds scheme; two orders that do land on the same
-/// millisecond with every other field equal derive the same id and the second
-/// is refused as a replay, which is the intended behaviour of a reused nonce,
-/// not a corruption.
+/// The nonce separates a wallet's otherwise identical orders (the id is
+/// derived from the order's content, the signer's address and the nonce), and
+/// it is the order's replay guard: within a venue session the arborter admits
+/// each signer's nonce once, and only above the lowest of that signer's 32
+/// highest used nonces. So nonces must increase. Millis do, across orders and
+/// across restarts of this process; `last + 1` keeps two orders minted in the
+/// same millisecond distinct.
 ///
 /// Call it once per order and put the value in **both** `Order.nonce` and
 /// [`build_order_commitment`] — see `send_order::prepare_order`.
 pub fn client_nonce() -> Result<u64> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    // The last nonce handed out in this process: the arborter admits each
+    // signer's nonce once per session and only above its floor, so two orders
+    // minted in one millisecond must still get distinct, increasing nonces.
+    static LAST: AtomicU64 = AtomicU64::new(0);
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| eyre!("system clock before epoch: {e}"))?
         .as_millis();
-    u64::try_from(ms).map_err(|_| eyre!("unix millis overflow"))
+    let ms = u64::try_from(ms).map_err(|_| eyre!("unix millis overflow"))?;
+    let mut prev = LAST.load(Ordering::SeqCst);
+    loop {
+        let next = ms.max(prev.checked_add(1).ok_or_else(|| eyre!("nonce overflow"))?);
+        match LAST.compare_exchange(prev, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return Ok(next),
+            Err(seen) => prev = seen,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -785,6 +798,9 @@ pub(crate) mod tests {
             config: Some(Configuration {
                 chains: vec![base_chain, quote_chain],
                 markets: vec![market.clone()],
+                // Distinct from 0, the unset value, so a builder that dropped
+                // it cannot pass by coincidence.
+                session: 4_242,
             }),
         };
         (config, market)
@@ -794,6 +810,23 @@ pub(crate) mod tests {
     /// against it can pass by coincidence: base 18, quote 6, pair 8. Every
     /// budget below is a different integer in each of the three, which is
     /// exactly what a same-decimals fixture cannot tell apart.
+    /// Nonces strictly increase, even when many are minted within one
+    /// millisecond: the arborter refuses a repeated or lower nonce from a
+    /// signer as a replay.
+    #[test]
+    fn client_nonce_strictly_increases() {
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let burst: Vec<u64> = (0..1_000).map(|_| client_nonce().unwrap()).collect();
+        assert!(burst[0] >= before, "never below unix millis");
+        assert!(
+            burst.windows(2).all(|w| w[1] > w[0]),
+            "not strictly increasing"
+        );
+    }
+
     const BASE_DEC: u32 = 18;
     const QUOTE_DEC: u32 = 6;
     const PAIR_DEC: i32 = 8;

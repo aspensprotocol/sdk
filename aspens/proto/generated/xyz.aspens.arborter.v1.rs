@@ -205,8 +205,8 @@ pub struct Order {
     /// cross any opposing confirmed order at submission time the request
     /// is rejected with FAILED_PRECONDITION and nothing is reserved. Limit
     /// orders only — incompatible with market (no price) and with
-    /// DISCRETIONARY execution_type. Defaults to false, which preserves
-    /// legacy take-or-rest behavior.
+    /// DISCRETIONARY execution_type. Defaults to false: the order takes what
+    /// it crosses and rests the remainder.
     #[prost(bool, tag = "9")]
     pub post_only: bool,
     /// Hidden ("invisible") order: matched, settled, and canceled exactly
@@ -216,8 +216,8 @@ pub struct Order {
     /// not even to its owner: track via SendOrderResponse.order_id. When a
     /// hidden order fills, the trade prints publicly with the hidden side's
     /// identity fields (ids + addresses) redacted to empty/zero.
-    /// Defaults to false (wire-skipped), so pre-feature signed envelopes
-    /// are byte-identical.
+    /// Defaults to false and is skipped on the wire when false, so an
+    /// envelope that omits it signs identically to one that sets it false.
     #[prost(bool, tag = "10")]
     pub hidden: bool,
     /// The maximum QUOTE this order may spend, in the quote token's native base
@@ -236,33 +236,41 @@ pub struct Order {
     /// REJECTED on every other order, where the budget is derived and a
     /// caller-supplied figure could only disagree with it.
     ///
-    /// It lives in `Order` rather than beside it precisely so `signature_hash`
-    /// covers it: this number authorises spending, and the retired
-    /// `OrderAuthorization.amount_in` was unsigned.
+    /// It lives in `Order` rather than beside it so `signature_hash` covers
+    /// it: a number that authorises spending must be signed.
     #[prost(string, optional, tag = "11")]
     pub quote_budget: ::core::option::Option<::prost::alloc::string::String>,
-    /// Caller-chosen nonce, folded into the order id so one wallet's otherwise
-    /// identical orders get distinct ids. Millis-since-epoch is the SDK's choice;
-    /// any value works, and the caller may reuse one deliberately — a repeat
-    /// derives the same id and is refused as a replay.
+    /// The signer's nonce. It is folded into the order id, so one wallet's
+    /// otherwise identical orders get distinct ids, and it is the order's
+    /// replay guard: within a session (see `session`) the arborter admits a
+    /// nonce only if this signer has not used it and it is above the lowest of
+    /// the signer's 32 highest used nonces. A used or too-low nonce is refused
+    /// with ALREADY_EXISTS ("replay"), whatever became of the order that used it.
+    /// Use `max(unix millis, last nonce + 1)`, as the SDKs do: increasing values
+    /// never collide, and a little out-of-order arrival is tolerated.
     ///
-    /// Over the FCE direct-action transport both shipped clients sign
-    /// `nonce = 0` for every order, so two otherwise-identical orders from one
-    /// wallet collide there and the second is refused; vary a field, or use the
-    /// gRPC path where the SDK stamps a fresh nonce.
+    /// The signer is the account the signature verifies against. Refused orders
+    /// use their nonce up too, so a signed order can never be placed later.
     ///
     /// It lives HERE, inside the signed `Order`, and that is the whole point. The
     /// arborter derives the canonical order id itself from this message and stops
     /// trusting a caller-supplied one, which is only possible if every input to
-    /// the derivation is signed. While the nonce sat outside, the id depended on a
-    /// value the server never saw and the signature never covered.
-    ///
-    /// What that buys, beyond tidiness: the derivation hashes the caller's own
+    /// the derivation is signed. The derivation also hashes the caller's own
     /// address, so an order signed by an attacker cannot derive to a victim's id.
-    /// Pre-claiming someone else's id — refusing their order by reserving its id
-    /// first — stops being expressible rather than being defended against.
+    ///
+    /// Over the parked FCE direct-action transport the shipped clients sign
+    /// `nonce = 0`; that transport does not carry `session` either.
     #[prost(uint64, tag = "12")]
     pub nonce: u64,
+    /// The venue session this order was signed for: `Configuration.session`
+    /// from GetConfig. The arborter starts a new session every time it starts,
+    /// and refuses an order for any other session with FAILED_PRECONDITION
+    /// ("session changed"), so nothing signed before a restart can be placed
+    /// after it. Re-read GetConfig and re-sign.
+    ///
+    /// Signed (it is part of `Order`), but NOT part of the order-id derivation.
+    #[prost(uint64, tag = "13")]
+    pub session: u64,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Trade {
@@ -363,13 +371,6 @@ pub struct OrderToCancel {
     /// wallet must sign (see `CancelOrderRequest.signature_hash`).
     #[prost(enumeration = "Side", tag = "2")]
     pub side: i32,
-    /// NOTE: a `token_address` field used to sit between `side` and `order_id`.
-    /// The server never read it — it was fully determined by `market_id` and
-    /// `side` — yet it was inside the signed bytes, so every caller had to
-    /// resolve it exactly as the server would have (BID → quote-chain token,
-    /// ASK → base-chain token) or its cancel silently matched nothing. A value
-    /// derived once and used directly does not belong in a signed message.
-    ///
     /// The order's canonical identifier: the full 32-byte order id, shown as
     /// `0x`-prefixed hex, exactly as returned in `SendOrderResponse.order_id`.
     /// Server-derived at order entry — the caller only echoes it back here to
@@ -414,12 +415,11 @@ pub struct OrderbookEntry {
     #[prost(string, tag = "8")]
     pub market_id: ::prost::alloc::string::String,
     /// The order's lifecycle state; see `OrderState`.
+    ///
+    /// How the maker chose to place it (`Order.post_only`) is deliberately not
+    /// published: it is visible only to the order's creator.
     #[prost(enumeration = "OrderState", tag = "9")]
     pub state: i32,
-    /// Mirrors Order.post_only for the resting order. Lets streaming
-    /// clients distinguish post-only liquidity from regular limits.
-    #[prost(bool, tag = "10")]
-    pub post_only: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
