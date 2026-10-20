@@ -9,6 +9,12 @@ change before 1.0.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-20
+
+**Pairs with an arborter that has replay protection (arborter #380).** Against
+such a venue, 0.7.x and earlier have every order refused: they do not sign
+`Order.session`. Upgrade the CLI/REPL together with the venue.
+
 ### Changed
 
 - **Orders carry the venue session (breaking on the wire).** `prepare_order`
@@ -22,21 +28,6 @@ change before 1.0.
 - Regenerated the committed protobuf bindings, which also picks up the
   earlier removal of `OrderbookEntry.post_only` and the `GetSignerRecovery`
   messages.
-
-### Added
-
-- `aspens::solana::set_settle_epoch_cap_ix` + `derive_settle_epoch_pda`,
-  `aspens::operator::set_settle_epoch_cap`,
-  `aspens::solana::client::fetch_settle_epoch`, and the
-  `aspens-cli set-settle-epoch-cap` command: arm the Solana midrib program's
-  per-`(instance, mint)` per-epoch settlement cap with the offline
-  operator-admin key (EVM equivalent: `MidribV3.setSettleEpochCap`).
-- `aspens::solana::derive_termination_pda` and
-  `aspens::solana::explain_midrib_error`; Solana transaction failures now
-  carry a plain-English line for `Terminated`, `TerminationDelayPending`,
-  `WithdrawEpochCapExceeded` and `OperatorAdminIsSigner`.
-
-### Changed
 
 - **BREAKING: `ASPENS_RPC_URL_<NETWORK>` is required; the server's RPC url is
   never used.** A masked url can still parse
@@ -63,6 +54,19 @@ change before 1.0.
   `TERMINATION_DELAY`, the `SettleEpochCapSet` event and the
   `SETTLE_RATE_LIMITED`, `TERMINATION_DELAY_PENDING`,
   `OPERATOR_ADMIN_IS_SIGNER` errors.
+
+### Added
+
+- `aspens::solana::set_settle_epoch_cap_ix` + `derive_settle_epoch_pda`,
+  `aspens::operator::set_settle_epoch_cap`,
+  `aspens::solana::client::fetch_settle_epoch`, and the
+  `aspens-cli set-settle-epoch-cap` command: arm the Solana midrib program's
+  per-`(instance, mint)` per-epoch settlement cap with the offline
+  operator-admin key (EVM equivalent: `MidribV3.setSettleEpochCap`).
+- `aspens::solana::derive_termination_pda` and
+  `aspens::solana::explain_midrib_error`; Solana transaction failures now
+  carry a plain-English line for `Terminated`, `TerminationDelayPending`,
+  `WithdrawEpochCapExceeded` and `OperatorAdminIsSigner`.
 
 ### Removed
 
@@ -513,9 +517,10 @@ Pre-0.4.1 history is recorded in git only. The 0.4.x line introduced
 Solana support, the Wallet enum, and feature gates (`evm`, `solana`,
 `client`) for lean-signing consumers.
 
-[Unreleased]: https://github.com/aspensprotocol/sdk/compare/0.7.0...HEAD
-[0.7.0]: https://github.com/aspensprotocol/sdk/compare/0.6.3...0.7.0
-[0.6.3]: https://github.com/aspensprotocol/sdk/compare/0.6.2...0.6.3
+[Unreleased]: https://github.com/aspensprotocol/sdk/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/aspensprotocol/sdk/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/aspensprotocol/sdk/compare/v0.6.3...v0.7.0
+[0.6.3]: https://github.com/aspensprotocol/sdk/compare/0.6.2...v0.6.3
 [0.6.2]: https://github.com/aspensprotocol/sdk/compare/0.6.1...0.6.2
 [0.6.1]: https://github.com/aspensprotocol/sdk/compare/0.6.0...0.6.1
 [0.6.0]: https://github.com/aspensprotocol/sdk/compare/0.5.0...0.6.0
