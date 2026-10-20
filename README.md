@@ -139,7 +139,7 @@ cargo add aspens
 Or add it manually to your `Cargo.toml`:
 ```toml
 [dependencies]
-aspens = "0.7"
+aspens = "0.8"
 ```
 
 Full client (gRPC + trading commands + RPC submission):
@@ -165,7 +165,7 @@ cargo add aspens --no-default-features --features evm,solana
 ```
 ```toml
 [dependencies]
-aspens = { version = "0.7", default-features = false, features = ["evm", "solana"] }
+aspens = { version = "0.8", default-features = false, features = ["evm", "solana"] }
 ```
 ```rust
 use aspens::orders::derive_order_id;
@@ -295,10 +295,10 @@ are opt-in. Consumers can trim down to just what they need:
 | `dcap-fetch` | `dcap` + collateral fetching over the PCS/PCCS REST API (`tdx_verify::collateral`): `reqwest`, `asn1_der`, `pem`, `urlencoding`. | Keep for the `verify-attestation` CLI command. |
 
 Common configurations:
-- **Default** (everything): `aspens = "0.7"`
-- **Lean EVM signing**: `aspens = { version = "0.7", default-features = false, features = ["evm"] }`
-- **Lean Solana signing**: `aspens = { version = "0.7", default-features = false, features = ["solana"] }`
-- **Both chains, no client runtime**: `aspens = { version = "0.7", default-features = false, features = ["evm", "solana"] }`
+- **Default** (everything): `aspens = "0.8"`
+- **Lean EVM signing**: `aspens = { version = "0.8", default-features = false, features = ["evm"] }`
+- **Lean Solana signing**: `aspens = { version = "0.8", default-features = false, features = ["solana"] }`
+- **Both chains, no client runtime**: `aspens = { version = "0.8", default-features = false, features = ["evm", "solana"] }`
 
 The `aspens-cli`, `aspens-repl`, and `aspens-admin` binaries all depend
 on the default feature set.
