@@ -5,6 +5,8 @@
 
 A comprehensive SDK and CLI tools for interacting with an [Aspens Markets Stack](https://docs.aspens.xyz).
 
+> Looking for the TypeScript SDK? It is published on npm as [`@aspensprotocol/sdk-ts`](https://www.npmjs.com/package/@aspensprotocol/sdk-ts).
+
 The core library is published on crates.io as [`aspens`](https://crates.io/crates/aspens).
 The `aspens-cli`, `aspens-repl`, and `aspens-admin` binaries live in this
 workspace; `aspens-cli` and `aspens-repl` ship as prebuilt release binaries
