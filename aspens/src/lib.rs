@@ -20,6 +20,8 @@
 //! - **`solana`** (default) — stateless Solana helpers in [`solana`]
 //!   (PDA derivations, instruction builders, borsh payload encoder).
 //!   Pulls `solana-sdk`, `bs58`, and `borsh`.
+//! - **`tron`** — stateless Tron helpers in [`tron`] (address edge
+//!   conversion, TRON message signing, transaction building). Pulls `bs58`.
 //! - **`client`** (default) — full gRPC + RPC runtime: `AspensClient`,
 //!   the `commands` modules, `chain_client`, the `executor`
 //!   abstraction, and Solana RPC submission. Pulls `tonic`, `prost`,
@@ -66,6 +68,10 @@ pub mod solana;
 /// Relying-party TDX attestation verification (REPORTDATA/manifest reconstruction
 /// + the verify pipeline). Pure `sha2`; the DCAP backend is a separate phase.
 pub mod tdx_verify;
+/// Tron primitives: `T…` address edge conversion, the TRON message prefix, and
+/// hand-encoded transactions. Behind the `tron` feature.
+#[cfg(feature = "tron")]
+pub mod tron;
 pub mod wallet;
 
 /// Generated protobuf bindings for the attestation service.

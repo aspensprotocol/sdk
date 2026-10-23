@@ -622,8 +622,8 @@ pub async fn send_order_with_wallets(
     let quote_chain = config
         .get_chain(&market.quote_chain_network)
         .ok_or_else(|| eyre::eyre!("quote chain '{}' not in config", market.quote_chain_network))?;
-    let base_curve = crate::wallet::chain_curve(base_chain);
-    let quote_curve = crate::wallet::chain_curve(quote_chain);
+    let base_curve = crate::wallet::chain_curve(base_chain)?;
+    let quote_curve = crate::wallet::chain_curve(quote_chain)?;
     let base_wallet = wallets
         .iter()
         .copied()

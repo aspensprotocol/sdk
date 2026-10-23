@@ -371,7 +371,7 @@ async fn query_token_balance_via_client(
 /// caller-supplied wallet matches — the chain's rows are reported as
 /// "no wallet" rather than erroring out.
 fn select_wallet_for_chain<'a>(chain: &Chain, wallets: &'a [&'a Wallet]) -> Option<&'a Wallet> {
-    let wanted = crate::wallet::chain_curve(chain);
+    let wanted = crate::wallet::chain_curve(chain).ok()?;
     wallets.iter().copied().find(|w| w.curve() == wanted)
 }
 

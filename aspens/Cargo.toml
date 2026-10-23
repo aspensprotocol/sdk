@@ -116,6 +116,11 @@ solana = [
     "dep:borsh",
 ]
 
+# Tron primitives: base58check address edge conversion, the TRON message
+# prefix, and hand-encoded TriggerSmartContract transactions. Stateless; the
+# account is the same secp256k1 key as an EVM wallet.
+tron = ["dep:bs58"]
+
 # Full client runtime: AspensClient, gRPC commands, RPC submission, tokio.
 # Required for talking to the Aspens stack or submitting transactions.
 # aspens-cli / aspens-repl / aspens-admin all need this.

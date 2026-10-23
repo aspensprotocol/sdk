@@ -142,15 +142,17 @@ pub async fn place_order(
     let quote_chain = config
         .get_chain(&market.quote_chain_network)
         .ok_or_else(|| eyre!("quote chain '{}' not in config", market.quote_chain_network))?;
+    let base_curve = crate::wallet::chain_curve(base_chain)?;
+    let quote_curve = crate::wallet::chain_curve(quote_chain)?;
     let base_wallet = wallets
         .iter()
         .copied()
-        .find(|w| w.curve() == crate::wallet::chain_curve(base_chain))
+        .find(|w| w.curve() == base_curve)
         .ok_or_else(|| eyre!("no wallet for base chain '{}'", market.base_chain_network))?;
     let quote_wallet = wallets
         .iter()
         .copied()
-        .find(|w| w.curve() == crate::wallet::chain_curve(quote_chain))
+        .find(|w| w.curve() == quote_curve)
         .ok_or_else(|| eyre!("no wallet for quote chain '{}'", market.quote_chain_network))?;
     // Bid locks quote, Ask locks base — the signing side.
     let signing_wallet = if side_i == Side::Bid as i32 {

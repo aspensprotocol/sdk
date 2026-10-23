@@ -496,3 +496,335 @@ mod cancel_wire {
         assert_eq!(buf, expected);
     }
 }
+
+// -- Tron: closed architecture match --------------------------------------
+
+/// `chain_curve` used to be "solana, otherwise evm", so a chain whose
+/// architecture was misspelled (or a future one) silently ran the EVM path
+/// including the Ethereum signature prefix. Unknown is now an error; empty
+/// still means EVM.
+#[cfg(feature = "client")]
+mod architecture_match {
+    use aspens::CurveType;
+    use aspens::commands::config::config_pb::Chain;
+    use aspens::wallet::chain_curve;
+
+    fn chain(architecture: &str) -> Chain {
+        Chain {
+            architecture: architecture.into(),
+            network: "net".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn unknown_architecture_is_error() {
+        for bad in ["cosmos", "evmm", "sol", "tron2", " evm"] {
+            let err = chain_curve(&chain(bad)).unwrap_err().to_string();
+            assert!(err.contains(bad), "error must name the architecture: {err}");
+        }
+    }
+
+    #[test]
+    fn known_architectures_map_to_their_curve() {
+        for (arch, curve) in [
+            ("", CurveType::Secp256k1),
+            ("evm", CurveType::Secp256k1),
+            ("EVM", CurveType::Secp256k1),
+            ("tron", CurveType::Secp256k1),
+            ("Tron", CurveType::Secp256k1),
+            ("solana", CurveType::Ed25519),
+            ("Solana", CurveType::Ed25519),
+        ] {
+            assert_eq!(chain_curve(&chain(arch)).unwrap(), curve, "{arch:?}");
+        }
+    }
+}
+
+// -- Tron primitives against the shared Nile vectors ----------------------
+
+/// `tests/fixtures/tron_vectors.json` is copied byte-identical from the
+/// arborter. Every expectation below is a literal read from it (or pinned
+/// inline), never recomputed with the code under test.
+#[cfg(feature = "tron")]
+mod tron_parity {
+    use alloy_primitives::Address;
+    use aspens::Wallet;
+    use aspens::tron::{
+        EXPIRATION_MS, RefBlock, build_trigger, build_trigger_at, hex_to_tron, signed_hex,
+        tron_message_digest, tron_proto_message_digest, tron_sign_proto_message, tron_sign_text,
+        tron_sign_txid, tron_to_hex, txid,
+    };
+    use serde_json::Value;
+
+    fn vectors() -> Value {
+        serde_json::from_str(include_str!("fixtures/tron_vectors.json")).expect("fixture parses")
+    }
+
+    fn s(v: &Value, path: &str) -> String {
+        v.pointer(path)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{path} missing"))
+            .to_string()
+    }
+
+    fn bytes(v: &Value, path: &str) -> Vec<u8> {
+        hex::decode(s(v, path).trim_start_matches("0x")).unwrap()
+    }
+
+    fn int(v: &Value, path: &str) -> i64 {
+        v.pointer(path).and_then(Value::as_i64).unwrap()
+    }
+
+    fn addr(v: &Value, path: &str) -> Address {
+        s(v, path).parse().unwrap()
+    }
+
+    fn test_wallet(v: &Value) -> Wallet {
+        Wallet::from_evm_hex(&s(v, "/test_only_private_key/private_key")).unwrap()
+    }
+
+    #[test]
+    fn tron_address_pairs_match_fixture() {
+        let v = vectors();
+        let pairs = v["addresses"].as_array().unwrap();
+        assert!(pairs.len() >= 10, "fixture lost address pairs");
+        for p in pairs {
+            let (hex_form, t_form) = (p["hex"].as_str().unwrap(), p["tron"].as_str().unwrap());
+            assert_eq!(tron_to_hex(t_form).unwrap(), hex_form, "{t_form}");
+            assert_eq!(hex_to_tron(hex_form).unwrap(), t_form, "{hex_form}");
+        }
+        // Pinned inline too, so a corrupted fixture cannot agree with itself.
+        assert_eq!(
+            hex_to_tron("0xa614f803b6fd780986a42c78ec9c7f77e6ded13c").unwrap(),
+            "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+        );
+    }
+
+    #[test]
+    fn tron_address_edge_rejects_bad_input() {
+        // Last character changed: valid base58, wrong checksum.
+        assert!(tron_to_hex("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6u").is_err());
+        // A non-Tron (Bitcoin) base58check address: 0x00 version byte.
+        assert!(tron_to_hex("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2").is_err());
+        assert!(tron_to_hex("").is_err());
+        assert!(tron_to_hex("not an address").is_err());
+        assert!(hex_to_tron("0xa614f803").is_err());
+        assert!(hex_to_tron("a614f803b6fd780986a42c78ec9c7f77e6ded13c").is_err());
+        // base58 decodes to canonical lowercase hex.
+        assert_eq!(
+            tron_to_hex("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t").unwrap(),
+            "0xa614f803b6fd780986a42c78ec9c7f77e6ded13c"
+        );
+    }
+
+    fn rebuild(v: &Value, name: &str) -> Vec<u8> {
+        let p = format!("/transactions/{name}");
+        let rb = RefBlock {
+            bytes: bytes(v, &format!("{p}/fields/ref_block_bytes"))
+                .try_into()
+                .unwrap(),
+            hash: bytes(v, &format!("{p}/fields/ref_block_hash"))
+                .try_into()
+                .unwrap(),
+            head_time_ms: int(v, &format!("{p}/fields/expiration")) - EXPIRATION_MS,
+        };
+        build_trigger_at(
+            addr(v, &format!("{p}/fields/owner_address_hex")),
+            addr(v, &format!("{p}/fields/contract_address_hex")),
+            &bytes(v, &format!("{p}/fields/data")),
+            int(v, &format!("{p}/fields/call_value")),
+            int(v, &format!("{p}/fields/fee_limit")),
+            &rb,
+            int(v, &format!("{p}/fields/timestamp")),
+        )
+    }
+
+    #[tokio::test]
+    async fn tron_txid_matches_fixture() {
+        let v = vectors();
+        let wallet = test_wallet(&v);
+        // settle: call_value 0 (field omitted), multi-byte lengths at every
+        // nesting level. depositNative: call_value present.
+        for name in ["settle", "deposit_native"] {
+            let p = format!("/transactions/{name}");
+            let raw = rebuild(&v, name);
+            assert_eq!(
+                hex::encode(&raw),
+                s(&v, &format!("{p}/raw_data_hex")),
+                "{name}: raw_data must equal the bytes Nile executed"
+            );
+            assert_eq!(
+                hex::encode(txid(&raw)),
+                s(&v, &format!("{p}/txID")),
+                "{name}"
+            );
+
+            // The signature over the txID (RFC6979, v = 27/28) and the
+            // broadcast form are fixture-pinned too.
+            let sig = tron_sign_txid(&wallet, &raw).await.unwrap();
+            assert_eq!(
+                format!("0x{}", hex::encode(sig)),
+                s(&v, &format!("{p}/signature")),
+                "{name}"
+            );
+            let wrapped = signed_hex(&raw, &sig);
+            assert!(wrapped.starts_with("0a"), "{name}");
+            assert!(
+                wrapped.ends_with(&format!("1241{}", hex::encode(sig))),
+                "{name}"
+            );
+            assert!(
+                wrapped.contains(&s(&v, &format!("{p}/raw_data_hex"))),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn tron_build_trigger_expires_sixty_seconds_after_head() {
+        let rb = RefBlock {
+            bytes: [0x6e, 0xe6],
+            hash: [1, 2, 3, 4, 5, 6, 7, 8],
+            head_time_ms: 1_792_691_199_000,
+        };
+        let o = Address::repeat_byte(1);
+        let c = Address::repeat_byte(2);
+        let raw = build_trigger(o, c, &[0xdb, 0x6b, 0x52, 0x46], 7, 9, &rb);
+        let fixed = build_trigger_at(o, c, &[0xdb, 0x6b, 0x52, 0x46], 7, 9, &rb, 1);
+        // Same length class: only the timestamp differs between the two.
+        assert_eq!(raw.len(), fixed.len() + 5);
+        // expiration (field 8, tag 0x40) = head + 60 s, 1_792_691_259_000.
+        let needle = hex::decode("40f88ce7a59634").unwrap();
+        assert!(raw.windows(needle.len()).any(|w| w == needle));
+    }
+
+    #[tokio::test]
+    async fn tron_sign_message_v2_matches_fixture() {
+        let v = vectors();
+        let wallet = test_wallet(&v);
+
+        // Order: the fixture's prost bytes are rebuilt through the sdk's own
+        // generated `Order`, which also checks premise 2 (byte-identical
+        // encoding with the arborter's).
+        #[cfg(feature = "client")]
+        {
+            use aspens::commands::trading::arborter_pb::Order;
+            use prost::Message;
+            let order = Order {
+                side: 2,
+                quantity: "1000000".into(),
+                price: Some("250000".into()),
+                market_id: "3448148188::0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee::3448148188::0xeca9bc828a3005b9a3b909f2cc5c2a54794de05f".into(),
+                base_account_address: "0xa5411a1a5784b0828bbafcfa588c72ef3f3ce646".into(),
+                quote_account_address: "0xa5411a1a5784b0828bbafcfa588c72ef3f3ce646".into(),
+                execution_type: 0,
+                matching_order_ids: vec![],
+                post_only: false,
+                hidden: false,
+                quote_budget: None,
+                nonce: 1_792_700_000_000,
+                session: 7,
+            };
+            let mut buf = Vec::new();
+            order.encode(&mut buf).unwrap();
+            assert_eq!(
+                hex::encode(&buf),
+                s(&v, "/sign_message_v2/deterministic/message/bytes_hex").trim_start_matches("0x"),
+                "sdk Order must encode byte-identically to the arborter's"
+            );
+
+            use aspens::commands::trading::arborter_pb::{OrderToCancel, Side};
+            let cancel = OrderToCancel {
+                market_id: order.market_id.clone(),
+                side: Side::Ask as i32,
+                order_id: bytes(
+                    &v,
+                    "/sign_message_v2/order_to_cancel/message/fields/order_id",
+                ),
+            };
+            let mut cbuf = Vec::new();
+            cancel.encode(&mut cbuf).unwrap();
+            assert_eq!(
+                hex::encode(&cbuf),
+                s(&v, "/sign_message_v2/order_to_cancel/message/bytes_hex")
+                    .trim_start_matches("0x"),
+                "sdk OrderToCancel must encode byte-identically to the arborter's"
+            );
+        }
+
+        // (vector path, prost bytes path)
+        for (base, bytes_path) in [
+            (
+                "/sign_message_v2/deterministic",
+                "/sign_message_v2/deterministic/message/bytes_hex",
+            ),
+            (
+                "/sign_message_v2/order_to_cancel",
+                "/sign_message_v2/order_to_cancel/message/bytes_hex",
+            ),
+        ] {
+            let prost_bytes = bytes(&v, bytes_path);
+            let digest = tron_proto_message_digest(&prost_bytes);
+            assert_eq!(
+                format!("{digest:#x}"),
+                s(&v, &format!("{base}/digest")),
+                "{base}"
+            );
+            let sig = tron_sign_proto_message(&wallet, &prost_bytes)
+                .await
+                .unwrap();
+            assert_eq!(
+                format!("0x{}", hex::encode(sig)),
+                s(&v, &format!("{base}/signature")),
+                "{base}"
+            );
+        }
+
+        // Withdraw: text signed as is.
+        let text = s(&v, "/sign_message_v2/withdraw/text");
+        assert_eq!(
+            format!("{:#x}", tron_message_digest(&text)),
+            s(&v, "/sign_message_v2/withdraw/digest")
+        );
+        let sig = tron_sign_text(&wallet, &text).await.unwrap();
+        assert_eq!(
+            format!("0x{}", hex::encode(sig)),
+            s(&v, "/sign_message_v2/withdraw/signature")
+        );
+
+        // The two negatives must differ from the TRON-prefix digest: the
+        // Ethereum prefix over the same text, and the TRON prefix over raw
+        // binary. Signing either by accident is the failure this guards.
+        let d = &v["sign_message_v2"]["deterministic"];
+        let order_digest = format!(
+            "{:#x}",
+            tron_proto_message_digest(&bytes(
+                &v,
+                "/sign_message_v2/deterministic/message/bytes_hex"
+            ))
+        );
+        assert_ne!(
+            order_digest,
+            d["negative_ethereum_prefixed"]["digest"].as_str().unwrap()
+        );
+        assert_ne!(
+            order_digest,
+            d["negative_binary_form"]["digest"].as_str().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn tron_signing_refuses_a_non_evm_wallet() {
+        // A Solana wallet has no secp256k1 key; the Tron signers must error,
+        // not fall back to another curve.
+        #[cfg(feature = "solana")]
+        {
+            let kp = solana_sdk::signature::Keypair::new();
+            let w = Wallet::from_solana_base58(&kp.to_base58_string()).unwrap();
+            assert!(tron_sign_text(&w, "x").await.is_err());
+            assert!(tron_sign_proto_message(&w, b"x").await.is_err());
+            assert!(tron_sign_txid(&w, b"x").await.is_err());
+        }
+    }
+}

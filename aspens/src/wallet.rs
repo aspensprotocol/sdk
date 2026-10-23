@@ -167,31 +167,34 @@ pub fn load_trader_wallet(curve: CurveType) -> Result<Wallet> {
 
 /// Map a chain's architecture to the curve its keys live on.
 ///
-/// Solana chains use Ed25519; everything else (EVM today, others in the
-/// future) uses secp256k1. Mirrors the dispatch in
+/// The match is closed and case-insensitive: `evm` (or empty) and `tron` use
+/// secp256k1 (a Tron account is the same key as an EVM one), `solana` uses
+/// Ed25519, and anything else is an error rather than a silent EVM default.
+/// Mirrors the dispatch in
 /// [`crate::chain_client::ChainClient::from_chain_config`] and the privileged
 /// signing paths in `commands::trading`.
 #[cfg(feature = "client")]
-pub fn chain_curve(chain: &crate::commands::config::config_pb::Chain) -> CurveType {
-    if chain
-        .architecture
-        .eq_ignore_ascii_case(crate::chain_client::ARCH_SOLANA)
-    {
-        CurveType::Ed25519
-    } else {
-        CurveType::Secp256k1
+pub fn chain_curve(chain: &crate::commands::config::config_pb::Chain) -> Result<CurveType> {
+    match chain.architecture.to_ascii_lowercase().as_str() {
+        "" | "evm" | "tron" => Ok(CurveType::Secp256k1),
+        "solana" => Ok(CurveType::Ed25519),
+        _ => Err(eyre!(
+            "chain '{}' has unknown architecture '{}' (expected evm, solana or tron)",
+            chain.network,
+            chain.architecture
+        )),
     }
 }
 
 /// Load the trader wallet whose curve matches `chain`'s architecture.
 ///
-/// Equivalent to `load_trader_wallet(chain_curve(chain))`. Provided as a
+/// Equivalent to `load_trader_wallet(chain_curve(chain)?)`. Provided as a
 /// helper so binaries don't have to inline the architecture→curve dispatch.
 #[cfg(feature = "client")]
 pub fn load_trader_wallet_for_chain(
     chain: &crate::commands::config::config_pb::Chain,
 ) -> Result<Wallet> {
-    load_trader_wallet(chain_curve(chain))
+    load_trader_wallet(chain_curve(chain)?)
 }
 
 /// Look up `network` in `config` and load the matching trader wallet for

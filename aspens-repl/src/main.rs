@@ -931,7 +931,7 @@ fn main() {
                     let chain = config
                         .get_chain(origin)
                         .ok_or_else(|| eyre::eyre!("chain '{origin}' not in config"))?;
-                    let curve = aspens::wallet::chain_curve(chain);
+                    let curve = aspens::wallet::chain_curve(chain)?;
                     wallets
                         .iter()
                         .position(|w| w.curve() == curve)
