@@ -370,7 +370,13 @@ pub fn named_chain_for(chain_id: u64) -> Option<NamedChain> {
 /// non-alphanumeric byte replaced by `_` (e.g. `base-sepolia` →
 /// `ASPENS_RPC_URL_BASE_SEPOLIA`, `anvil-1` → `ASPENS_RPC_URL_ANVIL_1`).
 pub fn rpc_override_env_key(network: &str) -> String {
-    let suffix: String = network
+    format!("ASPENS_RPC_URL_{}", network_env_suffix(network))
+}
+
+/// `network` as an env-var suffix: upper-cased, with every non-alphanumeric
+/// byte replaced by `_`. Shared by every per-network variable.
+pub(crate) fn network_env_suffix(network: &str) -> String {
+    network
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() {
@@ -379,8 +385,7 @@ pub fn rpc_override_env_key(network: &str) -> String {
                 '_'
             }
         })
-        .collect();
-    format!("ASPENS_RPC_URL_{suffix}")
+        .collect()
 }
 
 /// The RPC endpoint for `network`, read from [`rpc_override_env_key`]. See

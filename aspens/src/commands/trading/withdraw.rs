@@ -576,7 +576,7 @@ async fn tron_withdraw(
     // endpoint, or a wallet with too little TRX to pay for the withdraw,
     // fails here with nothing held.
     let base = crate::chain_client::checked_chain_rpc_url(chain).await?;
-    let http = crate::tron::client::TronHttp::new(&base)?;
+    let http = crate::tron::client::TronHttp::for_network(&base, &chain.network)?;
     let jsonrpc = Url::parse(&crate::tron::client::jsonrpc_url(&base)?)?;
     let trx = ProviderBuilder::new()
         .connect_http(jsonrpc)

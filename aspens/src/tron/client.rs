@@ -23,8 +23,16 @@
 //! the venue credits a deposit only once the chain finalizes it, so a reorged
 //! deposit is simply never credited.
 //!
-//! An API key the provider needs goes in the URL's query string, which every
-//! derived path keeps.
+//! # API key
+//!
+//! TronGrid authenticates with a `TRON-PRO-API-KEY` header, never a query
+//! parameter. [`TronHttp::with_api_key`] puts that header on every request to
+//! the node; [`TronHttp::for_network`] takes the key from
+//! `ASPENS_TRON_API_KEY_<NETWORK>` ([`api_key_env_key`]), beside the
+//! endpoint's own `ASPENS_RPC_URL_<NETWORK>`, so each network's endpoint
+//! carries its own key. With no key set, no header is sent and the node
+//! serves the request at its keyless rate limit. The EVM reads under
+//! `/jsonrpc` (the chain-id probe and balance reads) go out keyless.
 
 use std::time::{Duration, Instant};
 
@@ -120,11 +128,37 @@ pub enum BroadcastError {
     Unanswered(eyre::Report),
 }
 
+/// The header TronGrid reads its API key from.
+pub const API_KEY_HEADER: &str = "TRON-PRO-API-KEY";
+
+/// The env-var key holding the Tron API key for `network`:
+/// `ASPENS_TRON_API_KEY_<NETWORK>`, with `network` normalized as for
+/// [`crate::chain_client::rpc_override_env_key`] (e.g. `tron-nile` →
+/// `ASPENS_TRON_API_KEY_TRON_NILE`).
+pub fn api_key_env_key(network: &str) -> String {
+    format!(
+        "ASPENS_TRON_API_KEY_{}",
+        crate::chain_client::network_env_suffix(network)
+    )
+}
+
 /// A Tron node's HTTP API at one base URL.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TronHttp {
     base: String,
     client: reqwest::Client,
+    /// Sent as [`API_KEY_HEADER`] on every request when set.
+    api_key: Option<String>,
+}
+
+impl std::fmt::Debug for TronHttp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The base can hold a secret in its path or query, and the key is one.
+        f.debug_struct("TronHttp")
+            .field("base", &crate::chain_client::redact_rpc_url(&self.base))
+            .field("api_key", &self.api_key.as_ref().map(|_| "<set>"))
+            .finish()
+    }
 }
 
 /// What one POST came back with.
@@ -146,7 +180,21 @@ impl TronHttp {
         Ok(Self {
             base: base.to_string(),
             client,
+            api_key: None,
         })
+    }
+
+    /// The client for `network`'s node at `base`, carrying the API key from
+    /// [`api_key_env_key`] when that variable is set and not blank.
+    pub fn for_network(base: &str, network: &str) -> Result<Self> {
+        Ok(Self::new(base)?.with_api_key(std::env::var(api_key_env_key(network)).ok()))
+    }
+
+    /// Send `key` as the [`API_KEY_HEADER`] header on every request. `None`
+    /// or a blank key sends no header.
+    pub fn with_api_key(mut self, key: Option<String>) -> Self {
+        self.api_key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+        self
     }
 
     /// The node's HTTP base URL.
@@ -157,7 +205,11 @@ impl TronHttp {
     async fn post_raw(&self, path: &str, body: &Value) -> Result<Posted> {
         let url = join_path(&self.base, path)?;
         let endpoint = crate::chain_client::redact_rpc_url(&self.base);
-        let response = match self.client.post(url).json(body).send().await {
+        let mut request = self.client.post(url).json(body);
+        if let Some(key) = &self.api_key {
+            request = request.header(API_KEY_HEADER, key);
+        }
+        let response = match request.send().await {
             Ok(r) => r,
             Err(e) => {
                 let kind = if e.is_timeout() {
@@ -493,8 +545,12 @@ impl std::error::Error for TronTxError {}
 ///   timestamp, so a new txID) could land beside the first.
 /// * `Ok` only for a receipt whose `receipt.result` is `SUCCESS`. Any other
 ///   receipt is an `Err` with the txID and the reason; OUT_OF_ENERGY and a
-///   broadcast refused for the account's resources name the account.
-/// * Unseen once the head is a block past the expiration is an `Err`.
+///   broadcast refused for the account's resources name the account. A failed
+///   receipt is read at the head, so its message says the failure is not final
+///   yet rather than that the transaction had no effect.
+/// * Unseen once the head is a block past the expiration is an `Err` that
+///   calls the transaction UNCONFIRMED and says to check the txID before
+///   retrying: unseen through one base URL is not proof it never landed.
 pub async fn send_tron_tx(
     http: &TronHttp,
     wallet: &Wallet,
@@ -589,33 +645,46 @@ pub async fn send_tron_tx_with(
             && head.time_ms > expiration_ms + BLOCK_INTERVAL_MS
         {
             // One last look: it may have landed between the read above and
-            // this head.
+            // this head. Unseen is still not proof it never landed: the base
+            // URL can be a load balancer, so the head and this look may come
+            // from different nodes. The outcome is unconfirmed, never "no
+            // effect", so the user checks before sending it again.
+            let endpoint = crate::chain_client::redact_rpc_url(http.base());
             return match http.tx_info(id).await {
                 Ok(Some(info)) => judge(info, &id_hex, owner).map_err(sent),
                 Ok(None) => Err(sent(eyre!(
-                    "tron transaction {id_hex} expired unseen: the head (block {}, {} ms) is \
-                     past its expiration ({expiration_ms} ms) plus a block, and no block \
-                     includes it; it had no effect",
+                    "tron transaction {id_hex} is UNCONFIRMED: not seen before expiry by \
+                     {endpoint} (its head, block {} at {} ms, is past the expiration \
+                     {expiration_ms} ms plus a block); check the txID or the account {owner:#x} \
+                     before retrying",
                     head.number,
                     head.time_ms
                 ))),
                 Err(e) => Err(sent(eyre!(
-                    "tron transaction {id_hex} is past its expiration and its receipt cannot \
-                     be read ({e}); whether it landed is unknown"
+                    "tron transaction {id_hex} is UNCONFIRMED: past its expiration, and its \
+                     receipt cannot be read ({e}); whether it landed is unknown, so check it \
+                     before retrying"
                 ))),
             };
         }
 
         if started.elapsed() >= config.give_up_after {
             return Err(sent(eyre!(
-                "tron transaction {id_hex}: no receipt after {:?} and its expiration could not \
-                 be judged; whether it landed is unknown",
+                "tron transaction {id_hex} is UNCONFIRMED: no receipt after {:?} and its \
+                 expiration could not be judged; whether it landed is unknown, so check it \
+                 before retrying",
                 config.give_up_after
             )));
         }
         tokio::time::sleep(config.poll_interval).await;
     }
 }
+
+/// Said of a failed receipt: it was read at the head, where its block can
+/// still be reorged out and the same signed bytes re-included before they
+/// expire, so the failure is not final.
+const AT_HEAD: &str = "That block is not yet solidified, so this is not final: check the txID \
+                       once it is solidified before retrying";
 
 /// `Ok` for a receipt whose result is `SUCCESS`, and only that.
 fn judge(info: TxInfo, id_hex: &str, owner: Address) -> Result<TronReceipt> {
@@ -631,14 +700,12 @@ fn judge(info: TxInfo, id_hex: &str, owner: Address) -> Result<TronReceipt> {
     if reason.starts_with("OUT_OF_ENERGY") {
         return Err(eyre!(
             "tron transaction {id_hex} ran out of energy in block {}: {reason}. Energy is paid \
-             by burning {owner:#x}'s TRX up to the fee limit: fund that account. It had no \
-             effect",
+             by burning {owner:#x}'s TRX up to the fee limit: fund that account. {AT_HEAD}",
             info.block_number
         ));
     }
     Err(eyre!(
-        "tron transaction {id_hex} was included in block {} and FAILED: {reason}. It had no \
-         effect",
+        "tron transaction {id_hex} FAILED at the head, in block {}: {reason}. {AT_HEAD}",
         info.block_number
     ))
 }
@@ -1137,7 +1204,112 @@ mod tests {
         let err = run(&server).await.unwrap_err().to_string();
         let id = txid(&decode_sent(&broadcasts(&server).await[0]).raw);
         assert!(err.contains(&hex::encode(id)), "{err}");
-        assert!(err.contains("expired unseen"), "{err}");
+        // Unseen through one base URL is not proof it never landed: the
+        // message says UNCONFIRMED and to check first, never "no effect",
+        // so a user does not deposit twice.
+        assert!(err.contains("is UNCONFIRMED"), "{err}");
+        assert!(err.contains("not seen before expiry by"), "{err}");
+        assert!(err.contains(&server.uri()), "names the endpoint: {err}");
+        assert!(err.contains("check the txID or the account"), "{err}");
+        assert!(err.contains("before retrying"), "{err}");
+        assert!(!err.contains("no effect"), "{err}");
+    }
+
+    /// A failed receipt is read at the head, whose block can still be
+    /// reorged out: the message reports the failure without claiming it is
+    /// final.
+    #[tokio::test]
+    async fn a_head_failure_is_not_called_final() {
+        for result in ["FAILED", "OUT_OF_ENERGY", "REVERT"] {
+            let server = MockServer::start().await;
+            mount_node(&server).await;
+            mount_broadcast_ok(&server).await;
+            mount_tx_info(&server, TxInfoEcho::new(result, 0)).await;
+            let err = run(&server).await.unwrap_err().to_string();
+            assert!(err.contains("not yet solidified"), "{result}: {err}");
+            assert!(err.contains("this is not final"), "{result}: {err}");
+            assert!(!err.contains("no effect"), "{result}: {err}");
+        }
+        let server = MockServer::start().await;
+        mount_node(&server).await;
+        mount_broadcast_ok(&server).await;
+        mount_tx_info(&server, TxInfoEcho::new("FAILED", 0)).await;
+        let err = run(&server).await.unwrap_err().to_string();
+        assert!(err.contains("FAILED at the head"), "{err}");
+    }
+
+    /// Sends the default transaction through `http` and returns the
+    /// `TRON-PRO-API-KEY` value every request carried (`None` for none).
+    async fn api_keys_sent(server: &MockServer, http: TronHttp) -> Vec<Option<String>> {
+        mount_node(server).await;
+        mount_broadcast_ok(server).await;
+        mount_tx_info(server, TxInfoEcho::new("SUCCESS", 1)).await;
+        send_tron_tx_with(
+            &http,
+            &wallet(),
+            CONTRACT.parse().unwrap(),
+            &data(),
+            0,
+            WITHDRAW_FEE_LIMIT_SUN,
+            &fast(),
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.len() >= 5, "simulate, blocks, broadcast, receipt");
+        requests
+            .iter()
+            .map(|r| {
+                r.headers
+                    .get(API_KEY_HEADER)
+                    .map(|v| v.to_str().unwrap().to_string())
+            })
+            .collect()
+    }
+
+    /// A configured key goes on every request as the `TRON-PRO-API-KEY`
+    /// header, which is how TronGrid authenticates; none is sent without one.
+    #[tokio::test]
+    async fn the_api_key_is_sent_as_a_header_on_every_request() {
+        let server = MockServer::start().await;
+        let http = TronHttp::new(&server.uri())
+            .unwrap()
+            .with_api_key(Some("k-123".to_string()));
+        let keys = api_keys_sent(&server, http).await;
+        assert!(
+            keys.iter().all(|k| k.as_deref() == Some("k-123")),
+            "{keys:?}"
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().all(|r| r.url.query().is_none()),
+            "the key never rides in the query"
+        );
+
+        for key in [None, Some("  ".to_string())] {
+            let server = MockServer::start().await;
+            let http = TronHttp::new(&server.uri()).unwrap().with_api_key(key);
+            let keys = api_keys_sent(&server, http).await;
+            assert!(keys.iter().all(Option::is_none), "{keys:?}");
+        }
+    }
+
+    /// The key's variable sits beside the endpoint's, one per network, and
+    /// the key never shows in a `Debug` print.
+    #[test]
+    fn the_api_key_is_per_network_and_never_printed() {
+        assert_eq!(
+            api_key_env_key("tron-nile"),
+            "ASPENS_TRON_API_KEY_TRON_NILE"
+        );
+        assert_eq!(api_key_env_key("tron"), "ASPENS_TRON_API_KEY_TRON");
+        let http = TronHttp::new("https://api.trongrid.io/x?apikey=q-secret")
+            .unwrap()
+            .with_api_key(Some("k-secret".to_string()));
+        let shown = format!("{http:?}");
+        assert!(!shown.contains("k-secret"), "{shown}");
+        assert!(!shown.contains("q-secret"), "{shown}");
+        assert!(shown.contains("<set>"), "{shown}");
     }
 
     /// Exactly at expiration + one block the transaction can still be in

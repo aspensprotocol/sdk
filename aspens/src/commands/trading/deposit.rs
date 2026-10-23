@@ -172,7 +172,7 @@ async fn tron_deposit(
     // Before building or signing anything: a missing or dead endpoint fails
     // here, politely (the probe is `eth_chainId` at `/jsonrpc`).
     let base = crate::chain_client::checked_chain_rpc_url(chain).await?;
-    let http = crate::tron::client::TronHttp::new(&base)?;
+    let http = crate::tron::client::TronHttp::for_network(&base, &chain.network)?;
     tron_deposit_at(
         &http,
         chain,
