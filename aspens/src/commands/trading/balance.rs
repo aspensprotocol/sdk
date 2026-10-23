@@ -6,13 +6,15 @@ use std::collections::HashMap;
 use tracing::{info, warn};
 use url::Url;
 
+#[cfg(test)]
+use crate::chain_client::ARCH_SOLANA;
+use crate::chain_client::ChainClient;
 use crate::chain_client::named_chain_for;
-use crate::chain_client::{ARCH_SOLANA, ChainClient};
 use crate::commands::config::config_pb::{Chain, Configuration, GetConfigResponse};
 use crate::evm::rpc::{IERC20, MidribV3};
 #[cfg(test)]
 use crate::wallet::CurveType;
-use crate::wallet::Wallet;
+use crate::wallet::{Architecture, Wallet};
 
 /// Represents a unique token across all chains
 #[derive(Debug, Clone)]
@@ -35,6 +37,17 @@ struct ChainBalance {
 struct NativeBalance {
     chain_network: String,
     balance: String,
+    /// Decimals of the native unit the balance is in.
+    decimals: u32,
+}
+
+/// Decimals of a chain's native gas unit as `native_balance` reports it: wei
+/// (18) on EVM, sun (6) on Tron. Solana keeps the table's long-standing 18.
+fn native_decimals(chain: &Chain) -> u32 {
+    match crate::wallet::chain_architecture(chain) {
+        Ok(Architecture::Tron) => 6,
+        Ok(Architecture::Evm | Architecture::Solana) | Err(_) => 18,
+    }
 }
 
 /// Aggregated balance for a single token across all chains
@@ -138,7 +151,7 @@ fn display_all_token_balances(
 
         // Add native gas balance for this chain
         if let Some(native) = native_balances.iter().find(|nb| nb.chain_network == *chain) {
-            let gas_balance = format_balance_with_decimals(&native.balance, 18);
+            let gas_balance = format_balance_with_decimals(&native.balance, native.decimals);
             table.add_row(vec![
                 "GAS".to_string(),
                 gas_balance,
@@ -297,14 +310,36 @@ async fn query_token_balance_via_client(
         |v| v.to_string(),
     );
 
-    // Locked/deposited balances come from the trade contract.
-    // Solana side is not yet wired up; EVM uses MidribV3.
-    let (available_balance, locked_balance) = if chain
-        .architecture
-        .eq_ignore_ascii_case(ARCH_SOLANA)
-    {
+    // Locked/deposited balances come from the trade contract: the Midrib
+    // program's UserBalance PDA on Solana, MidribV3 on EVM and on Tron (read
+    // over its `/jsonrpc`).
+    let architecture = match crate::wallet::chain_architecture(chain) {
+        Ok(a) => a,
+        Err(e) => {
+            warn!("{e}");
+            return ChainBalance {
+                chain_network,
+                wallet_balance,
+                available_balance: "bad architecture".to_string(),
+                locked_balance: "bad architecture".to_string(),
+            };
+        }
+    };
+    let (available_balance, locked_balance) = if architecture == Architecture::Solana {
         solana_user_balance(chain, token, owner_address).await
     } else {
+        let rpc = match crate::chain_client::evm_read_url_for(chain, &rpc) {
+            Ok(u) => u,
+            Err(e) => {
+                warn!("No EVM read endpoint for {}: {}", chain_network, e);
+                return ChainBalance {
+                    chain_network,
+                    wallet_balance,
+                    available_balance: "error".to_string(),
+                    locked_balance: "error".to_string(),
+                };
+            }
+        };
         let contract_address = chain
             .trade_contract
             .as_ref()
@@ -371,7 +406,15 @@ async fn query_token_balance_via_client(
 /// caller-supplied wallet matches — the chain's rows are reported as
 /// "no wallet" rather than erroring out.
 fn select_wallet_for_chain<'a>(chain: &Chain, wallets: &'a [&'a Wallet]) -> Option<&'a Wallet> {
-    let wanted = crate::wallet::chain_curve(chain).ok()?;
+    // A chain whose architecture is unknown has no wallet to read with; say
+    // why rather than let it look like a missing key.
+    let wanted = match crate::wallet::chain_curve(chain) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("{e}");
+            return None;
+        }
+    };
     wallets.iter().copied().find(|w| w.curve() == wanted)
 }
 
@@ -441,6 +484,7 @@ pub async fn balance_from_config_with_wallets(
             None => {
                 native_balances.push(NativeBalance {
                     chain_network: chain.network.clone(),
+                    decimals: native_decimals(chain),
                     balance: "no wallet".to_string(),
                 });
                 continue;
@@ -453,6 +497,7 @@ pub async fn balance_from_config_with_wallets(
                 warn!("Failed to build client for {}: {}", chain.network, e);
                 native_balances.push(NativeBalance {
                     chain_network: chain.network.clone(),
+                    decimals: native_decimals(chain),
                     balance: "error".to_string(),
                 });
                 continue;
@@ -468,6 +513,7 @@ pub async fn balance_from_config_with_wallets(
         native_balances.push(NativeBalance {
             chain_network: chain.network.clone(),
             balance,
+            decimals: native_decimals(chain),
         });
     }
 
@@ -708,6 +754,38 @@ mod tests {
         let mixed_b: [&Wallet; 2] = [&sol, &evm];
         let pick = select_wallet_for_chain(&evm_chain(), &mixed_b).unwrap();
         assert_eq!(pick.curve(), CurveType::Secp256k1);
+    }
+
+    /// A Tron chain reads with the EVM key, and its GAS row is in sun (6
+    /// decimals), not wei: 10 TRX must print as 10, not 0.00000000001.
+    #[test]
+    fn tron_chain_uses_the_evm_wallet_and_sun_decimals() {
+        let w = evm_wallet();
+        let wallets: [&Wallet; 1] = [&w];
+        let tron = Chain {
+            architecture: "Tron".to_string(),
+            ..Default::default()
+        };
+        assert!(select_wallet_for_chain(&tron, &wallets).is_some());
+        assert_eq!(native_decimals(&tron), 6);
+        assert_eq!(native_decimals(&evm_chain()), 18);
+        assert_eq!(
+            format_balance_with_decimals("10000000", native_decimals(&tron)),
+            "10.000000"
+        );
+    }
+
+    /// An unknown architecture selects no wallet (and is logged), never an
+    /// EVM default.
+    #[test]
+    fn unknown_architecture_selects_no_wallet() {
+        let w = evm_wallet();
+        let wallets: [&Wallet; 1] = [&w];
+        let sui = Chain {
+            architecture: "sui".to_string(),
+            ..Default::default()
+        };
+        assert!(select_wallet_for_chain(&sui, &wallets).is_none());
     }
 
     #[test]

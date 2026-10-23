@@ -9,6 +9,34 @@ change before 1.0.
 
 ## [Unreleased]
 
+### Added
+
+- **Tron.** A chain whose architecture is `Tron` is an EVM chain with four
+  differences, and the SDK now handles all four: reads go through the node's
+  `/jsonrpc` with the EVM code (`ChainClient::Tron`,
+  `chain_client::evm_read_url`); writes are native Tron transactions
+  (`tron::client::send_tron_tx`: simulated first, signed once, the identical
+  hex rebroadcast, `Ok` only on a `SUCCESS` receipt); orders, cancels and
+  withdraw requests on a Tron leg are signed under the TRON message prefix;
+  and a `T…` address is a display/input form converted to `0x` hex at the CLI
+  edge. Deposit (USDT `approve` + `deposit`, TRX `depositNative` with
+  `call_value`), voucher withdraw and balance all have Tron arms. The `tron`
+  feature is now on by default. `aspens-admin deploy-contract` refuses a Tron
+  chain (the deployer creates Tron instances), and the FCE transport refuses
+  Tron legs.
+- `wallet::Architecture` (`Evm`, `Solana`, `Tron`) and
+  `wallet::chain_architecture`: the one parser every per-chain dispatch now
+  matches on. An unknown architecture is an error everywhere, never an EVM
+  default.
+
+### Changed
+
+- **BREAKING: `chain_curve` returns `Result<CurveType>`** (it returned
+  `CurveType`). An unknown architecture is an error instead of secp256k1.
+- `orders::validate_settle_address` errors on an unknown architecture and
+  refuses a Tron `T…` address (the venue carries Tron accounts as `0x` hex).
+- The balance table prints a Tron chain's GAS row in sun (6 decimals).
+
 ## [0.8.0] — 2026-10-20
 
 **Pairs with an arborter that has replay protection (arborter #380).** Against

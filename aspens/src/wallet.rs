@@ -21,6 +21,45 @@ pub enum CurveType {
     Ed25519,
 }
 
+/// The kind of chain a config entry describes. Every per-chain dispatch in
+/// the SDK matches on this, so a new architecture is a compile error at each
+/// site rather than a silent EVM default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Architecture {
+    /// An EVM chain: Alloy reads and writes, EIP-191 user signatures.
+    Evm,
+    /// Solana: the Midrib program, Ed25519 signatures.
+    Solana,
+    /// Tron: an EVM-compatible chain whose reads go through its `/jsonrpc`
+    /// endpoint, whose writes are native Tron transactions, and whose users
+    /// sign under the TRON message prefix. The key is the EVM one.
+    Tron,
+}
+
+impl Architecture {
+    /// Parse a config `architecture` string, case-insensitively. Empty means
+    /// EVM (configs that predate the field); anything unknown is an error.
+    pub fn parse(architecture: &str) -> Result<Self> {
+        match architecture.to_ascii_lowercase().as_str() {
+            "" | "evm" => Ok(Architecture::Evm),
+            "solana" => Ok(Architecture::Solana),
+            "tron" => Ok(Architecture::Tron),
+            _ => Err(eyre!(
+                "unknown architecture '{architecture}' (expected evm, solana or tron)"
+            )),
+        }
+    }
+
+    /// The curve this architecture's keys live on. A Tron account is the same
+    /// secp256k1 key as an EVM one.
+    pub fn curve(self) -> CurveType {
+        match self {
+            Architecture::Evm | Architecture::Tron => CurveType::Secp256k1,
+            Architecture::Solana => CurveType::Ed25519,
+        }
+    }
+}
+
 /// A wallet that can sign messages on EVM (always) or Solana (with `solana`
 /// feature) chains.
 pub enum Wallet {
@@ -95,6 +134,18 @@ impl Wallet {
         }
     }
 
+    /// The wallet's Tron `T…` address, for display beside the hex: `Some` for
+    /// an EVM wallet (a Tron account is the same 20 bytes), `None` otherwise.
+    /// Never sent to the venue, which carries the account as `0x` hex.
+    #[cfg(feature = "tron")]
+    pub fn tron_address(&self) -> Option<String> {
+        match self {
+            Wallet::Evm(s) => crate::tron::hex_to_tron(&format!("{:#x}", s.address())).ok(),
+            #[cfg(feature = "solana")]
+            Wallet::Solana(_) => None,
+        }
+    }
+
     /// Sign an arbitrary message and return the raw signature bytes.
     /// - EVM: 65-byte ECDSA signature (r || s || v)
     /// - Solana: 64-byte Ed25519 signature
@@ -165,25 +216,31 @@ pub fn load_trader_wallet(curve: CurveType) -> Result<Wallet> {
 // feature. They are gated accordingly so lean-signing consumers
 // (`--no-default-features --features evm,solana`) can still build.
 
+/// The [`Architecture`] of a chain config entry; an unknown string is an
+/// error that names the chain.
+#[cfg(feature = "client")]
+pub fn chain_architecture(
+    chain: &crate::commands::config::config_pb::Chain,
+) -> Result<Architecture> {
+    Architecture::parse(&chain.architecture).map_err(|_| {
+        eyre!(
+            "chain '{}' has unknown architecture '{}' (expected evm, solana or tron)",
+            chain.network,
+            chain.architecture
+        )
+    })
+}
+
 /// Map a chain's architecture to the curve its keys live on.
 ///
 /// The match is closed and case-insensitive: `evm` (or empty) and `tron` use
 /// secp256k1 (a Tron account is the same key as an EVM one), `solana` uses
 /// Ed25519, and anything else is an error rather than a silent EVM default.
-/// Mirrors the dispatch in
-/// [`crate::chain_client::ChainClient::from_chain_config`] and the privileged
-/// signing paths in `commands::trading`.
+/// [`chain_architecture`] is the one parser; every per-chain dispatch in the
+/// SDK goes through it.
 #[cfg(feature = "client")]
 pub fn chain_curve(chain: &crate::commands::config::config_pb::Chain) -> Result<CurveType> {
-    match chain.architecture.to_ascii_lowercase().as_str() {
-        "" | "evm" | "tron" => Ok(CurveType::Secp256k1),
-        "solana" => Ok(CurveType::Ed25519),
-        _ => Err(eyre!(
-            "chain '{}' has unknown architecture '{}' (expected evm, solana or tron)",
-            chain.network,
-            chain.architecture
-        )),
-    }
+    Ok(chain_architecture(chain)?.curve())
 }
 
 /// Load the trader wallet whose curve matches `chain`'s architecture.

@@ -3,7 +3,6 @@ use std::fmt;
 use super::arborter_pb::arborter_service_client::ArborterServiceClient;
 use super::arborter_pb::{CancelOrderRequest, CancelOrderResponse, OrderToCancel};
 use eyre::Result;
-use prost::Message;
 
 use crate::commands::config::config_pb::GetConfigResponse;
 use crate::grpc::create_channel;
@@ -19,13 +18,15 @@ impl fmt::Display for CancelOrderResponse {
     }
 }
 
-/// Cancel an order using a curve-agnostic wallet (EVM or Solana).
+/// Cancel an order using a curve-agnostic wallet, signed the way the
+/// order's giving chain (`architecture`) verifies it.
 pub(crate) async fn call_cancel_order_with_wallet(
     url: String,
     market_id: String,
     side: i32,
     order_id: [u8; 32],
     wallet: &Wallet,
+    architecture: crate::wallet::Architecture,
 ) -> Result<CancelOrderResponse> {
     // Create a channel to connect to the gRPC server
     let channel = create_channel(&url).await?;
@@ -40,15 +41,12 @@ pub(crate) async fn call_cancel_order_with_wallet(
         order_id: order_id.to_vec(),
     };
 
-    // Serialize for signing
-    let mut buffer = Vec::new();
-    order_to_cancel.encode(&mut buffer)?;
-
-    // Sign the cancel request. Send the full curve-native length — the
-    // arborter's curve-aware verifier requires exactly 64 bytes for
-    // Ed25519 and 65 for secp256k1 (r||s||v); truncating to 64 would drop
-    // the v byte of an EVM signature and fail verification.
-    let signature_bytes = wallet.sign_message(&buffer).await?;
+    // Sign the cancel request through the shared envelope signer (EIP-191,
+    // Ed25519, or the TRON prefix over the hex text). Send the full
+    // curve-native length — the arborter's curve-aware verifier requires
+    // exactly 64 bytes for Ed25519 and 65 for secp256k1 (r||s||v); truncating
+    // to 64 would drop the v byte and fail verification.
+    let signature_bytes = super::sign_encoded(&order_to_cancel, wallet, architecture).await?;
 
     // Create the request
     let request = CancelOrderRequest {
@@ -132,7 +130,27 @@ pub async fn call_cancel_order_from_config_with_wallet(
         hex::encode(order_id)
     );
 
-    call_cancel_order_with_wallet(url, market.market_id.clone(), side_value, order_id, wallet).await
+    // The order's giving chain (bid: quote, ask: base) is the one whose
+    // wallet signed it, and whose scheme signs its cancel.
+    let origin = super::send_order::origin_network_for_side(
+        &config,
+        &market.market_id,
+        super::send_order::parse_side(&side)?,
+    )?;
+    let chain = config
+        .get_chain(origin)
+        .ok_or_else(|| eyre::eyre!("chain '{origin}' not in config"))?;
+    let architecture = crate::wallet::chain_architecture(chain)?;
+
+    call_cancel_order_with_wallet(
+        url,
+        market.market_id.clone(),
+        side_value,
+        order_id,
+        wallet,
+        architecture,
+    )
+    .await
 }
 
 #[cfg(test)]

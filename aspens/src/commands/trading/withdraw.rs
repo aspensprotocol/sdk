@@ -4,16 +4,14 @@ use crate::chain_client::named_chain_for;
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, Bytes, U256};
 use alloy::providers::{Provider, ProviderBuilder};
-use alloy::signers::Signer;
 use alloy::signers::local::PrivateKeySigner;
 use eyre::Result;
 use url::Url;
 
-use crate::chain_client::ARCH_SOLANA;
 use crate::commands::config::config_pb::GetConfigResponse;
 use crate::evm::rpc::MidribV3;
 use crate::grpc::create_channel;
-use crate::wallet::{CurveType, Wallet};
+use crate::wallet::{Architecture, CurveType, Wallet};
 
 use super::arborter_pb::WithdrawRequest;
 use super::arborter_pb::arborter_service_client::ArborterServiceClient;
@@ -160,6 +158,9 @@ impl VoucherSource<'_> {
 ///   then submits the Midrib program's `withdraw_voucher` instruction
 ///   on-chain (the wallet pays gas). The voucher is the authorization,
 ///   mirroring the EVM path.
+/// - **Tron**: the EVM voucher flow with the request signed under the TRON
+///   message prefix and `withdraw(voucher, signature)` sent as a native Tron
+///   transaction (the wallet burns TRX for its energy).
 pub async fn call_withdraw_from_config_with_wallet(
     url: String,
     network: String,
@@ -262,24 +263,29 @@ async fn withdraw_from_source(
         .get_chain(&network)
         .ok_or_else(|| eyre::eyre!("Chain '{}' not found in configuration", network))?;
 
-    if chain_for_arch
-        .architecture
-        .eq_ignore_ascii_case(ARCH_SOLANA)
-    {
-        // Solana SPL token amounts are natively u64 — downcast (checked) at the
-        // boundary (DEC-1: u128 upstream, u64 on Solana).
-        let spl_amount: u64 = amount.try_into().map_err(|_| {
-            eyre::eyre!("amount {amount} exceeds the SPL token u64 max on Solana chain '{network}'")
-        })?;
-        return solana_withdraw(
-            source,
-            chain_for_arch,
-            &token_symbol,
-            spl_amount,
-            wallet,
-            opts.unwrap_native,
-        )
-        .await;
+    match crate::wallet::chain_architecture(chain_for_arch)? {
+        Architecture::Solana => {
+            // Solana SPL token amounts are natively u64 — downcast (checked) at the
+            // boundary (DEC-1: u128 upstream, u64 on Solana).
+            let spl_amount: u64 = amount.try_into().map_err(|_| {
+                eyre::eyre!(
+                    "amount {amount} exceeds the SPL token u64 max on Solana chain '{network}'"
+                )
+            })?;
+            return solana_withdraw(
+                source,
+                chain_for_arch,
+                &token_symbol,
+                spl_amount,
+                wallet,
+                opts.unwrap_native,
+            )
+            .await;
+        }
+        Architecture::Tron => {
+            return tron_withdraw(source, chain_for_arch, &token_symbol, amount, wallet).await;
+        }
+        Architecture::Evm => {}
     }
 
     if wallet.curve() != CurveType::Secp256k1 {
@@ -362,7 +368,7 @@ async fn solana_withdraw(
         "{}|{}|{}|{}",
         chain.network, token.address, account_str, amount
     );
-    let req_sig = wallet.sign_message(canonical.as_bytes()).await?;
+    let req_sig = super::sign_withdraw_request(wallet, Architecture::Solana, &canonical).await?;
 
     // 2) Request the TEE-signed voucher.
     let voucher = source
@@ -513,6 +519,202 @@ async fn solana_withdraw(
     ))
 }
 
+/// TRX a Tron withdraw needs before a voucher is requested, in sun: the
+/// costliest measured voucher withdraw on Nile (84,386 energy x 100 sun +
+/// 604,000 sun of bandwidth). A voucher places a hold, so one the wallet
+/// cannot pay to submit would strand it until expiry.
+#[cfg(feature = "tron")]
+const MIN_TRX_FOR_WITHDRAW_SUN: u128 = 84_386 * 100 + 604_000;
+
+/// Tron withdraw via the TEE voucher flow: the EVM flow with the request
+/// signed under the TRON prefix and the voucher redeemed by a native Tron
+/// transaction ([`submit_tron_voucher`]).
+#[cfg(feature = "tron")]
+async fn tron_withdraw(
+    source: VoucherSource<'_>,
+    chain: &crate::commands::config::config_pb::Chain,
+    token_symbol: &str,
+    amount: u128,
+    wallet: &Wallet,
+) -> Result<()> {
+    match source {
+        VoucherSource::Grpc(_) => {}
+        #[cfg(feature = "fce")]
+        VoucherSource::Fce(_) => {
+            return Err(eyre::eyre!(
+                "chain '{}' is Tron, which the FCE direct-action transport does not carry; \
+                 use the gRPC transport",
+                chain.network
+            ));
+        }
+    }
+    let token = chain.tokens.get(token_symbol).ok_or_else(|| {
+        eyre::eyre!(
+            "Token '{}' not found on Tron chain '{}'",
+            token_symbol,
+            chain.network
+        )
+    })?;
+    let owner = wallet
+        .as_evm()
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "Tron chain '{}' requires a secp256k1 wallet (TRADER_PRIVKEY)",
+                chain.network
+            )
+        })?
+        .address();
+    let contract: Address = chain
+        .trade_contract
+        .as_ref()
+        .ok_or_else(|| eyre::eyre!("Trade contract not found for chain '{}'", chain.network))?
+        .address
+        .parse()?;
+    let token_addr: Address = token.address.parse()?;
+
+    // Before requesting a voucher (which places a hold): a missing or dead
+    // endpoint, or a wallet with too little TRX to pay for the withdraw,
+    // fails here with nothing held.
+    let base = crate::chain_client::checked_chain_rpc_url(chain).await?;
+    let http = crate::tron::client::TronHttp::new(&base)?;
+    let jsonrpc = Url::parse(&crate::tron::client::jsonrpc_url(&base)?)?;
+    let trx = ProviderBuilder::new()
+        .connect_http(jsonrpc)
+        .get_balance(owner)
+        .await?;
+    if trx < U256::from(MIN_TRX_FOR_WITHDRAW_SUN) {
+        return Err(eyre::eyre!(
+            "insufficient TRX: {owner:#x} holds {trx} sun, and a voucher withdraw burns up to \
+             about {MIN_TRX_FOR_WITHDRAW_SUN} sun. Fund it with TRX on {}. (No voucher \
+             requested — your withdrawable balance is untouched.)",
+            chain.network
+        ));
+    }
+
+    // The venue carries a Tron account as lowercase 0x hex; the request text
+    // is signed as is under the TRON prefix.
+    let req_account = format!("{owner:#x}");
+    let req_amount = amount.to_string();
+    let canonical = format!(
+        "{}|{}|{}|{}",
+        chain.network, token.address, req_account, req_amount
+    );
+    let req_sig = super::sign_withdraw_request(wallet, Architecture::Tron, &canonical).await?;
+    let voucher = source
+        .fetch(
+            &chain.network,
+            &token.address,
+            &req_account,
+            &req_amount,
+            req_sig,
+        )
+        .await?;
+    tracing::info!(
+        "Received Tron withdrawal voucher (nonce={}, expiry={})",
+        voucher.nonce,
+        voucher.expiry
+    );
+    submit_tron_voucher(
+        &http,
+        wallet,
+        contract,
+        token_addr,
+        amount,
+        voucher,
+        &crate::tron::client::SendConfig::default(),
+    )
+    .await
+}
+
+#[cfg(not(feature = "tron"))]
+async fn tron_withdraw(
+    _source: VoucherSource<'_>,
+    chain: &crate::commands::config::config_pb::Chain,
+    _token_symbol: &str,
+    _amount: u128,
+    _wallet: &Wallet,
+) -> Result<()> {
+    Err(eyre::eyre!(
+        "chain '{}' is Tron but the `tron` feature is disabled",
+        chain.network
+    ))
+}
+
+/// Redeem `voucher` with `withdraw(voucher, signature)` on a Tron instance.
+///
+/// A withdraw the simulation refuses was never signed or sent (a fresh
+/// voucher's backing settle may not be visible yet), so the same voucher is
+/// tried again, as on EVM. One that was sent and failed is an `Err` at once:
+/// it burned its energy, and its receipt says why.
+#[cfg(feature = "tron")]
+pub(crate) async fn submit_tron_voucher(
+    http: &crate::tron::client::TronHttp,
+    wallet: &Wallet,
+    contract: Address,
+    token: Address,
+    requested_amount: u128,
+    voucher: Voucher,
+    send: &crate::tron::client::SendConfig,
+) -> Result<()> {
+    use crate::tron::client::{TronTxError, WITHDRAW_FEE_LIMIT_SUN, send_tron_tx_with};
+    use alloy::sol_types::SolCall;
+
+    let account = wallet
+        .as_evm()
+        .ok_or_else(|| eyre::eyre!("a Tron withdraw needs a secp256k1 wallet"))?
+        .address();
+    let data = MidribV3::withdrawCall {
+        _v: MidribV3::WithdrawalVoucher {
+            account,
+            token,
+            // Echoed back by the arborter; fall back to the requested amount.
+            amount: U256::from_str(&voucher.amount).unwrap_or(U256::from(requested_amount)),
+            nonce: U256::from(voucher.nonce),
+            expiry: U256::from(voucher.expiry),
+        },
+        _signature: Bytes::from(voucher.signature),
+    }
+    .abi_encode();
+
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match send_tron_tx_with(
+            http,
+            wallet,
+            contract,
+            &data,
+            0,
+            WITHDRAW_FEE_LIMIT_SUN,
+            send,
+        )
+        .await
+        {
+            Ok(receipt) => {
+                tracing::info!(
+                    "Tron withdraw voucher redeemed: {} (block {})",
+                    hex::encode(receipt.txid),
+                    receipt.block_number
+                );
+                return Ok(());
+            }
+            Err(TronTxError::NotSent(e)) if attempt < EVM_VOUCHER_SUBMIT_MAX_ATTEMPTS => {
+                tracing::warn!(
+                    attempt,
+                    error = %e,
+                    "Tron voucher withdraw refused before sending (possibly a settle not yet \
+                     visible); trying the same voucher again"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    EVM_VOUCHER_SUBMIT_RETRY_MS,
+                ))
+                .await;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 /// EVM withdraw via the TEE voucher flow: authenticate the request, get an
 /// owner-signed voucher from the arborter, submit it on-chain. There is no
 /// permissionless on-chain `withdraw`; the voucher is the only authorization
@@ -642,16 +844,12 @@ async fn call_withdraw_from_config_evm(
     let req_token = token.address.clone();
     let req_amount = amount.to_string();
     let canonical = format!("{network}|{req_token}|{req_account}|{req_amount}");
-    let req_sig = signer.sign_message(canonical.as_bytes()).await?;
+    let req_sig =
+        super::sign_withdraw_request(&Wallet::Evm(signer.clone()), Architecture::Evm, &canonical)
+            .await?;
 
     let voucher = source
-        .fetch(
-            &network,
-            &req_token,
-            &req_account,
-            &req_amount,
-            req_sig.as_bytes().to_vec(),
-        )
+        .fetch(&network, &req_token, &req_account, &req_amount, req_sig)
         .await?;
     tracing::info!(
         "Received withdrawal voucher (nonce={}, expiry={})",
@@ -728,3 +926,108 @@ async fn call_withdraw_from_config_evm(
 const EVM_VOUCHER_SUBMIT_MAX_ATTEMPTS: usize = 4;
 /// Backoff between EVM voucher-submit retries.
 const EVM_VOUCHER_SUBMIT_RETRY_MS: u64 = 700;
+
+#[cfg(all(test, feature = "tron"))]
+mod tron_tests {
+    use super::*;
+    use crate::tron::client::mock::*;
+    use crate::tron::client::{TronHttp, WITHDRAW_FEE_LIMIT_SUN};
+    use alloy::sol_types::SolCall;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn voucher() -> Voucher {
+        Voucher {
+            amount: "1000000".into(),
+            nonce: 7,
+            expiry: 1_900_000_000,
+            signature: vec![0x11; 65],
+        }
+    }
+
+    async fn submit(server: &MockServer) -> Result<()> {
+        submit_tron_voucher(
+            &TronHttp::new(&server.uri()).unwrap(),
+            &wallet(),
+            MIDRIB.parse().unwrap(),
+            USDT.parse().unwrap(),
+            1_000_000,
+            voucher(),
+            &fast(),
+        )
+        .await
+    }
+
+    /// A voucher withdraw that landed and reverted (the stock contract's
+    /// `TransferFailed()` on USDT) is an `Err` naming the txID, and it is not
+    /// broadcast again.
+    #[tokio::test]
+    async fn tron_withdraw_reverted_is_err() {
+        let server = MockServer::start().await;
+        mount_node(&server).await;
+        mount_broadcast_ok(&server).await;
+        mount_tx_info(&server, TxInfoEcho::new("REVERT", 1)).await;
+        let err = submit(&server).await.unwrap_err().to_string();
+        let sent = broadcasts(&server).await;
+        assert_eq!(sent.len(), 1, "a landed revert is not resubmitted");
+        let tx = decode_sent(&sent[0]);
+        let id = crate::tron::txid(&tx.raw);
+        assert!(err.contains(&hex::encode(id)), "{err}");
+        assert!(err.contains("REVERT"), "{err}");
+        let data = bytes_of(&tx.trigger, 4);
+        assert_eq!(data[..4], MidribV3::withdrawCall::SELECTOR);
+        assert_eq!(
+            varint_of(&fields(&tx.raw), 18) as i64,
+            WITHDRAW_FEE_LIMIT_SUN
+        );
+    }
+
+    /// The voucher withdraw sends `withdraw(voucher, signature)` for the
+    /// wallet's own account, with no call value, and succeeds on SUCCESS.
+    #[tokio::test]
+    async fn tron_withdraw_sends_the_voucher() {
+        let server = MockServer::start().await;
+        mount_node(&server).await;
+        mount_broadcast_ok(&server).await;
+        mount_tx_info(&server, TxInfoEcho::new("SUCCESS", 0)).await;
+        submit(&server).await.unwrap();
+        let tx = decode_sent(&broadcasts(&server).await[0]);
+        assert_eq!(field(&tx.trigger, 3), None);
+        let call = MidribV3::withdrawCall::abi_decode(&bytes_of(&tx.trigger, 4)).unwrap();
+        assert_eq!(call._v.account, wallet().as_evm().unwrap().address());
+        assert_eq!(call._v.token, USDT.parse::<Address>().unwrap());
+        assert_eq!(call._v.amount, U256::from(1_000_000u64));
+        assert_eq!(call._v.nonce, U256::from(7u64));
+        assert_eq!(call._v.expiry, U256::from(1_900_000_000u64));
+        assert_eq!(call._signature.to_vec(), vec![0x11; 65]);
+    }
+
+    /// The settle backing a fresh voucher may not be visible yet, so the
+    /// simulation refuses it. Nothing was sent, so the same voucher is tried
+    /// again, and goes through once the simulation passes.
+    #[tokio::test]
+    async fn tron_withdraw_retries_a_simulated_refusal() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/wallet/triggerconstantcontract"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "transaction": {"ret": [{"ret": "FAILED"}]},
+                "result": {"result": true, "message": hex::encode("REVERT opcode executed")},
+            })))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        mount_node(&server).await;
+        mount_broadcast_ok(&server).await;
+        mount_tx_info(&server, TxInfoEcho::new("SUCCESS", 0)).await;
+        submit(&server).await.unwrap();
+        assert_eq!(
+            bodies(&server, "/wallet/triggerconstantcontract")
+                .await
+                .len(),
+            2
+        );
+        assert_eq!(broadcasts(&server).await.len(), 1);
+    }
+}

@@ -668,16 +668,23 @@ mod tron_parity {
                 s(&v, &format!("{p}/signature")),
                 "{name}"
             );
-            let wrapped = signed_hex(&raw, &sig);
-            assert!(wrapped.starts_with("0a"), "{name}");
-            assert!(
-                wrapped.ends_with(&format!("1241{}", hex::encode(sig))),
-                "{name}"
+            // `Transaction { raw_data = 1; signature = 2 }`, spelled out
+            // from the fixture's own bytes: tag 0x0a, the raw length as a
+            // varint, raw_data, then tag 0x12, length 65, the signature.
+            let mut len = Vec::new();
+            let mut n = raw.len();
+            while n >= 0x80 {
+                len.push((n as u8 & 0x7f) | 0x80);
+                n >>= 7;
+            }
+            len.push(n as u8);
+            let expected = format!(
+                "0a{}{}1241{}",
+                hex::encode(len),
+                s(&v, &format!("{p}/raw_data_hex")).trim_start_matches("0x"),
+                s(&v, &format!("{p}/signature")).trim_start_matches("0x")
             );
-            assert!(
-                wrapped.contains(&s(&v, &format!("{p}/raw_data_hex"))),
-                "{name}"
-            );
+            assert_eq!(signed_hex(&raw, &sig), expected, "{name}");
         }
     }
 
@@ -705,8 +712,8 @@ mod tron_parity {
         let wallet = test_wallet(&v);
 
         // Order: the fixture's prost bytes are rebuilt through the sdk's own
-        // generated `Order`, which also checks premise 2 (byte-identical
-        // encoding with the arborter's).
+        // generated `Order`, which also checks that the sdk encodes it
+        // byte-identically to the arborter.
         #[cfg(feature = "client")]
         {
             use aspens::commands::trading::arborter_pb::Order;

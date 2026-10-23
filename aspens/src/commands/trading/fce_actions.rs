@@ -99,6 +99,18 @@ fn check_order_expressible_over_fce(side: i32, price: Option<&str>) -> Result<()
     Ok(())
 }
 
+/// The FCE direct-action transport predates Tron: its adapter knows EVM and
+/// Solana legs only, so a Tron leg is refused before anything is signed.
+fn refuse_tron_over_fce(architecture: crate::wallet::Architecture, network: &str) -> Result<()> {
+    match architecture {
+        crate::wallet::Architecture::Evm | crate::wallet::Architecture::Solana => Ok(()),
+        crate::wallet::Architecture::Tron => Err(eyre!(
+            "chain '{network}' is Tron, which the FCE direct-action transport does not carry; \
+             use the gRPC transport"
+        )),
+    }
+}
+
 /// Place a buy/sell order via FCE. `side` is "buy"/"sell"/"bid"/"ask"; amounts
 /// are display units (converted to pair decimals here, as in the gRPC path).
 ///
@@ -142,8 +154,12 @@ pub async fn place_order(
     let quote_chain = config
         .get_chain(&market.quote_chain_network)
         .ok_or_else(|| eyre!("quote chain '{}' not in config", market.quote_chain_network))?;
-    let base_curve = crate::wallet::chain_curve(base_chain)?;
-    let quote_curve = crate::wallet::chain_curve(quote_chain)?;
+    let base_architecture = crate::wallet::chain_architecture(base_chain)?;
+    let quote_architecture = crate::wallet::chain_architecture(quote_chain)?;
+    refuse_tron_over_fce(base_architecture, &market.base_chain_network)?;
+    refuse_tron_over_fce(quote_architecture, &market.quote_chain_network)?;
+    let base_curve = base_architecture.curve();
+    let quote_curve = quote_architecture.curve();
     let base_wallet = wallets
         .iter()
         .copied()
@@ -155,10 +171,10 @@ pub async fn place_order(
         .find(|w| w.curve() == quote_curve)
         .ok_or_else(|| eyre!("no wallet for quote chain '{}'", market.quote_chain_network))?;
     // Bid locks quote, Ask locks base — the signing side.
-    let signing_wallet = if side_i == Side::Bid as i32 {
-        quote_wallet
+    let (signing_wallet, signing_architecture) = if side_i == Side::Bid as i32 {
+        (quote_wallet, quote_architecture)
     } else {
-        base_wallet
+        (base_wallet, base_architecture)
     };
 
     // Build the arborter Order EXACTLY as `call_send_order` does (the adapter
@@ -185,7 +201,7 @@ pub async fn place_order(
         // the arborter refuses this order until that transport learns one.
         session: 0,
     };
-    let signature_hash = super::sign_encoded(&order, signing_wallet).await?;
+    let signature_hash = super::sign_encoded(&order, signing_wallet, signing_architecture).await?;
 
     let commitment = build_order_commitment(
         &config,
@@ -241,7 +257,13 @@ pub async fn cancel_order(
         side: side_i,
         order_id: order_id.to_vec(),
     };
-    let signature_hash = super::sign_encoded(&to_cancel, wallet).await?;
+    // FCE carries EVM and Solana legs only (Tron is refused before this in
+    // `cancel_order_from_config`), so the wallet's curve names the scheme.
+    let architecture = match wallet.curve() {
+        crate::wallet::CurveType::Secp256k1 => crate::wallet::Architecture::Evm,
+        crate::wallet::CurveType::Ed25519 => crate::wallet::Architecture::Solana,
+    };
+    let signature_hash = super::sign_encoded(&to_cancel, wallet, architecture).await?;
 
     let req = fce::CancelOrderRequest {
         market_id: market_id.to_string(),
@@ -292,6 +314,15 @@ pub async fn cancel_order_from_config(
     config: &GetConfigResponse,
 ) -> Result<Outcome<CancelOrderResponse>> {
     let market = lookup_market(config, market_id)?;
+    let origin = super::send_order::origin_network_for_side(
+        config,
+        &market.market_id,
+        super::send_order::parse_side(side)?,
+    )?;
+    let chain = config
+        .get_chain(origin)
+        .ok_or_else(|| eyre!("chain '{origin}' not in config"))?;
+    refuse_tron_over_fce(crate::wallet::chain_architecture(chain)?, origin)?;
     // Sign against the RESOLVED market id, as the gRPC path does — the caller's
     // `market_id` may be the shorthand form.
     cancel_order(client, wallet, &market.market_id, side, order_id).await

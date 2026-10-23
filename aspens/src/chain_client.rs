@@ -1,5 +1,5 @@
-//! Chain-aware RPC client that dispatches between Alloy (EVM) and
-//! solana-client (Solana) based on the chain's `architecture` field.
+//! Chain-aware RPC client that dispatches between Alloy (EVM and Tron reads)
+//! and solana-client (Solana) based on the chain's `architecture` field.
 
 use alloy::primitives::{Address, Uint};
 use alloy::providers::{Provider, ProviderBuilder};
@@ -18,11 +18,14 @@ use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
 
 use crate::commands::config::config_pb::{Chain, Token};
+use crate::wallet::{Architecture, chain_architecture};
 
 /// Architecture string used in chain config for Solana chains.
 pub const ARCH_SOLANA: &str = "Solana";
 /// Architecture string used in chain config for EVM chains.
 pub const ARCH_EVM: &str = "EVM";
+/// Architecture string used in chain config for Tron chains.
+pub const ARCH_TRON: &str = "Tron";
 
 /// A curve-aware RPC client.
 pub enum ChainClient {
@@ -39,51 +42,74 @@ pub enum ChainClient {
         /// Async Solana JSON-RPC client.
         client: SolanaRpcClient,
     },
+    /// Tron: reads through the node's `/jsonrpc` with the EVM code, writes
+    /// as native transactions against the HTTP base
+    /// ([`crate::tron::client::send_tron_tx`]).
+    #[cfg(feature = "tron")]
+    Tron {
+        /// `<base>/jsonrpc`, where every read goes.
+        jsonrpc_url: String,
+        /// The chain's configured URL: the node's HTTP base, under which the
+        /// native `/wallet*` routes live.
+        http_base: String,
+        /// The chain id `eth_chainId` reports (Nile `3448148188`, mainnet
+        /// `728126428`).
+        chain_id: u32,
+    },
 }
 
 impl ChainClient {
     /// Build a `ChainClient` from a chain config entry.
     ///
-    /// Dispatches on `chain.architecture`:
-    /// - `"EVM"` (or empty/anything else for backward compat) → Alloy provider
+    /// Dispatches on `chain.architecture` (closed, case-insensitive):
+    /// - `"EVM"` or empty → Alloy provider
     /// - `"Solana"` → Solana RPC client (requires the `solana` feature)
+    /// - `"Tron"` → Alloy over `<base>/jsonrpc` plus the HTTP base for writes
+    ///   (requires the `tron` feature)
+    /// - anything else → an error
     ///
     /// The endpoint is [`chain_rpc_url`] — the client's own override — never
     /// `chain.rpcs`, which the server masks (see [`chain_rpc_url`]).
     pub fn from_chain_config(chain: &Chain) -> Result<Self> {
         let rpc_url = chain_rpc_url(chain)?;
-        if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
+        Self::from_chain_config_with_url(chain, rpc_url)
+    }
+
+    /// [`ChainClient::from_chain_config`] with the endpoint already resolved.
+    pub fn from_chain_config_with_url(chain: &Chain, rpc_url: String) -> Result<Self> {
+        match chain_architecture(chain)? {
+            Architecture::Evm => Ok(ChainClient::Evm {
+                rpc_url,
+                chain_id: chain.chain_id,
+            }),
             #[cfg(feature = "solana")]
-            {
-                return Ok(ChainClient::Solana {
-                    client: SolanaRpcClient::new(rpc_url),
-                });
-            }
+            Architecture::Solana => Ok(ChainClient::Solana {
+                client: SolanaRpcClient::new(rpc_url),
+            }),
             #[cfg(not(feature = "solana"))]
-            {
-                return Err(eyre::eyre!(
-                    "chain '{}' is Solana but the `solana` feature is disabled",
-                    chain.network
-                ));
-            }
+            Architecture::Solana => Err(eyre::eyre!(
+                "chain '{}' is Solana but the `solana` feature is disabled",
+                chain.network
+            )),
+            #[cfg(feature = "tron")]
+            Architecture::Tron => Ok(ChainClient::Tron {
+                jsonrpc_url: crate::tron::client::jsonrpc_url(&rpc_url)?,
+                http_base: rpc_url,
+                chain_id: chain.chain_id,
+            }),
+            #[cfg(not(feature = "tron"))]
+            Architecture::Tron => Err(eyre::eyre!(
+                "chain '{}' is Tron but the `tron` feature is disabled",
+                chain.network
+            )),
         }
-        Ok(ChainClient::Evm {
-            rpc_url,
-            chain_id: chain.chain_id,
-        })
     }
 
     /// Query the native gas balance for an address. Returns a `u128` in
-    /// the smallest unit (wei for EVM, lamports for Solana).
+    /// the smallest unit (wei for EVM, lamports for Solana, sun for Tron).
     pub async fn native_balance(&self, address: &str) -> Result<u128> {
         match self {
-            ChainClient::Evm { rpc_url, .. } => {
-                let url = Url::parse(rpc_url)?;
-                let provider = ProviderBuilder::new().connect_http(url);
-                let addr: Address = address.parse()?;
-                let balance: Uint<256, 4> = provider.get_balance(addr).await?;
-                Ok(balance.try_into().unwrap_or(u128::MAX))
-            }
+            ChainClient::Evm { rpc_url, .. } => evm_native_balance(rpc_url, address).await,
             #[cfg(feature = "solana")]
             ChainClient::Solana { client } => {
                 let pubkey = Pubkey::from_str(address)
@@ -91,36 +117,21 @@ impl ChainClient {
                 let lamports = client.get_balance(&pubkey).await?;
                 Ok(lamports as u128)
             }
+            #[cfg(feature = "tron")]
+            ChainClient::Tron { jsonrpc_url, .. } => evm_native_balance(jsonrpc_url, address).await,
         }
     }
 
     /// Query the token balance for an owner on this chain.
     ///
-    /// - EVM: ERC-20 `balanceOf(owner)`
+    /// - EVM and Tron: ERC-20 / TRC-20 `balanceOf(owner)` (Tron over
+    ///   `/jsonrpc`)
     /// - Solana: SPL token account balance for the associated token account
     ///   derived from the owner pubkey and the token mint.
     pub async fn token_balance(&self, token: &Token, owner: &str) -> Result<u128> {
         match self {
             ChainClient::Evm { rpc_url, chain_id } => {
-                use crate::evm::rpc::IERC20;
-                let url = Url::parse(rpc_url)?;
-                // Apply alloy's chain metadata only when the id is one it
-                // knows. An unknown id (HyperEVM testnet 998, anvil, any new
-                // rollup) must not fall back to a DIFFERENT chain's provider
-                // config. `balanceOf` is a plain eth_call, so no metadata is
-                // needed.
-                let provider = match named_chain_for(*chain_id as u64) {
-                    Some(named) => ProviderBuilder::new()
-                        .with_chain(named)
-                        .connect_http(url)
-                        .erased(),
-                    None => ProviderBuilder::new().connect_http(url).erased(),
-                };
-                let token_addr: Address = token.address.parse()?;
-                let owner_addr: Address = owner.parse()?;
-                let contract = IERC20::new(token_addr, &provider);
-                let result: Uint<256, 4> = contract.balanceOf(owner_addr).call().await?;
-                Ok(result.try_into().unwrap_or(u128::MAX))
+                evm_token_balance(rpc_url, *chain_id, token, owner).await
             }
             #[cfg(feature = "solana")]
             ChainClient::Solana { client } => {
@@ -139,7 +150,72 @@ impl ChainClient {
                     Err(_) => Ok(0),
                 }
             }
+            #[cfg(feature = "tron")]
+            ChainClient::Tron {
+                jsonrpc_url,
+                chain_id,
+                ..
+            } => evm_token_balance(jsonrpc_url, *chain_id, token, owner).await,
         }
+    }
+}
+
+async fn evm_native_balance(rpc_url: &str, address: &str) -> Result<u128> {
+    let url = Url::parse(rpc_url)?;
+    let provider = ProviderBuilder::new().connect_http(url);
+    let addr: Address = address.parse()?;
+    let balance: Uint<256, 4> = provider.get_balance(addr).await?;
+    Ok(balance.try_into().unwrap_or(u128::MAX))
+}
+
+async fn evm_token_balance(
+    rpc_url: &str,
+    chain_id: u32,
+    token: &Token,
+    owner: &str,
+) -> Result<u128> {
+    use crate::evm::rpc::IERC20;
+    let url = Url::parse(rpc_url)?;
+    // Apply alloy's chain metadata only when the id is one it knows. An
+    // unknown id (HyperEVM testnet 998, anvil, any new rollup, Tron) must not
+    // fall back to a DIFFERENT chain's provider config. `balanceOf` is a plain
+    // eth_call, so no metadata is needed.
+    let provider = match named_chain_for(chain_id as u64) {
+        Some(named) => ProviderBuilder::new()
+            .with_chain(named)
+            .connect_http(url)
+            .erased(),
+        None => ProviderBuilder::new().connect_http(url).erased(),
+    };
+    let token_addr: Address = token.address.parse()?;
+    let owner_addr: Address = owner.parse()?;
+    let contract = IERC20::new(token_addr, &provider);
+    let result: Uint<256, 4> = contract.balanceOf(owner_addr).call().await?;
+    Ok(result.try_into().unwrap_or(u128::MAX))
+}
+
+/// Where the EVM read code (`eth_call`, `eth_getBalance`) points for `chain`:
+/// [`chain_rpc_url`] itself on EVM, its `/jsonrpc` on Tron. Solana has no EVM
+/// reads and is an error.
+pub fn evm_read_url(chain: &Chain) -> Result<String> {
+    evm_read_url_for(chain, &chain_rpc_url(chain)?)
+}
+
+/// [`evm_read_url`] with the configured endpoint already resolved.
+pub fn evm_read_url_for(chain: &Chain, rpc_url: &str) -> Result<String> {
+    match chain_architecture(chain)? {
+        Architecture::Evm => Ok(rpc_url.to_string()),
+        #[cfg(feature = "tron")]
+        Architecture::Tron => crate::tron::client::jsonrpc_url(rpc_url),
+        #[cfg(not(feature = "tron"))]
+        Architecture::Tron => Err(eyre::eyre!(
+            "chain '{}' is Tron but the `tron` feature is disabled",
+            chain.network
+        )),
+        Architecture::Solana => Err(eyre::eyre!(
+            "chain '{}' is Solana and has no EVM reads",
+            chain.network
+        )),
     }
 }
 
@@ -160,7 +236,8 @@ pub fn chain_rpc_url(chain: &Chain) -> Result<String> {
 }
 
 /// [`chain_rpc_url`], then a probe that the endpoint answers for this chain
-/// (`eth_chainId` on EVM, `getVersion` on Solana), within
+/// (`eth_chainId` on EVM, the same at `/jsonrpc` on Tron, `getVersion` on
+/// Solana), within
 /// [`RPC_PROBE_TIMEOUT`]. On EVM the probe also refuses an endpoint that
 /// serves a different chain id than `chain.chain_id`.
 pub async fn checked_chain_rpc_url(chain: &Chain) -> Result<String> {
@@ -370,10 +447,16 @@ async fn probe_rpc(chain: &Chain, url: &str) -> Result<(), RpcEndpointError> {
         reason,
     };
 
-    let answer = if chain.architecture.eq_ignore_ascii_case(ARCH_SOLANA) {
-        probe_solana(url).await
-    } else {
-        probe_evm(url).await
+    let architecture = chain_architecture(chain).map_err(|e| unreachable(e.to_string()))?;
+    let answer = match architecture {
+        Architecture::Solana => probe_solana(url).await,
+        Architecture::Evm => probe_evm(url).await,
+        // Tron's `eth_chainId` is served under `/jsonrpc`, and answers with
+        // the same id the EIP-712 domain carries.
+        Architecture::Tron => match evm_read_url_for(chain, url) {
+            Ok(jsonrpc) => probe_evm(&jsonrpc).await,
+            Err(e) => Ok(Err(e.to_string())),
+        },
     };
     let reported = match answer {
         Err(_elapsed) => {
@@ -704,5 +787,81 @@ mod tests {
         let mint = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
         let ata = derive_associated_token_account(&owner, &mint);
         assert_ne!(ata, Pubkey::default());
+    }
+}
+
+#[cfg(all(test, feature = "tron"))]
+mod tron_tests {
+    use super::*;
+    use crate::tron::client::mock::{bodies, mount_jsonrpc, nile_chain};
+    use wiremock::MockServer;
+
+    /// A Tron chain builds the Tron client: reads over `<base>/jsonrpc` with
+    /// the EVM code, writes against the base. Its native balance is an
+    /// `eth_getBalance` that reaches `/jsonrpc`, never the bare base.
+    #[tokio::test]
+    async fn chain_client_from_tron_config() {
+        let server = MockServer::start().await;
+        mount_jsonrpc(&server, "0x989680").await;
+        let base = format!("{}/", server.uri());
+        for spelling in ["Tron", "TRON", "tron"] {
+            let mut chain = nile_chain();
+            chain.architecture = spelling.into();
+            let client = ChainClient::from_chain_config_with_url(&chain, base.clone()).unwrap();
+            let ChainClient::Tron {
+                jsonrpc_url,
+                http_base,
+                chain_id,
+            } = &client
+            else {
+                panic!("{spelling}: not the Tron client");
+            };
+            assert_eq!(jsonrpc_url, &format!("{}/jsonrpc", server.uri()));
+            assert_eq!(http_base, &base);
+            assert_eq!(*chain_id, 3_448_148_188);
+            let balance = client
+                .native_balance("0xa5411a1a5784b0828bbafcfa588c72ef3f3ce646")
+                .await
+                .unwrap();
+            assert_eq!(balance, 10_000_000);
+        }
+        let reads = bodies(&server, "/jsonrpc").await;
+        assert_eq!(reads.len(), 3);
+        assert!(reads.iter().all(|r| r["method"] == "eth_getBalance"));
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            3,
+            "nothing went anywhere but /jsonrpc"
+        );
+    }
+
+    #[test]
+    fn an_unknown_architecture_builds_no_client() {
+        let mut chain = nile_chain();
+        chain.architecture = "sui".into();
+        let Err(err) = ChainClient::from_chain_config_with_url(&chain, "http://x".into()) else {
+            panic!("an unknown architecture built a client");
+        };
+        assert!(err.to_string().contains("sui"), "{err}");
+    }
+
+    /// EVM reads on a Tron chain go to `/jsonrpc`; on an EVM chain to the
+    /// configured URL itself; a Solana chain has none.
+    #[test]
+    fn evm_read_url_per_architecture() {
+        let tron = nile_chain();
+        assert_eq!(
+            evm_read_url_for(&tron, "https://nile.trongrid.io").unwrap(),
+            "https://nile.trongrid.io/jsonrpc"
+        );
+        let mut evm = nile_chain();
+        evm.architecture = "EVM".into();
+        assert_eq!(
+            evm_read_url_for(&evm, "https://rpc.example/v2/k").unwrap(),
+            "https://rpc.example/v2/k"
+        );
+        let mut sol = nile_chain();
+        sol.architecture = "Solana".into();
+        assert!(evm_read_url_for(&sol, "https://api.devnet.solana.com").is_err());
     }
 }

@@ -11,6 +11,11 @@
 //! drift recovers a different signer or a different txID, and nothing on the
 //! wire says which field moved.
 
+// Sending native Tron transactions over the node's HTTP API (documented in
+// the module itself). Needs the `client` feature.
+#[cfg(feature = "client")]
+pub mod client;
+
 use alloy_primitives::{Address, B256, keccak256};
 use alloy_signer::Signer;
 use eyre::{Result, eyre};

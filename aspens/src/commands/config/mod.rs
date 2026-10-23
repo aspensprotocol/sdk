@@ -240,10 +240,14 @@ pub async fn get_signer_public_key_with_balances(
         .chains
         .iter()
         .map(|chain| {
-            (
-                chain.network.clone(),
-                crate::chain_client::chain_rpc_url(chain).unwrap_or_default(),
-            )
+            // The gas read below is an EVM `eth_getBalance`: a Tron chain
+            // answers it at its `/jsonrpc`.
+            let url = match crate::wallet::chain_architecture(chain) {
+                Ok(crate::wallet::Architecture::Tron) => crate::chain_client::evm_read_url(chain),
+                Ok(crate::wallet::Architecture::Evm | crate::wallet::Architecture::Solana)
+                | Err(_) => crate::chain_client::chain_rpc_url(chain),
+            };
+            (chain.network.clone(), url.unwrap_or_default())
         })
         .collect();
 

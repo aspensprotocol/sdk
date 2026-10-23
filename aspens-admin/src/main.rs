@@ -92,7 +92,7 @@ enum Commands {
     // ========================================================================
     /// Set a chain in the configuration
     SetChain {
-        /// Chain architecture (e.g., "EVM", "Hedera")
+        /// Chain architecture: "EVM", "Solana" or "Tron"
         #[arg(long)]
         architecture: String,
 
@@ -1028,7 +1028,10 @@ async fn run() -> Result<()> {
                 )
             })?;
 
-            let is_solana = chain.architecture.eq_ignore_ascii_case("solana");
+            let is_solana = match deploy_flow(chain)? {
+                DeployFlow::ServerSigned => true,
+                DeployFlow::AdminBroadcast => false,
+            };
 
             let tx_hash = if is_solana {
                 // Solana: server signs + submits, no admin private key needed.
@@ -1466,7 +1469,19 @@ async fn run() -> Result<()> {
                 // url, so without a client-side override this errors — carry
                 // that through as a per-cell "error" rather than aborting the
                 // whole balances report.
-                let rpc_url = chain_client::chain_rpc_url(chain);
+                // The reads below are EVM calls: a Tron chain answers them at
+                // its `/jsonrpc`, and counts its gas in sun (6 decimals).
+                let architecture = aspens::chain_architecture(chain);
+                let rpc_url = match architecture {
+                    Ok(aspens::Architecture::Tron) => chain_client::evm_read_url(chain),
+                    Ok(aspens::Architecture::Evm | aspens::Architecture::Solana) | Err(_) => {
+                        chain_client::chain_rpc_url(chain)
+                    }
+                };
+                let gas_decimals = match architecture {
+                    Ok(aspens::Architecture::Tron) => 6,
+                    Ok(aspens::Architecture::Evm | aspens::Architecture::Solana) | Err(_) => 18,
+                };
 
                 let addresses: Vec<(Address, &str)> = [
                     owner_address.map(|a| (a, "Owner")),
@@ -1481,7 +1496,7 @@ async fn run() -> Result<()> {
                     let gas = match &rpc_url {
                         Ok(rpc) => {
                             match balance::call_get_native_balance_for_address(rpc, *addr).await {
-                                Ok(v) => balance::format_balance(v, 18),
+                                Ok(v) => balance::format_balance(v, gas_decimals),
                                 Err(e) => {
                                     fetch_warnings
                                         .push(format!("{role} gas on {}: {e}", chain.network));
@@ -1552,6 +1567,32 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Who signs an instance deploy on a chain.
+#[derive(Debug, PartialEq, Eq)]
+enum DeployFlow {
+    /// EVM: the admin signs and broadcasts `createInstance` here, and the
+    /// arborter confirms it.
+    AdminBroadcast,
+    /// Solana: the arborter signs and submits server-side (only its signer
+    /// satisfies the factory's `has_one = owner`).
+    ServerSigned,
+}
+
+/// The deploy flow for `chain`'s architecture. A Tron instance is created by
+/// the deployer's Tron venue phase (it sends native Tron transactions, which
+/// this command cannot), so it is refused here rather than sent down the EVM
+/// path.
+fn deploy_flow(chain: &aspens::commands::config::config_pb::Chain) -> Result<DeployFlow> {
+    match aspens::chain_architecture(chain)? {
+        aspens::Architecture::Evm => Ok(DeployFlow::AdminBroadcast),
+        aspens::Architecture::Solana => Ok(DeployFlow::ServerSigned),
+        aspens::Architecture::Tron => Err(eyre::eyre!(
+            "chain '{}' is Tron: aspens-admin cannot deploy a Tron instance; use the deployer",
+            chain.network
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -1764,6 +1805,30 @@ mod rpc_endpoint_flag_tests {
             }
             other => panic!("expected Rpc::Probe, got {other:?}"),
         }
+    }
+
+    /// A Tron instance deploy is refused and points at the deployer; EVM and
+    /// Solana keep their flows; an unknown architecture is an error, never
+    /// the EVM flow.
+    #[test]
+    fn tron_instance_deploy_is_refused() {
+        let chain = |arch: &str| aspens::commands::config::config_pb::Chain {
+            architecture: arch.into(),
+            network: "tron-nile".into(),
+            ..Default::default()
+        };
+        let err = deploy_flow(&chain("Tron")).unwrap_err().to_string();
+        assert!(err.contains("use the deployer"), "{err}");
+        assert_eq!(
+            deploy_flow(&chain("EVM")).unwrap(),
+            DeployFlow::AdminBroadcast
+        );
+        assert_eq!(deploy_flow(&chain("")).unwrap(), DeployFlow::AdminBroadcast);
+        assert_eq!(
+            deploy_flow(&chain("solana")).unwrap(),
+            DeployFlow::ServerSigned
+        );
+        assert!(deploy_flow(&chain("sui")).is_err());
     }
 
     /// `rpc probe` with no `--scheme` defaults to `none`.
