@@ -1469,19 +1469,9 @@ async fn run() -> Result<()> {
                 // url, so without a client-side override this errors — carry
                 // that through as a per-cell "error" rather than aborting the
                 // whole balances report.
-                // The reads below are EVM calls: a Tron chain answers them at
-                // its `/jsonrpc`, and counts its gas in sun (6 decimals).
-                let architecture = aspens::chain_architecture(chain);
-                let rpc_url = match architecture {
-                    Ok(aspens::Architecture::Tron) => chain_client::evm_read_url(chain),
-                    Ok(aspens::Architecture::Evm | aspens::Architecture::Solana) | Err(_) => {
-                        chain_client::chain_rpc_url(chain)
-                    }
-                };
-                let gas_decimals = match architecture {
-                    Ok(aspens::Architecture::Tron) => 6,
-                    Ok(aspens::Architecture::Evm | aspens::Architecture::Solana) | Err(_) => 18,
-                };
+                // An unknown architecture is an Err here too, so its cells
+                // read "error" with the cause in the warnings.
+                let rpc_url = balance_reads_for(chain);
 
                 let addresses: Vec<(Address, &str)> = [
                     owner_address.map(|a| (a, "Owner")),
@@ -1494,9 +1484,9 @@ async fn run() -> Result<()> {
 
                 for (addr, role) in &addresses {
                     let gas = match &rpc_url {
-                        Ok(rpc) => {
+                        Ok((rpc, gas_decimals)) => {
                             match balance::call_get_native_balance_for_address(rpc, *addr).await {
-                                Ok(v) => balance::format_balance(v, gas_decimals),
+                                Ok(v) => balance::format_balance(v, *gas_decimals),
                                 Err(e) => {
                                     fetch_warnings
                                         .push(format!("{role} gas on {}: {e}", chain.network));
@@ -1519,7 +1509,7 @@ async fn run() -> Result<()> {
                     for sym in &token_symbols {
                         if let Some(token) = chain.tokens.get(sym) {
                             let bal = match &rpc_url {
-                                Ok(rpc) => match balance::call_get_erc20_balance_for_address(
+                                Ok((rpc, _)) => match balance::call_get_erc20_balance_for_address(
                                     rpc,
                                     &token.address,
                                     *addr,
@@ -1567,6 +1557,19 @@ async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Where the balances report's EVM reads go for `chain`, and the decimals of
+/// its gas unit: the configured endpoint and wei on EVM (and on Solana, whose
+/// cells then fail to parse as they always have), `/jsonrpc` and sun on Tron.
+/// An unknown architecture is an error, never read as EVM.
+fn balance_reads_for(chain: &aspens::commands::config::config_pb::Chain) -> Result<(String, u32)> {
+    match aspens::chain_architecture(chain)? {
+        aspens::Architecture::Tron => Ok((chain_client::evm_read_url(chain)?, 6)),
+        aspens::Architecture::Evm | aspens::Architecture::Solana => {
+            Ok((chain_client::chain_rpc_url(chain)?, 18))
+        }
+    }
 }
 
 /// Who signs an instance deploy on a chain.
@@ -1829,6 +1832,18 @@ mod rpc_endpoint_flag_tests {
             DeployFlow::ServerSigned
         );
         assert!(deploy_flow(&chain("sui")).is_err());
+    }
+
+    /// The balances report never reads an unknown architecture as EVM.
+    #[test]
+    fn balances_refuse_an_unknown_architecture() {
+        let chain = aspens::commands::config::config_pb::Chain {
+            architecture: "sui".into(),
+            network: "balances-unknown-arch".into(),
+            ..Default::default()
+        };
+        let err = balance_reads_for(&chain).unwrap_err().to_string();
+        assert!(err.contains("sui"), "{err}");
     }
 
     /// `rpc probe` with no `--scheme` defaults to `none`.

@@ -15,7 +15,7 @@
 
 use aspens::client::AspensClient;
 use aspens::commands::trading::fce_actions;
-use aspens::wallet::{CurveType, load_trader_wallet};
+use aspens::wallet::{Architecture, CurveType, load_trader_wallet};
 use eyre::{Result, eyre};
 
 fn market_id() -> String {
@@ -63,7 +63,15 @@ async fn main() -> Result<()> {
                     v.len()
                 )
             })?;
-            let out = fce_actions::cancel_order(&client, &wallet, &market_id(), side, oid).await?;
+            let out = fce_actions::cancel_order(
+                &client,
+                &wallet,
+                &market_id(),
+                side,
+                oid,
+                Architecture::Evm,
+            )
+            .await?;
             println!("status={} log={}", out.status, out.log);
             println!("{}", serde_json::to_string_pretty(&out.data)?);
         }
@@ -91,8 +99,16 @@ async fn main() -> Result<()> {
             let token = args.get(2).ok_or_else(|| eyre!("need token addr"))?;
             let amount = args.get(3).ok_or_else(|| eyre!("need raw amount"))?;
             let account = wallet.address();
-            let out =
-                fce_actions::withdraw(&client, &wallet, network, token, &account, amount).await?;
+            let out = fce_actions::withdraw(
+                &client,
+                &wallet,
+                network,
+                token,
+                &account,
+                amount,
+                Architecture::Evm,
+            )
+            .await?;
             println!("status={} log={}", out.status, out.log);
             println!("{}", serde_json::to_string_pretty(&out.data)?);
         }

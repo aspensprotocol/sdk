@@ -240,15 +240,18 @@ pub async fn place_order(
     fce.place_order(&req).await
 }
 
-/// Cancel an order via FCE. `side` is "buy"/"sell"/"bid"/"ask".
+/// Cancel an order via FCE. `side` is "buy"/"sell"/"bid"/"ask";
+/// `architecture` is that of the order's giving chain (bid: quote, ask:
+/// base), which decides how the cancel is signed. A Tron leg is refused: the
+/// FCE transport does not carry Tron.
 pub async fn cancel_order(
     client: &AspensClient,
     wallet: &Wallet,
     market_id: &str,
     side: &str,
     order_id: [u8; 32],
+    architecture: crate::wallet::Architecture,
 ) -> Result<Outcome<CancelOrderResponse>> {
-    let fce = fce_client(client)?;
     let side_i = super::send_order::parse_side(side)? as i32;
 
     // Sign the same OrderToCancel bytes the gRPC path signs.
@@ -257,13 +260,8 @@ pub async fn cancel_order(
         side: side_i,
         order_id: order_id.to_vec(),
     };
-    // FCE carries EVM and Solana legs only (Tron is refused before this in
-    // `cancel_order_from_config`), so the wallet's curve names the scheme.
-    let architecture = match wallet.curve() {
-        crate::wallet::CurveType::Secp256k1 => crate::wallet::Architecture::Evm,
-        crate::wallet::CurveType::Ed25519 => crate::wallet::Architecture::Solana,
-    };
-    let signature_hash = super::sign_encoded(&to_cancel, wallet, architecture).await?;
+    let signature_hash = sign_fce_cancel(wallet, architecture, &to_cancel).await?;
+    let fce = fce_client(client)?;
 
     let req = fce::CancelOrderRequest {
         market_id: market_id.to_string(),
@@ -274,11 +272,24 @@ pub async fn cancel_order(
     fce.cancel_order(&req).await
 }
 
+/// The FCE cancel signature: the main path's architecture-aware signer, with
+/// Tron refused before anything is signed.
+async fn sign_fce_cancel(
+    wallet: &Wallet,
+    architecture: crate::wallet::Architecture,
+    to_cancel: &OrderToCancel,
+) -> Result<Vec<u8>> {
+    refuse_tron_over_fce(architecture, &to_cancel.market_id)?;
+    super::sign_encoded(to_cancel, wallet, architecture).await
+}
+
 /// Request a MidribV3 withdrawal voucher via FCE. Signs the canonical
-/// `network|token|account|amount` (as the gRPC withdraw does); the returned
-/// voucher is presented to `MidribV3.withdraw(voucher, signature)` on-chain
-/// (that submission stays a separate step, unchanged). `token`/`account`/
-/// `amount` are the on-chain resolved values.
+/// `network|token|account|amount` (as the gRPC withdraw does) the way
+/// `architecture` (that of `network`) verifies it; the returned voucher is
+/// presented to `MidribV3.withdraw(voucher, signature)` on-chain (that
+/// submission stays a separate step, unchanged). `token`/`account`/`amount`
+/// are the on-chain resolved values. A Tron network is refused: the FCE
+/// transport does not carry Tron.
 pub async fn withdraw(
     client: &AspensClient,
     wallet: &Wallet,
@@ -286,10 +297,11 @@ pub async fn withdraw(
     token: &str,
     account: &str,
     amount: &str,
+    architecture: crate::wallet::Architecture,
 ) -> Result<Outcome<WithdrawVoucher>> {
-    let fce = fce_client(client)?;
     let canonical = format!("{network}|{token}|{account}|{amount}");
-    let signature = wallet.sign_message(canonical.as_bytes()).await?;
+    let signature = sign_fce_withdraw(wallet, architecture, network, &canonical).await?;
+    let fce = fce_client(client)?;
     let req = fce::WithdrawRequest {
         network: network.to_string(),
         token: token.to_string(),
@@ -298,6 +310,18 @@ pub async fn withdraw(
         signature,
     };
     fce.withdraw(&req).await
+}
+
+/// The FCE withdraw-request signature: the main path's architecture-aware
+/// signer, with Tron refused before anything is signed.
+async fn sign_fce_withdraw(
+    wallet: &Wallet,
+    architecture: crate::wallet::Architecture,
+    network: &str,
+    canonical: &str,
+) -> Result<Vec<u8>> {
+    refuse_tron_over_fce(architecture, network)?;
+    super::sign_withdraw_request(wallet, architecture, canonical).await
 }
 
 /// Cancel an order via FCE.
@@ -322,10 +346,19 @@ pub async fn cancel_order_from_config(
     let chain = config
         .get_chain(origin)
         .ok_or_else(|| eyre!("chain '{origin}' not in config"))?;
-    refuse_tron_over_fce(crate::wallet::chain_architecture(chain)?, origin)?;
+    let architecture = crate::wallet::chain_architecture(chain)?;
+    refuse_tron_over_fce(architecture, origin)?;
     // Sign against the RESOLVED market id, as the gRPC path does — the caller's
     // `market_id` may be the shorthand form.
-    cancel_order(client, wallet, &market.market_id, side, order_id).await
+    cancel_order(
+        client,
+        wallet,
+        &market.market_id,
+        side,
+        order_id,
+        architecture,
+    )
+    .await
 }
 
 /// Top-of-book for `market_id` from a one-shot FCE book snapshot.
@@ -558,5 +591,52 @@ mod top_of_book_tests {
         let top = top_of_book_from_snapshot(&book(vec![level(big, "1")], vec![level(big, "1")]));
         assert_eq!(top.best_bid, Some(u128::MAX));
         assert_eq!(top.best_ask, Some(u128::MAX));
+    }
+}
+
+#[cfg(test)]
+mod tron_refusal_tests {
+    use super::*;
+    use crate::wallet::Architecture;
+
+    fn wallet() -> Wallet {
+        Wallet::from_evm_hex("0xdfdf4b45dfa67d802fa6d8472e275b02ed0ca396194d65ae3d334fa1b6801d5c")
+            .unwrap()
+    }
+
+    /// Neither FCE signer produces any signature for a Tron leg (so no
+    /// EIP-191 one), while EVM legs still sign: the refusal is the Tron arm,
+    /// not a blanket failure.
+    #[tokio::test]
+    async fn fce_signers_refuse_a_tron_leg() {
+        let wallet = wallet();
+        let to_cancel = OrderToCancel {
+            market_id: "tron-nile::0x01::base::0x02".into(),
+            side: 2,
+            order_id: vec![0xab; 32],
+        };
+        let err = sign_fce_cancel(&wallet, Architecture::Tron, &to_cancel)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("is Tron"), "{err}");
+        let err = sign_fce_withdraw(&wallet, Architecture::Tron, "tron-nile", "t|0x|0x|1")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("is Tron"), "{err}");
+
+        assert_eq!(
+            sign_fce_cancel(&wallet, Architecture::Evm, &to_cancel)
+                .await
+                .unwrap()
+                .len(),
+            65
+        );
+        assert_eq!(
+            sign_fce_withdraw(&wallet, Architecture::Evm, "base", "t|0x|0x|1")
+                .await
+                .unwrap()
+                .len(),
+            65
+        );
     }
 }

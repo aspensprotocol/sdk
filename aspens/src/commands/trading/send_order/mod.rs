@@ -434,6 +434,45 @@ pub fn origin_network_for_side<'a>(
     })
 }
 
+/// Convert `T…` settlement overrides on a Tron leg to the `0x` hex the venue
+/// carries, for binaries that take addresses as typed input. `T…` is how a
+/// Tron address is shown and pasted; the venue never accepts it
+/// (`orders::validate_settle_address` refuses it). Overrides on other legs,
+/// and hex on a Tron leg, pass through unchanged for the per-chain
+/// validation. A malformed `T…` (bad checksum) is an error naming the flag.
+#[cfg(feature = "tron")]
+pub fn tron_settle_overrides_to_hex(
+    config: &GetConfigResponse,
+    market_id: &str,
+    base_address: Option<String>,
+    quote_address: Option<String>,
+) -> Result<(Option<String>, Option<String>)> {
+    let market = lookup_market(config, market_id)?;
+    let convert = |flag: &str, network: &str, value: Option<String>| -> Result<Option<String>> {
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        let chain = config
+            .get_chain(network)
+            .ok_or_else(|| eyre::eyre!("chain '{network}' not in config"))?;
+        match crate::wallet::chain_architecture(chain)? {
+            crate::wallet::Architecture::Tron if value.starts_with('T') => {
+                let hex =
+                    crate::tron::tron_to_hex(&value).map_err(|e| eyre::eyre!("--{flag}: {e}"))?;
+                tracing::info!("--{flag} {value} is Tron account {hex}");
+                Ok(Some(hex))
+            }
+            crate::wallet::Architecture::Tron
+            | crate::wallet::Architecture::Evm
+            | crate::wallet::Architecture::Solana => Ok(Some(value)),
+        }
+    };
+    Ok((
+        convert("base-address", &market.base_chain_network, base_address)?,
+        convert("quote-address", &market.quote_chain_network, quote_address)?,
+    ))
+}
+
 /// Parse a string side ("buy"/"bid" or "sell"/"ask", case-insensitive) into
 /// the typed enum. Used by binaries that take side as a CLI / REPL arg;
 /// useful as a single source of truth for accepted aliases.

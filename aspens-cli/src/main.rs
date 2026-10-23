@@ -144,37 +144,15 @@ fn tron_settle_args_to_hex(
     market: &str,
     settle: SettleArgs,
 ) -> Result<SettleArgs> {
-    let market = send_order::lookup_market(config, market)?;
-    let convert = |flag: &str, network: &str, value: Option<String>| -> Result<Option<String>> {
-        let Some(value) = value else {
-            return Ok(None);
-        };
-        let chain = config
-            .get_chain(network)
-            .ok_or_else(|| eyre::eyre!("chain '{network}' not in config"))?;
-        match aspens::chain_architecture(chain)? {
-            aspens::Architecture::Tron if value.starts_with('T') => {
-                let hex =
-                    aspens::tron::tron_to_hex(&value).map_err(|e| eyre::eyre!("--{flag}: {e}"))?;
-                info!("--{flag} {value} is Tron account {hex}");
-                Ok(Some(hex))
-            }
-            aspens::Architecture::Tron
-            | aspens::Architecture::Evm
-            | aspens::Architecture::Solana => Ok(Some(value)),
-        }
-    };
+    let (base_address, quote_address) = send_order::tron_settle_overrides_to_hex(
+        config,
+        market,
+        settle.base_address,
+        settle.quote_address,
+    )?;
     Ok(SettleArgs {
-        base_address: convert(
-            "base-address",
-            &market.base_chain_network,
-            settle.base_address,
-        )?,
-        quote_address: convert(
-            "quote-address",
-            &market.quote_chain_network,
-            settle.quote_address,
-        )?,
+        base_address,
+        quote_address,
     })
 }
 

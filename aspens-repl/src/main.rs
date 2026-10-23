@@ -213,14 +213,34 @@ struct ReplCli {
 #[derive(Debug, Clone, Default, clap::Args)]
 struct SettleArgs {
     /// Settle the BASE leg to this address (must be valid on the base
-    /// chain: 0x-prefixed hex on EVM, base58 pubkey on Solana). On a SELL
-    /// this is the giving leg and may only restate your own address.
+    /// chain: 0x-prefixed hex on EVM, base58 pubkey on Solana, 0x hex or a
+    /// `T…` address on Tron). On a SELL this is the giving leg and may only
+    /// restate your own address.
     #[arg(long)]
     base_address: Option<String>,
     /// Settle the QUOTE leg to this address (same per-chain rules). On a
     /// BUY this is the giving leg and may only restate your own address.
     #[arg(long)]
     quote_address: Option<String>,
+}
+
+/// Convert a `T…` settlement override on a Tron leg to the `0x` hex the
+/// venue carries, as the CLI does; everything else passes through.
+fn tron_settle_to_hex(
+    config: &GetConfigResponse,
+    market: &str,
+    settle: SettleArgs,
+) -> eyre::Result<SettleArgs> {
+    let (base_address, quote_address) = send_order::tron_settle_overrides_to_hex(
+        config,
+        market,
+        settle.base_address,
+        settle.quote_address,
+    )?;
+    Ok(SettleArgs {
+        base_address,
+        quote_address,
+    })
 }
 
 #[derive(Debug, Parser)]
@@ -632,6 +652,13 @@ fn main() {
             let mkt = market.clone();
             let amt = amount.clone();
             let budget = quote_budget.clone();
+            let settle = match tron_settle_to_hex(&config, &market, settle) {
+                Ok(s) => s,
+                Err(e) => {
+                    print_error(&format_error(&e, "read the settlement addresses"));
+                    return;
+                }
+            };
             let res = executor.execute(async move {
                 send_order::send_order_with_wallets(
                     url,
@@ -710,6 +737,13 @@ fn main() {
             let mkt = market.clone();
             let amt = amount.clone();
             let prc = price.clone();
+            let settle = match tron_settle_to_hex(&config, &market, settle) {
+                Ok(s) => s,
+                Err(e) => {
+                    print_error(&format_error(&e, "read the settlement addresses"));
+                    return;
+                }
+            };
             let res = executor.execute(async move {
                 send_order::send_order_with_wallets(
                     url,
@@ -772,6 +806,13 @@ fn main() {
             let url = app_state.stack_url();
             let mkt = market.clone();
             let amt = amount.clone();
+            let settle = match tron_settle_to_hex(&config, &market, settle) {
+                Ok(s) => s,
+                Err(e) => {
+                    print_error(&format_error(&e, "read the settlement addresses"));
+                    return;
+                }
+            };
             let res = executor.execute(async move {
                 send_order::send_order_with_wallets(
                     url,
@@ -850,6 +891,13 @@ fn main() {
             let mkt = market.clone();
             let amt = amount.clone();
             let prc = price.clone();
+            let settle = match tron_settle_to_hex(&config, &market, settle) {
+                Ok(s) => s,
+                Err(e) => {
+                    print_error(&format_error(&e, "read the settlement addresses"));
+                    return;
+                }
+            };
             let res = executor.execute(async move {
                 send_order::send_order_with_wallets(
                     url,
@@ -1190,4 +1238,68 @@ fn main() {
             std::process::exit(0)
         }
     });
+}
+
+#[cfg(test)]
+mod tron_input_tests {
+    use super::*;
+    use aspens::commands::config::config_pb::{Chain, Configuration, Market};
+
+    const MARKET: &str = "tron-nile::0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee::\
+                          base-sepolia::0x036cbd53842c5426634e7929541ec2318f3dcf7e";
+
+    fn config() -> GetConfigResponse {
+        let chain = |network: &str, arch: &str| Chain {
+            network: network.into(),
+            architecture: arch.into(),
+            ..Default::default()
+        };
+        GetConfigResponse {
+            config: Some(Configuration {
+                chains: vec![chain("tron-nile", "Tron"), chain("base-sepolia", "EVM")],
+                markets: vec![Market {
+                    name: "TRX/USDC".into(),
+                    base_chain_network: "tron-nile".into(),
+                    quote_chain_network: "base-sepolia".into(),
+                    market_id: MARKET.into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        }
+    }
+
+    /// The REPL converts a `T…` override on the Tron leg to the fixture's hex
+    /// account, leaves an EVM leg's value alone, and refuses a bad checksum.
+    #[test]
+    fn repl_accepts_t_form_and_sends_hex() {
+        let out = tron_settle_to_hex(
+            &config(),
+            MARKET,
+            SettleArgs {
+                base_address: Some("TR2zV5HudeeSw37JKTwMWofufa2JL7qnss".into()),
+                quote_address: Some("TR2zV5HudeeSw37JKTwMWofufa2JL7qnss".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out.base_address.as_deref(),
+            Some("0xa5411a1a5784b0828bbafcfa588c72ef3f3ce646")
+        );
+        assert_eq!(
+            out.quote_address.as_deref(),
+            Some("TR2zV5HudeeSw37JKTwMWofufa2JL7qnss"),
+            "an EVM leg is never converted"
+        );
+        let err = tron_settle_to_hex(
+            &config(),
+            MARKET,
+            SettleArgs {
+                base_address: Some("TR2zV5HudeeSw37JKTwMWofufa2JL7qnsT".into()),
+                quote_address: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--base-address"), "{err}");
+    }
 }
