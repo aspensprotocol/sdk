@@ -173,6 +173,9 @@ impl TronHttp {
     pub fn new(base: &str) -> Result<Self> {
         join_path(base, "")?;
         let client = reqwest::Client::builder()
+            // The API key header is not stripped on a cross-host redirect;
+            // a 3xx is returned as the answer, never followed.
+            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(30))
             .build()
@@ -1029,6 +1032,31 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const CONTRACT: &str = "0xc76d503a0aecd5115aa23639fe90e2de7ad63719";
+
+    /// A redirect is never followed with the API key: the target host must
+    /// see no request, and the call errors.
+    #[tokio::test]
+    async fn redirect_is_not_followed_with_the_api_key() {
+        let target = MockServer::start().await;
+        Mock::given(wiremock::matchers::any())
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&target)
+            .await;
+        let origin = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(302).insert_header("Location", target.uri()))
+            .mount(&origin)
+            .await;
+        let http = TronHttp::new(&origin.uri())
+            .unwrap()
+            .with_api_key(Some("k-123".into()));
+        assert!(
+            http.post("/wallet/getnowblock", &serde_json::json!({}))
+                .await
+                .is_err()
+        );
+        assert!(target.received_requests().await.unwrap().is_empty());
+    }
 
     fn data() -> Vec<u8> {
         vec![0xe0, 0xa2, 0x73, 0xbc, 1, 2, 3]
