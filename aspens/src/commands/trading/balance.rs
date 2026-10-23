@@ -37,17 +37,20 @@ struct ChainBalance {
 struct NativeBalance {
     chain_network: String,
     balance: String,
-    /// Decimals of the native unit the balance is in.
-    decimals: u32,
+    /// Decimals of the native unit the balance is in. `None` when the chain's
+    /// architecture is unknown: the unit is then unknown too, and `balance`
+    /// says so.
+    decimals: Option<u32>,
 }
 
 /// Decimals of a chain's native gas unit as `native_balance` reports it: wei
 /// (18) on EVM, sun (6) on Tron. Solana keeps the table's long-standing 18.
-fn native_decimals(chain: &Chain) -> u32 {
-    match crate::wallet::chain_architecture(chain) {
-        Ok(Architecture::Tron) => 6,
-        Ok(Architecture::Evm | Architecture::Solana) | Err(_) => 18,
-    }
+/// An unknown architecture is an `Err`, never a guessed unit.
+fn native_decimals(chain: &Chain) -> Result<u32> {
+    Ok(match crate::wallet::chain_architecture(chain)? {
+        Architecture::Tron => 6,
+        Architecture::Evm | Architecture::Solana => 18,
+    })
 }
 
 /// Aggregated balance for a single token across all chains
@@ -151,7 +154,10 @@ fn display_all_token_balances(
 
         // Add native gas balance for this chain
         if let Some(native) = native_balances.iter().find(|nb| nb.chain_network == *chain) {
-            let gas_balance = format_balance_with_decimals(&native.balance, native.decimals);
+            let gas_balance = match native.decimals {
+                Some(decimals) => format_balance_with_decimals(&native.balance, decimals),
+                None => native.balance.clone(),
+            };
             table.add_row(vec![
                 "GAS".to_string(),
                 gas_balance,
@@ -479,12 +485,25 @@ pub async fn balance_from_config_with_wallets(
         }
         seen.insert(chain.network.clone(), ());
 
+        let decimals = match native_decimals(chain) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                warn!("{e}");
+                native_balances.push(NativeBalance {
+                    chain_network: chain.network.clone(),
+                    balance: "bad architecture".to_string(),
+                    decimals: None,
+                });
+                continue;
+            }
+        };
+
         let owner_address = match select_wallet_for_chain(chain, wallets) {
             Some(w) => w.address(),
             None => {
                 native_balances.push(NativeBalance {
                     chain_network: chain.network.clone(),
-                    decimals: native_decimals(chain),
+                    decimals,
                     balance: "no wallet".to_string(),
                 });
                 continue;
@@ -497,7 +516,7 @@ pub async fn balance_from_config_with_wallets(
                 warn!("Failed to build client for {}: {}", chain.network, e);
                 native_balances.push(NativeBalance {
                     chain_network: chain.network.clone(),
-                    decimals: native_decimals(chain),
+                    decimals,
                     balance: "error".to_string(),
                 });
                 continue;
@@ -513,7 +532,7 @@ pub async fn balance_from_config_with_wallets(
         native_balances.push(NativeBalance {
             chain_network: chain.network.clone(),
             balance,
-            decimals: native_decimals(chain),
+            decimals,
         });
     }
 
@@ -767,12 +786,48 @@ mod tests {
             ..Default::default()
         };
         assert!(select_wallet_for_chain(&tron, &wallets).is_some());
-        assert_eq!(native_decimals(&tron), 6);
-        assert_eq!(native_decimals(&evm_chain()), 18);
+        assert_eq!(native_decimals(&tron).unwrap(), 6);
+        assert_eq!(native_decimals(&evm_chain()).unwrap(), 18);
         assert_eq!(
-            format_balance_with_decimals("10000000", native_decimals(&tron)),
+            format_balance_with_decimals("10000000", native_decimals(&tron).unwrap()),
             "10.000000"
         );
+    }
+
+    /// An unknown architecture has no native unit: its GAS row says "bad
+    /// architecture" rather than a balance scaled by a guessed 18 decimals.
+    #[test]
+    fn unknown_architecture_has_no_native_unit() {
+        let sui = Chain {
+            network: "sui".to_string(),
+            architecture: "sui".to_string(),
+            ..Default::default()
+        };
+        assert!(native_decimals(&sui).is_err());
+
+        let token = TokenBalance {
+            token_info: TokenInfo {
+                symbol: "USDC".to_string(),
+                decimals: 6,
+            },
+            chain_balances: vec![ChainBalance {
+                chain_network: "sui".to_string(),
+                wallet_balance: "bad architecture".to_string(),
+                available_balance: "bad architecture".to_string(),
+                locked_balance: "bad architecture".to_string(),
+            }],
+        };
+        let native = NativeBalance {
+            chain_network: "sui".to_string(),
+            balance: "bad architecture".to_string(),
+            decimals: None,
+        };
+        let shown = display_all_token_balances(&[token], &[native]);
+        let gas = shown
+            .lines()
+            .find(|l| l.contains("GAS"))
+            .expect("a GAS row");
+        assert!(gas.contains("bad architecture"), "{gas}");
     }
 
     /// An unknown architecture selects no wallet (and is logged), never an
