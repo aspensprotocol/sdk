@@ -29,8 +29,14 @@ message WithdrawRequest {
   string amount = 4;
   // Signature by `account`'s key over the canonical request bytes
   //   `"<network>|<token>|<account>|<amount>"`
-  // — EIP-191 personal-sign (secp256k1, 65 bytes) on EVM, raw Ed25519 (64
-  // bytes) on Solana; the curve follows `network`'s architecture. The server
+  // — EIP-191 personal-sign (secp256k1, 65 bytes) on EVM, and raw Ed25519
+  // (64 bytes) on Solana; the curve and prefix follow `network`'s
+  // architecture. On Tron the message is already text and is signed as is:
+  // digest = keccak256("\x19TRON Signed Message:\n" || decimal byte length of
+  // the message || message), signature 65 bytes r||s||v. An EIP-191
+  // signature is rejected on a Tron network, and a TRON-prefixed one on an
+  // EVM network. On Tron, `account` is the 20-byte 0x-hex address, never the
+  // base58 `T…` display form. The server
   // rebuilds those bytes from the request it receives: each string field is
   // TRIMMED of surrounding whitespace and `amount` is re-serialized from the
   // parsed u128, so a signature over "0x64", "00100" or " 100" never
@@ -71,7 +77,13 @@ message CancelOrderRequest {
   // come from the resting order's `quote_account_address`; an ASK committed
   // base, so it is checked on the base chain's curve and must come from its
   // `base_account_address`. EVM chains verify EIP-191 personal-sign (the
-  // full 65-byte r||s||v); Solana verifies raw Ed25519 (64 bytes). Any other
+  // full 65-byte r||s||v) over those bytes; Solana verifies raw Ed25519 (64
+  // bytes) over them. Tron signs TEXT: the lowercase hex, without `0x`, of
+  // those same bytes, with digest = keccak256("\x19TRON Signed Message:\n" ||
+  // decimal length of the hex text || hex text) and a 65-byte r||s||v
+  // signature; a signature over the raw binary bytes is rejected on Tron, an
+  // EIP-191 signature is rejected on a Tron leg, and a TRON-prefixed one on an
+  // EVM leg. Tron accounts are 20-byte lowercase 0x-hex, as on EVM. Any other
   // signer, or any signed field that differs from the resting order's, is
   // rejected as an invalid signature — it never cancels a different order.
   bytes signature_hash = 2;
@@ -111,9 +123,17 @@ message SendOrderRequest {
   Order order = 1;
   // Valid signature over the encoded `Order` — its protobuf serialization,
   // byte for byte as sent — (EIP-191 personal-sign on EVM, full 65 bytes;
-  // raw Ed25519 on Solana). This is the ONLY thing that authenticates order
-  // entry, and it now covers every input the arborter needs — which is what
-  // let the sibling `OrderAuthorization` message go away entirely.
+  // raw Ed25519 on Solana). On Tron the signed text is the lowercase hex,
+  // without `0x`, of those same bytes, and the digest is
+  // keccak256("\x19TRON Signed Message:\n" || decimal length of the hex text ||
+  // hex text), a 65-byte r||s||v signature; a signature over the raw binary
+  // bytes is rejected on Tron. The prefix follows the architecture of the
+  // chain the signature is checked on: an EIP-191 signature is rejected on a
+  // Tron leg, and a TRON-prefixed one on an EVM leg. Tron accounts are 20-byte
+  // lowercase 0x-hex, as on EVM; the base58 `T…` form is display-only.
+  // This is the ONLY thing that authenticates order entry, and it now covers
+  // every input the arborter needs — which is what let the sibling
+  // `OrderAuthorization` message go away entirely.
   bytes signature_hash = 2;
   // NOTE: `authorization` (field 3) and its `OrderAuthorization` message were
   // removed. It ended up holding exactly two things, and both were wrong to
@@ -142,7 +162,8 @@ message Order {
   optional string price = 3;
   // Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
   string market_id = 4;
-  // User's pubkey (address) on the Base chain.
+  // User's pubkey (address) on the Base chain. On a Tron chain this is the
+  // 0x-hex form, never the base58 `T…` form.
   //
   // Casing contract: this field is part of the SIGNED order, so when the
   // server echoes this message back (`SendOrderResponse.order`) it carries the
@@ -310,8 +331,8 @@ message Trade {
   // The maker's base chain wallet address.
   //
   // All four wallet addresses on this message are CANONICALIZED by the server:
-  // EVM addresses arrive as lowercase hex regardless of how the trader
-  // submitted them (an EIP-55 checksummed submission is lowercased), and
+  // EVM and Tron addresses arrive as lowercase 0x-hex regardless of how the
+  // trader submitted them (an EIP-55 checksummed submission is lowercased), and
   // base58 (Solana) addresses pass through byte-exact, case significant. The
   // same rule covers `OrderbookEntry`'s maker addresses. The ONE exception on
   // the wire is `Order.base_account_address` / `Order.quote_account_address`
@@ -405,7 +426,8 @@ message OrderbookEntry {
   // 'BID = 1' or 'ASK = 2'
   Side side = 5;
   // The maker's base chain wallet address. Canonicalized by the server —
-  // EVM lowercased hex, base58 byte-exact — same rule as `Trade`'s address
+  // EVM and Tron lowercased 0x-hex, base58 byte-exact — same rule as
+  // `Trade`'s address
   // fields; see `Trade.maker_base_address` for the full contract, including
   // the one byte-verbatim exception (`Order`'s echoed addresses).
   string maker_base_address = 6;
