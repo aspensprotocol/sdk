@@ -135,11 +135,11 @@ jobs:
       # The documented lean-signing path: a consumer that only needs to
       # build and sign orders, with no gRPC/RPC runtime. Guards against
       # accidental coupling of always-on modules to the `client` feature.
-      - name: Build aspens --no-default-features --features evm,solana
-        run: cargo build -p aspens --no-default-features --features evm,solana --verbose
+      - name: Build aspens --no-default-features --features evm,solana,tron
+        run: cargo build -p aspens --no-default-features --features evm,solana,tron --verbose
 
-      - name: Test aspens --no-default-features --features evm,solana
-        run: cargo test -p aspens --no-default-features --features evm,solana --verbose
+      - name: Test aspens --no-default-features --features evm,solana,tron
+        run: cargo test -p aspens --no-default-features --features evm,solana,tron --verbose
 
   test:
     name: Tests

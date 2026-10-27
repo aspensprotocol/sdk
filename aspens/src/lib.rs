@@ -5,10 +5,10 @@
 //  NOTE: `ChainClient` / `AspensClient` appear below as code spans, not
 //  intra-doc links. Both are behind `feature = "client"`, and these are the
 //  CRATE-level docs, which are compiled under every feature combination —
-//  including the lean `--no-default-features --features evm,solana` build this
+//  including the lean `--no-default-features --features evm,solana,tron` build this
 //  very section describes. A link here is a hard error under `-D warnings`
 //  exactly when someone documents the lean build.
-//! `ChainClient` RPC dispatcher (EVM via Alloy, Solana via
+//! `ChainClient` RPC dispatcher (EVM and Tron reads via Alloy, Solana via
 //! `solana-client`), the `AspensClient` gRPC entry point, and the
 //! signing helpers in [`evm`], [`solana`], and [`orders`] that produce
 //! the exact bytes the arborter validates.
@@ -20,13 +20,17 @@
 //! - **`solana`** (default) — stateless Solana helpers in [`solana`]
 //!   (PDA derivations, instruction builders, borsh payload encoder).
 //!   Pulls `solana-sdk`, `bs58`, and `borsh`.
+//! - **`tron`** (default) — stateless Tron helpers in [`tron`] (address
+//!   edge conversion, TRON message signing, transaction building). Pulls
+//!   `bs58`. With `client` it also brings `tron::client`, which sends native
+//!   Tron transactions over the node's HTTP API.
 //! - **`client`** (default) — full gRPC + RPC runtime: `AspensClient`,
 //!   the `commands` modules, `chain_client`, the `executor`
 //!   abstraction, and Solana RPC submission. Pulls `tonic`, `prost`,
 //!   `tokio`, `solana-client`, and the proto-generated bindings.
 //!
 //! Lean signing consumers (browser, embedded, etc.) can build with
-//! `--no-default-features --features evm,solana` to skip all of tonic /
+//! `--no-default-features --features evm,solana,tron` to skip all of tonic /
 //! prost / tokio / solana-client.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -66,6 +70,10 @@ pub mod solana;
 /// Relying-party TDX attestation verification (REPORTDATA/manifest reconstruction
 /// + the verify pipeline). Pure `sha2`; the DCAP backend is a separate phase.
 pub mod tdx_verify;
+/// Tron primitives: `T…` address edge conversion, the TRON message prefix, and
+/// hand-encoded transactions. Behind the `tron` feature.
+#[cfg(feature = "tron")]
+pub mod tron;
 pub mod wallet;
 
 /// Generated protobuf bindings for the attestation service.
@@ -95,13 +103,15 @@ pub use chain_client::ChainClient;
 pub use client::{AspensClient, AspensClientBuilder};
 #[cfg(feature = "client")]
 pub use executor::{AsyncExecutor, BlockingExecutor, DirectExecutor};
-pub use wallet::{CurveType, Wallet, load_admin_wallet, load_trader_wallet};
+pub use wallet::{Architecture, CurveType, Wallet, load_admin_wallet, load_trader_wallet};
 
 // Chain-aware wallet helpers depend on the proto-generated `Chain` /
 // `GetConfigResponse` types under `commands::config`, which only exist
 // when the `client` feature is enabled.
 #[cfg(feature = "client")]
-pub use wallet::{chain_curve, load_trader_wallet_for_chain, load_trader_wallet_for_network};
+pub use wallet::{
+    chain_architecture, chain_curve, load_trader_wallet_for_chain, load_trader_wallet_for_network,
+};
 
 // Operator-authority direct-signing flows (Solana). Deliberately not behind
 // `admin`: `commands::admin` is the gRPC surface where the ARBORTER signs, and

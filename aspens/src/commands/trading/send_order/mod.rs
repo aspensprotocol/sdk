@@ -125,13 +125,15 @@ pub(crate) fn prepare_order(
     Ok(PreparedOrder { order, commitment })
 }
 
-/// Two spellings of one address, judged by the chain's rules: EVM hex is
-/// case-insensitive, base58 is not.
+/// Two spellings of one address, judged by the chain's rules: EVM and Tron
+/// hex is case-insensitive, base58 is not. An unknown architecture matches
+/// nothing.
 fn same_address(architecture: &str, a: &str, b: &str) -> bool {
-    if architecture.eq_ignore_ascii_case(crate::chain_client::ARCH_SOLANA) {
-        a == b
-    } else {
-        a.eq_ignore_ascii_case(b)
+    use crate::wallet::Architecture;
+    match Architecture::parse(architecture) {
+        Ok(Architecture::Solana) => a == b,
+        Ok(Architecture::Evm | Architecture::Tron) => a.eq_ignore_ascii_case(b),
+        Err(_) => false,
     }
 }
 
@@ -211,6 +213,7 @@ async fn call_send_order(
     url: String,
     order_for_sending: Order,
     wallet: &Wallet,
+    architecture: crate::wallet::Architecture,
 ) -> Result<SendOrderResponse> {
     // Create a channel to connect to the gRPC server (with TLS support for HTTPS)
     let channel = create_channel(&url).await?;
@@ -222,8 +225,9 @@ async fn call_send_order(
     // the gRPC and FCE paths produce byte-identical envelopes). EVM signatures
     // are 65 bytes (r||s||v); Solana Ed25519 are 64 — the arborter's curve-aware
     // verifier requires exactly those lengths, so send the full curve-native
-    // length with no truncation.
-    let signature_bytes = super::sign_encoded(&order_for_sending, wallet).await?;
+    // length with no truncation. A Tron leg signs the order's hex text under
+    // the TRON prefix (65 bytes).
+    let signature_bytes = super::sign_encoded(&order_for_sending, wallet, architecture).await?;
 
     // Create the request with the original order and signature. That pair is
     // the whole request: the budget and the order id are derived by the
@@ -430,6 +434,45 @@ pub fn origin_network_for_side<'a>(
     })
 }
 
+/// Convert `T…` settlement overrides on a Tron leg to the `0x` hex the venue
+/// carries, for binaries that take addresses as typed input. `T…` is how a
+/// Tron address is shown and pasted; the venue never accepts it
+/// (`orders::validate_settle_address` refuses it). Overrides on other legs,
+/// and hex on a Tron leg, pass through unchanged for the per-chain
+/// validation. A malformed `T…` (bad checksum) is an error naming the flag.
+#[cfg(feature = "tron")]
+pub fn tron_settle_overrides_to_hex(
+    config: &GetConfigResponse,
+    market_id: &str,
+    base_address: Option<String>,
+    quote_address: Option<String>,
+) -> Result<(Option<String>, Option<String>)> {
+    let market = lookup_market(config, market_id)?;
+    let convert = |flag: &str, network: &str, value: Option<String>| -> Result<Option<String>> {
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        let chain = config
+            .get_chain(network)
+            .ok_or_else(|| eyre::eyre!("chain '{network}' not in config"))?;
+        match crate::wallet::chain_architecture(chain)? {
+            crate::wallet::Architecture::Tron if value.starts_with('T') => {
+                let hex =
+                    crate::tron::tron_to_hex(&value).map_err(|e| eyre::eyre!("--{flag}: {e}"))?;
+                tracing::info!("--{flag} {value} is Tron account {hex}");
+                Ok(Some(hex))
+            }
+            crate::wallet::Architecture::Tron
+            | crate::wallet::Architecture::Evm
+            | crate::wallet::Architecture::Solana => Ok(Some(value)),
+        }
+    };
+    Ok((
+        convert("base-address", &market.base_chain_network, base_address)?,
+        convert("quote-address", &market.quote_chain_network, quote_address)?,
+    ))
+}
+
 /// Parse a string side ("buy"/"bid" or "sell"/"ask", case-insensitive) into
 /// the typed enum. Used by binaries that take side as a CLI / REPL arg;
 /// useful as a single source of truth for accepted aliases.
@@ -622,8 +665,10 @@ pub async fn send_order_with_wallets(
     let quote_chain = config
         .get_chain(&market.quote_chain_network)
         .ok_or_else(|| eyre::eyre!("quote chain '{}' not in config", market.quote_chain_network))?;
-    let base_curve = crate::wallet::chain_curve(base_chain);
-    let quote_curve = crate::wallet::chain_curve(quote_chain);
+    let base_architecture = crate::wallet::chain_architecture(base_chain)?;
+    let quote_architecture = crate::wallet::chain_architecture(quote_chain)?;
+    let base_curve = base_architecture.curve();
+    let quote_curve = quote_architecture.curve();
     let base_wallet = wallets
         .iter()
         .copied()
@@ -651,6 +696,12 @@ pub async fn send_order_with_wallets(
     //   Bid (BUY)  → origin = quote chain  → user locks quote
     //   Ask (SELL) → origin = base  chain  → user locks base
     let signing_wallet = if side == 1 { quote_wallet } else { base_wallet };
+    // ...and that chain's architecture decides how it signs.
+    let signing_architecture = if side == 1 {
+        quote_architecture
+    } else {
+        base_architecture
+    };
 
     // The two per-chain settlement addresses the signed order carries:
     // each leg wallet's own address unless overridden — see
@@ -712,7 +763,7 @@ pub async fn send_order_with_wallets(
         prepared.commitment.input_amount,
     );
 
-    let result = call_send_order(url, prepared.order, signing_wallet).await;
+    let result = call_send_order(url, prepared.order, signing_wallet, signing_architecture).await;
 
     // Enhance balance errors with actual balance info (EVM only — Solana balance
     // queries via Alloy don't apply). Use the EVM-side wallet's address since
@@ -776,8 +827,10 @@ async fn enhance_balance_error(
     let token = chain.tokens.get(token_symbol)?;
 
     // The arborter masks rpc_url; this returns Option, so an unresolvable
-    // endpoint degrades to "no balance shown" rather than a hard failure.
-    let rpc = crate::chain_client::chain_rpc_url(chain).ok()?;
+    // endpoint (or a Solana chain, which has no EVM reads) degrades to "no
+    // balance shown" rather than a hard failure. A Tron chain reads through
+    // its `/jsonrpc`.
+    let rpc = crate::chain_client::evm_read_url(chain).ok()?;
     let deposited_balance = query_deposited_balance(
         &rpc,
         &token.address,

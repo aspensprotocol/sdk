@@ -55,16 +55,12 @@
 use std::env;
 
 use aspens::AspensClient;
-use aspens::chain_client::ARCH_EVM;
 use aspens::commands::trading::send_order::send_order_with_wallet;
-use aspens::wallet::{CurveType, load_trader_wallet};
+use aspens::wallet::load_trader_wallet;
 use eyre::{Result, eyre};
 
 const DEFAULT_QUANTITY: &str = "0.001";
 const DEFAULT_SIDE: &str = "ASK";
-
-/// Origin-chain architecture drives which wallet curve we load.
-const ARCH_SOLANA: &str = "Solana";
 
 /// Submits a gasless send_order through the SDK and asserts the arborter
 /// accepted it. **#[ignore]d** — depends on external services; run
@@ -100,11 +96,9 @@ async fn send_order_roundtrip_against_live_stack() -> Result<()> {
         .get_chain(origin_network)
         .ok_or_else(|| eyre!("origin chain {origin_network:?} not in config"))?;
 
-    let curve = match origin_chain.architecture.as_str() {
-        ARCH_EVM => CurveType::Secp256k1,
-        ARCH_SOLANA => CurveType::Ed25519,
-        other => return Err(eyre!("unsupported architecture {other:?}")),
-    };
+    // The SDK's one architecture parser: EVM and Tron load the secp256k1
+    // key, Solana the Ed25519 one, anything else is an error.
+    let curve = aspens::chain_curve(origin_chain)?;
     let wallet = load_trader_wallet(curve)?;
 
     let quantity =

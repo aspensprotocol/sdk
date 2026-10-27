@@ -125,6 +125,8 @@ tempfile = "3.27.0"
 h2 = "0.4.16"
 http = "1.5"
 bytes = "1.12"
+# Test-only: a mock HTTP server for the Tron node API (`aspens::tron::client`).
+wiremock = "0.6.5"
 
 [profile.release]
 opt-level = 3
