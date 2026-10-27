@@ -110,7 +110,8 @@ message DeployContractRequest {
   string chain_network = 1;
   // The signed transaction hash of the createInstance function call.
   // Required for EVM (admin signs+broadcasts the tx locally, then asks
-  // arborter to confirm + register the result). Empty / omitted for Solana,
+  // arborter to confirm + register the result). A Tron chain uses the same
+  // path, and its value is the 64-hex txID. Empty / omitted for Solana,
   // where arborter signs and submits server-side using its own signer
   // (the only key that can satisfy the factory's `has_one = owner` check).
   string tx_hash = 2;
@@ -128,7 +129,7 @@ message DeployContractRequest {
 
 message DeployContractResponse {
   // The address that the instance is deployed to on the specified chain.
-  // Hex (0x-prefixed) for EVM, base58 for Solana.
+  // Hex (0x-prefixed) for EVM and Tron, base58 for Solana.
   string contract_address = 1;
   // Receipt for the on-chain operation. Populated for the Solana
   // server-side path (base58 signature). Empty for EVM, where the admin
@@ -203,7 +204,8 @@ message SetTradeContractResponse {
 message SetOperatorFeeRequest {
   // The chain network whose instance to update. e.g. base-sepolia
   string chain_network = 1;
-  // Operator-fee recipient address (0x-hex for EVM, base58 for Solana).
+  // Operator-fee recipient address (0x-hex for EVM and Tron, base58 for
+  // Solana).
   string recipient = 2;
   // Operator fee in basis points. Combined with maintenance bps the contract
   // rejects a total above the bps denominator (10000).
@@ -211,13 +213,16 @@ message SetOperatorFeeRequest {
 }
 message SetOperatorFeeResponse {
   // On-chain tx hash / signature for the setOperatorFee call (0x-hex EVM,
-  // base58 Solana).
+  // base58 Solana). A Tron chain is refused: the call fails with an error
+  // ("not implemented for this chain yet") and no response is returned, so
+  // the operator fee on a Tron instance is set out-of-band by its
+  // operator admin.
   string tx_signature = 1;
 }
 message SetOperatorAdminRequest {
   // The chain network whose instance to update.
   string chain_network = 1;
-  // The new operator_admin key (0x-hex for EVM, base58 for Solana).
+  // The new operator_admin key (0x-hex for EVM and Tron, base58 for Solana).
   string new_admin = 2;
 }
 message SetOperatorAdminResponse {
@@ -249,7 +254,7 @@ message Configuration {
 
 // Represents the trading instance details
 message TradeContract {
-  // The chain address of the trading instance: 0x-hex for EVM, the
+  // The chain address of the trading instance: 0x-hex for EVM and Tron, the
   // program/instance address in base58 for Solana.
   string address = 1;
 }
@@ -269,7 +274,8 @@ message RpcEndpoint {
   string label = 1;
   // Full URL. MASKED on read paths: query values, userinfo, and every
   // non-empty path segment are replaced with "***" (scheme + host stay
-  // visible; the endpoint's identity survives via label + host).
+  // visible; the endpoint's identity survives via label + host). For a
+  // "tron" chain this is the HTTP base URL, not a JSON-RPC path.
   string url = 2;
   RpcAuthScheme auth_scheme = 3;
   // Meaning depends on auth_scheme (see enum). Visible on reads (it is a
@@ -303,10 +309,13 @@ enum FinalityPolicy {
 
 // Represents a single blockchain network
 message Chain {
-  // The chain's architecture: exactly "evm" or "solana", lowercase (the
-  // server lowercases on write). Any other string is accepted by SetChain
-  // and only fails later, at deploy or listener start; an empty string is
-  // treated as "evm" on the deploy paths.
+  // The chain's architecture: exactly "evm", "solana" or "tron", lowercase
+  // (the server lowercases on write). An empty string is treated as "evm".
+  // Any other value is refused by SetChain. A "tron" chain uses the EVM
+  // address and contract formats, but its transport is Tron's HTTP API: the
+  // endpoint url (see RpcEndpoint.url) is the HTTP base URL, for example
+  // https://api.trongrid.io, with JSON-RPC at <base>/jsonrpc and the native
+  // API at <base>/wallet and <base>/walletsolidity.
   string architecture = 1;
   // The canonical name of the chain (e.g., 'Ethereum Mainnet' | 'Solana Devnet')
   string canonical_name = 2;
