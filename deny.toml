@@ -36,6 +36,17 @@ ignore = [
   # alloy-sol-macro (sol! codegen). No published alloy-sol-macro release
   # drops it yet, so this is upstream's call. Revisit when alloy migrates.
   "RUSTSEC-2026-0173",
+  # crypto-bigint 0.5 constant-time branches (fixed in 0.7.6). On the
+  # k256 0.13 signing path; alloy 2.5.0 still requires k256 ^0.13, so no
+  # compatible fix. Mirrors ../.cargo/audit.toml; remove when alloy moves.
+  "RUSTSEC-2026-0387",
+  # zstd 0.13 / zstd-safe 7 via solana-account-decoder only, which uses
+  # write::Encoder::new + read::Decoder: not the affected with_context (0391),
+  # seekable (0398, feature off) or write::Decoder (0403). Solana 3.1 pins
+  # zstd 0.13. Mirrors ../.cargo/audit.toml.
+  "RUSTSEC-2026-0391",
+  "RUSTSEC-2026-0398",
+  "RUSTSEC-2026-0403",
   # NOTE: rsa / RUSTSEC-2023-0071 is deliberately NOT ignored here.
   # cargo-deny resolves with feature activation, and the verifier uses
   # dcap-qvl's `ring` backend, so rsa (an optional dep of dcap-qvl-webpki)
