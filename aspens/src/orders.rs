@@ -158,10 +158,13 @@ pub fn parse_destination_token_bytes32(token: &str) -> Result<[u8; 32]> {
 /// funds — validate before signing, not after the venue has credited it.
 ///
 /// The rules mirror what the arborter enforces at `SendOrder` entry:
-/// - Solana architecture: base58 decoding to exactly 32 bytes.
-/// - Everything else (EVM): a `0x`-prefixed 20-byte hex string. The prefix
+/// - Solana: base58 decoding to exactly 32 bytes.
+/// - EVM (or empty) and Tron: a `0x`-prefixed 20-byte hex string. The prefix
 ///   is required — the venue's ledger only canonicalizes `0x`-prefixed
-///   addresses, so an unprefixed spelling would key a separate balance.
+///   addresses, so an unprefixed spelling would key a separate balance. A
+///   Tron `T…` address is a display form the venue never accepts; convert it
+///   with `tron::tron_to_hex` first.
+/// - Any other architecture: an error.
 ///
 /// Plus one stricter, client-only rule: a MIXED-CASE EVM address claims an
 /// EIP-55 checksum, and is refused when that checksum is wrong. The venue
@@ -169,26 +172,41 @@ pub fn parse_destination_token_bytes32(token: &str) -> Result<[u8; 32]> {
 /// and is echoed byte-verbatim), so catching the typo is this function's
 /// job or nobody's.
 pub fn validate_settle_address(architecture: &str, address: &str) -> Result<()> {
-    // The "solana" sentinel is matched case-insensitively, the same rule as
-    // `wallet::chain_curve` / `chain_client::ARCH_SOLANA` (not referenced
-    // here to keep this module free of client-gated code) — a new
-    // architecture must be added to all of these dispatch points together.
-    if architecture.eq_ignore_ascii_case("solana") {
-        #[cfg(feature = "solana")]
-        return match bs58::decode(address).into_vec() {
-            Ok(raw) if raw.len() == 32 => Ok(()),
-            Ok(raw) => Err(eyre!(
-                "'{address}' base58-decodes to {} bytes, expected exactly 32",
-                raw.len()
-            )),
-            Err(e) => Err(eyre!("'{address}' is not a valid base58 pubkey: {e}")),
-        };
-        #[cfg(not(feature = "solana"))]
+    // The one architecture parser (`wallet::Architecture`), so a new
+    // architecture is a compile error here as at every other dispatch point.
+    let is_tron = match crate::wallet::Architecture::parse(architecture)? {
+        crate::wallet::Architecture::Evm => false,
+        crate::wallet::Architecture::Tron => true,
+        crate::wallet::Architecture::Solana => {
+            return validate_solana_settle_address(address);
+        }
+    };
+    if is_tron && address.starts_with('T') {
         return Err(eyre!(
-            "cannot validate Solana address '{address}': the `solana` feature is not compiled in"
+            "Tron address '{address}' is in its T… display form; the venue carries a Tron \
+             account as 0x hex (convert it first)"
         ));
     }
+    validate_hex_settle_address(address)
+}
 
+fn validate_solana_settle_address(address: &str) -> Result<()> {
+    #[cfg(feature = "solana")]
+    return match bs58::decode(address).into_vec() {
+        Ok(raw) if raw.len() == 32 => Ok(()),
+        Ok(raw) => Err(eyre!(
+            "'{address}' base58-decodes to {} bytes, expected exactly 32",
+            raw.len()
+        )),
+        Err(e) => Err(eyre!("'{address}' is not a valid base58 pubkey: {e}")),
+    };
+    #[cfg(not(feature = "solana"))]
+    return Err(eyre!(
+        "cannot validate Solana address '{address}': the `solana` feature is not compiled in"
+    ));
+}
+
+fn validate_hex_settle_address(address: &str) -> Result<()> {
     let Some(body) = address.strip_prefix("0x") else {
         return Err(eyre!(
             "EVM address '{address}' must carry the 0x prefix (the venue's ledger only \
@@ -403,6 +421,26 @@ mod tests {
         // on a Solana leg fails loudly rather than being reinterpreted.
         assert!(validate_settle_address("solana", &checksummed()).is_err());
         assert!(validate_settle_address("solana", "").is_err());
+    }
+
+    /// A Tron leg settles to the same 0x hex as EVM; its `T…` display form
+    /// is refused (the CLI converts it first), and an unknown architecture
+    /// validates nothing.
+    #[test]
+    fn tron_settle_address_is_hex_and_t_form_is_refused() {
+        assert!(
+            validate_settle_address("Tron", "0xa5411a1a5784b0828bbafcfa588c72ef3f3ce646").is_ok()
+        );
+        let err = validate_settle_address("tron", "TR2zV5HudeeSw37JKTwMWofufa2JL7qnss")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("0x hex"), "{err}");
+        assert!(
+            validate_settle_address("tron", "a5411a1a5784b0828bbafcfa588c72ef3f3ce646").is_err()
+        );
+        assert!(
+            validate_settle_address("sui", "0xa5411a1a5784b0828bbafcfa588c72ef3f3ce646").is_err()
+        );
     }
 
     /// Regression: Solana's System Program / null pubkey base58-encodes as

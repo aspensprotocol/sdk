@@ -212,6 +212,28 @@ async fn get_native_balance(rpc_url: &str, address: &str) -> Result<u128> {
     Ok(balance.to::<u128>())
 }
 
+/// Each chain's endpoint for the signer gas read (an EVM `eth_getBalance`):
+/// a Tron chain answers it at its `/jsonrpc`. A chain whose architecture is
+/// unknown is left out (logged), never read as EVM.
+fn gas_read_urls(chains: &[Chain]) -> std::collections::HashMap<String, String> {
+    chains
+        .iter()
+        .filter_map(|chain| {
+            let url = match crate::wallet::chain_architecture(chain) {
+                Ok(crate::wallet::Architecture::Tron) => crate::chain_client::evm_read_url(chain),
+                Ok(crate::wallet::Architecture::Evm | crate::wallet::Architecture::Solana) => {
+                    crate::chain_client::chain_rpc_url(chain)
+                }
+                Err(e) => {
+                    tracing::warn!("skipping the gas balance: {e}");
+                    return None;
+                }
+            };
+            Some((chain.network.clone(), url.unwrap_or_default()))
+        })
+        .collect()
+}
+
 /// Get signer public key(s) with their native gas balances
 ///
 /// # Arguments
@@ -236,16 +258,7 @@ pub async fn get_signer_public_key_with_balances(
     // Build a map of chain_network -> rpc_url. `get_config` above already
     // applied local RPC overrides, so this just reads the resolved primary
     // endpoint back out (falling back to empty on failure, same as before).
-    let chain_rpc_map: std::collections::HashMap<String, String> = config
-        .chains
-        .iter()
-        .map(|chain| {
-            (
-                chain.network.clone(),
-                crate::chain_client::chain_rpc_url(chain).unwrap_or_default(),
-            )
-        })
-        .collect();
+    let chain_rpc_map = gas_read_urls(&config.chains);
 
     // Fetch balances for each signer
     let mut signer_infos = Vec::new();
@@ -353,3 +366,22 @@ pub fn attestation_report_json(report: &AttestationReport) -> serde_json::Value 
 // No unit tests here: the three that existed were `#[ignore]`d against
 // `../example/config.{json,toml}`, fixtures deleted from the repo in
 // 718534e (2025-05-30), so they could not run even with `--ignored`.
+
+#[cfg(test)]
+mod gas_read_url_tests {
+    use super::*;
+
+    /// An unknown architecture gets no gas read at all; a known one keeps
+    /// its row.
+    #[test]
+    fn an_unknown_architecture_is_skipped_not_read_as_evm() {
+        let chain = |network: &str, arch: &str| Chain {
+            network: network.into(),
+            architecture: arch.into(),
+            ..Default::default()
+        };
+        let map = gas_read_urls(&[chain("gas-read-sui", "sui"), chain("gas-read-evm", "EVM")]);
+        assert!(!map.contains_key("gas-read-sui"));
+        assert!(map.contains_key("gas-read-evm"));
+    }
+}

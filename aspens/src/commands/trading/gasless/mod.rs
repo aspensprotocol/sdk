@@ -1008,6 +1008,47 @@ pub(crate) mod tests {
         .unwrap()
     }
 
+    /// Despite its name this module is the order-id recipe, not a gasless
+    /// deposit, so a Tron leg is NOT refused here: the arborter derives a
+    /// Tron order's id exactly as an EVM one's, over the same 20 account
+    /// bytes decoded from the `0x` hex (its `user_address_bytes`). Refusing
+    /// it would make every Tron order unplaceable.
+    #[test]
+    fn gasless_on_tron_derives_the_arborter_id() {
+        let (mut config, market) = config_with_market(BASE_DEC, QUOTE_DEC, PAIR_DEC);
+        for chain in &mut config.config.as_mut().unwrap().chains {
+            chain.architecture = "Tron".into();
+        }
+        let wallet = Wallet::from_evm_hex(TEST_EVM_KEY).unwrap();
+        let nonce = 1_700_000_000_007;
+        let tron = build_order_commitment(
+            &config,
+            &market,
+            1,
+            &wallet,
+            "100000000",
+            Some("200000000"),
+            None,
+            nonce,
+        )
+        .expect("a Tron leg derives an id");
+        let account = wallet.as_evm().unwrap().address();
+        let expected = derive_order_id(
+            account.as_slice(),
+            nonce,
+            2, // a bid gives quote: origin is the quote chain
+            1,
+            QUOTE_ADDR_IN_MARKET_ID.as_bytes(),
+            BASE_ADDR_IN_MARKET_ID.as_bytes(),
+            tron.input_amount,
+            resolve_order(&config, &market, 1, "100000000", Some("200000000"), None)
+                .unwrap()
+                .amount_out,
+        );
+        assert_eq!(tron.order_id, format!("0x{}", hex::encode(expected)));
+        assert_eq!(tron.order_id, commit_with_nonce(nonce).order_id);
+    }
+
     /// The nonce is an input to the id, so two orders identical in every
     /// other respect must derive different ids. This is what makes
     /// `Order.nonce` worth signing: the arborter reproduces the id from the

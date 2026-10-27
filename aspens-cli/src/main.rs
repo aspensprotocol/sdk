@@ -51,17 +51,18 @@ fn parse_fixed<const N: usize>(label: &str, s: &Option<String>) -> Result<Option
 }
 
 /// Parse an `--expected-pubkey <curve>:<hex>` argument into a curve tag + raw
-/// pubkey bytes. Accepts `secp256k1`/`evm`/`k1` and `ed25519`/`solana`/`sol`.
+/// pubkey bytes. Accepts `secp256k1`/`evm`/`k1`/`tron` (a Tron key is the
+/// same secp256k1 key) and `ed25519`/`solana`/`sol`.
 fn parse_expected_pubkey(s: &str) -> Result<(CurveTag, Vec<u8>)> {
     let (curve, hex_str) = s.split_once(':').ok_or_else(|| {
         eyre::eyre!("--expected-pubkey must be `<curve>:<hex>` (e.g. secp256k1:04ab…), got `{s}`")
     })?;
     let tag = match curve.trim().to_ascii_lowercase().as_str() {
-        "secp256k1" | "evm" | "k1" => CurveTag::Secp256k1,
+        "secp256k1" | "evm" | "k1" | "tron" => CurveTag::Secp256k1,
         "ed25519" | "solana" | "sol" => CurveTag::Ed25519,
         other => {
             return Err(eyre::eyre!(
-                "unknown curve `{other}` in --expected-pubkey (use secp256k1/evm or ed25519/solana)"
+                "unknown curve `{other}` in --expected-pubkey (use secp256k1/evm/tron or ed25519/solana)"
             ));
         }
     };
@@ -123,14 +124,36 @@ struct OrderFlags {
 #[derive(clap::Args, Clone, Debug, Default)]
 struct SettleArgs {
     /// Settle the BASE leg to this address (must be valid on the base
-    /// chain: 0x-prefixed hex on EVM, base58 pubkey on Solana). On a SELL
-    /// this is the giving leg and may only restate your own address.
+    /// chain: 0x-prefixed hex on EVM, base58 pubkey on Solana, 0x hex or a
+    /// `T…` address on Tron). On a SELL this is the giving leg and may only
+    /// restate your own address.
     #[arg(long)]
     base_address: Option<String>,
     /// Settle the QUOTE leg to this address (same per-chain rules). On a
     /// BUY this is the giving leg and may only restate your own address.
     #[arg(long)]
     quote_address: Option<String>,
+}
+
+/// Convert a `T…` settlement override on a Tron leg to the `0x` hex the
+/// venue carries. `T…` is how a Tron address is shown and pasted; the venue
+/// never accepts it. Overrides on other legs, and hex on a Tron leg, pass
+/// through unchanged for the library's per-chain validation.
+fn tron_settle_args_to_hex(
+    config: &GetConfigResponse,
+    market: &str,
+    settle: SettleArgs,
+) -> Result<SettleArgs> {
+    let (base_address, quote_address) = send_order::tron_settle_overrides_to_hex(
+        config,
+        market,
+        settle.base_address,
+        settle.quote_address,
+    )?;
+    Ok(SettleArgs {
+        base_address,
+        quote_address,
+    })
 }
 
 /// What the CLI needs back from a submitted order, normalized across the two
@@ -307,6 +330,8 @@ async fn dispatch_send_order(
         });
     }
 
+    let settle = tron_settle_args_to_hex(&config, &market, settle)
+        .map_err(|e| eyre::eyre!(format_error(&e, &context)))?;
     let resp = executor
         .execute(async move {
             let wallets: Vec<&Wallet> = [evm.as_ref(), solana.as_ref()]
@@ -1363,6 +1388,10 @@ async fn run() -> Result<()> {
 
             println!("Trader Wallet:");
             println!("  Address:    {}", address);
+            // The same account on a Tron chain, in the form Tron wallets show.
+            if let Ok(tron) = aspens::tron::hex_to_tron(&format!("{address:#x}")) {
+                println!("  Tron:       {tron}");
+            }
             println!(
                 "  Public Key: 0x{}",
                 hex::encode(pubkey.to_encoded_point(false).as_bytes())
@@ -1953,5 +1982,104 @@ mod fce_dispatch_tests {
             Side::Ask
         );
         assert!(fce_side_str(Side::Unspecified).is_err());
+    }
+}
+
+#[cfg(test)]
+mod tron_input_tests {
+    use super::*;
+    use aspens::commands::config::config_pb::{Chain, Configuration, Market};
+
+    fn config() -> GetConfigResponse {
+        let chain = |network: &str, arch: &str| Chain {
+            network: network.into(),
+            architecture: arch.into(),
+            ..Default::default()
+        };
+        GetConfigResponse {
+            config: Some(Configuration {
+                chains: vec![chain("tron-nile", "Tron"), chain("base-sepolia", "EVM")],
+                markets: vec![Market {
+                    name: "TRX/USDC".into(),
+                    base_chain_network: "tron-nile".into(),
+                    quote_chain_network: "base-sepolia".into(),
+                    market_id: "tron-nile::0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee::\
+                                base-sepolia::0x036cbd53842c5426634e7929541ec2318f3dcf7e"
+                        .into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        }
+    }
+
+    /// A `T…` settlement address on a Tron leg is converted to the 0x hex
+    /// the venue carries (the fixture pair), which then passes the wire's
+    /// validation that the `T…` form fails. A hex override passes through
+    /// untouched, and an EVM leg is never converted.
+    #[test]
+    fn cli_accepts_t_form_and_sends_hex() {
+        let config = config();
+        let market = "tron-nile::0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee::\
+                      base-sepolia::0x036cbd53842c5426634e7929541ec2318f3dcf7e";
+        let out = tron_settle_args_to_hex(
+            &config,
+            market,
+            SettleArgs {
+                base_address: Some("TR2zV5HudeeSw37JKTwMWofufa2JL7qnss".into()),
+                quote_address: Some("0x00000000000000000000000000000000000000aa".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out.base_address.as_deref(),
+            Some("0xa5411a1a5784b0828bbafcfa588c72ef3f3ce646")
+        );
+        assert_eq!(
+            out.quote_address.as_deref(),
+            Some("0x00000000000000000000000000000000000000aa")
+        );
+        assert!(
+            aspens::orders::validate_settle_address("Tron", out.base_address.as_deref().unwrap())
+                .is_ok()
+        );
+        assert!(
+            aspens::orders::validate_settle_address("Tron", "TR2zV5HudeeSw37JKTwMWofufa2JL7qnss")
+                .is_err()
+        );
+
+        // A T-form on the EVM leg is not a Tron address there: left for the
+        // wire's validation to refuse, never converted.
+        let out = tron_settle_args_to_hex(
+            &config,
+            market,
+            SettleArgs {
+                base_address: None,
+                quote_address: Some("TR2zV5HudeeSw37JKTwMWofufa2JL7qnss".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out.quote_address.as_deref(),
+            Some("TR2zV5HudeeSw37JKTwMWofufa2JL7qnss")
+        );
+
+        // A mistyped T-form is refused here with the checksum error.
+        let err = tron_settle_args_to_hex(
+            &config,
+            market,
+            SettleArgs {
+                base_address: Some("TR2zV5HudeeSw37JKTwMWofufa2JL7qnsT".into()),
+                quote_address: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--base-address"), "{err}");
+    }
+
+    #[test]
+    fn expected_pubkey_accepts_a_tron_tag() {
+        let (tag, _) = parse_expected_pubkey("tron:04ab").unwrap();
+        assert!(matches!(tag, CurveTag::Secp256k1));
     }
 }

@@ -9,6 +9,60 @@ change before 1.0.
 
 ## [Unreleased]
 
+The next release is **0.9.0**: it breaks the public API in the four ways
+marked BREAKING under Changed, and pre-1.0 a breaking change takes a minor
+bump (see **Versioning** in `README.md`).
+
+### Added
+
+- **Tron.** A chain whose architecture is `Tron` is an EVM chain with four
+  differences, and the SDK now handles all four: reads go through the node's
+  `/jsonrpc` with the EVM code (`ChainClient::Tron`,
+  `chain_client::evm_read_url`); writes are native Tron transactions
+  (`tron::client::send_tron_tx`: simulated first, signed once, the identical
+  hex rebroadcast, `Ok` only on a `SUCCESS` receipt); orders, cancels and
+  withdraw requests on a Tron leg are signed under the TRON message prefix;
+  and a `T…` address is a display/input form converted to `0x` hex at the CLI
+  edge. Deposit (USDT `approve` + `deposit`, TRX `depositNative` with
+  `call_value`), voucher withdraw and balance all have Tron arms. The `tron`
+  feature is now on by default. `aspens-admin deploy-contract` refuses a Tron
+  chain (the deployer creates Tron instances), and the FCE transport refuses
+  Tron legs.
+- `wallet::Architecture` (`Evm`, `Solana`, `Tron`) and
+  `wallet::chain_architecture`: the one parser every per-chain dispatch now
+  matches on. An unknown architecture is an error everywhere, never an EVM
+  default.
+
+- `tron::client::TronHttp::with_api_key` sends a provider key as the
+  `TRON-PRO-API-KEY` header on every request to the node (TronGrid
+  authenticates by header, not by a query parameter). The CLI deposit and
+  withdraw flows read it from `ASPENS_TRON_API_KEY_<NETWORK>`, beside the
+  endpoint's `ASPENS_RPC_URL_<NETWORK>`.
+
+### Changed
+
+- **BREAKING: `wallet::chain_curve` returns `Result<CurveType>`** (it returned
+  `CurveType`). An unknown architecture is an error instead of secp256k1.
+- **BREAKING: `chain_client::ChainClient` has a new `Tron` variant.** The enum
+  is not `#[non_exhaustive]`, so a downstream exhaustive `match` on it stops
+  compiling until it adds a `ChainClient::Tron` arm.
+- **BREAKING: `commands::trading::fce_actions::cancel_order` and
+  `fce_actions::withdraw` take a new last argument,
+  `architecture: wallet::Architecture`** (`fce` feature): the architecture
+  the signature is made for (the giving leg's chain for a cancel, the
+  request's network for a withdraw). `cancel_order_from_config` derives it
+  from the configuration.
+- **BREAKING: `orders::validate_settle_address` errors on an unknown
+  architecture.** It used to treat any architecture other than Solana as
+  EVM. It also refuses a Tron `T…` address (the venue carries Tron accounts
+  as `0x` hex).
+- A Tron transaction unseen at its expiry is reported as UNCONFIRMED, with
+  its txID and the endpoint, and the message says to check before retrying;
+  a FAILED or OUT_OF_ENERGY receipt read at the head is not called final.
+- The balance table prints a Tron chain's GAS row in sun (6 decimals), and a
+  chain with an unknown architecture as "bad architecture" rather than in a
+  guessed 18-decimal unit.
+
 ## [0.8.0] — 2026-10-20
 
 **Pairs with an arborter that has replay protection (arborter #380).** Against

@@ -20,6 +20,7 @@ aspens = { path = "../aspens", default-features = false, features = [
   "trader",
   "evm",
   "solana",
+  "tron",
   "dcap-fetch",
 ] }
 aspens-cliutil = { path = "../aspens-cliutil" }
