@@ -16,4 +16,21 @@ ignore = [
   # RSA private-key timing — unreachable for a verifier that holds no RSA
   # keys against Intel's all-ECDSA PKI.
   "RUSTSEC-2023-0071",
+  # crypto-bigint 0.5 — RUSTSEC-2026-0387 (constant-time ops may branch on
+  # secrets). Fixed only in 0.7.6; k256/elliptic-curve 0.13 pin 0.5, and alloy
+  # (2.5.0, the latest) still requires k256 ^0.13, so there is no compatible
+  # fix. It IS on the signing path (k256 Scalar arithmetic), so the exposure is
+  # a local timing/microarchitectural observer on the machine that signs.
+  # Remove this entry when alloy moves to k256 0.14.
+  "RUSTSEC-2026-0387",
+  # zstd 0.13 / zstd-safe 7 — reached only through solana-account-decoder,
+  # which encodes with `write::Encoder::new` and decodes with `read::Decoder`.
+  # Fixed only in zstd 0.14.3 / zstd-safe 8.2, which solana 3.1 does not allow.
+  # RUSTSEC-2026-0391: only the `with_context` constructors are affected.
+  "RUSTSEC-2026-0391",
+  # RUSTSEC-2026-0398: `seekable::*::decompress`; the `seekable` feature is off.
+  "RUSTSEC-2026-0398",
+  # RUSTSEC-2026-0403: `DCtx::decompress_stream` via `write::Decoder`; the
+  # advisory states `read::Decoder` is unaffected.
+  "RUSTSEC-2026-0403",
 ]
