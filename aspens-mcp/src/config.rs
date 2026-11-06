@@ -222,6 +222,17 @@ pub fn startup_keys(cfg: &Config) -> Result<KeyPresence> {
     check_keys(&env)
 }
 
+/// Parse a human decimal amount, rejecting more fractional digits than
+/// `decimals` (the SDK's `parse_decimal_amount` silently truncates them).
+pub fn parse_amount(s: &str, decimals: u32) -> Result<u128> {
+    if let Some((_, frac)) = s.trim().split_once('.')
+        && frac.len() as u64 > u64::from(decimals)
+    {
+        return Err(eyre!("too many decimal places: {s} (max {decimals})"));
+    }
+    parse_decimal_amount(s, decimals)
+}
+
 /// Resolve configured limits against the venue's markets. Exact id match only.
 pub fn resolve_markets(
     cfg: &Config,
@@ -235,7 +246,7 @@ pub fn resolve_markets(
         let pair_decimals = u32::try_from(market.pair_decimals)
             .map_err(|_| eyre!("markets.\"{id}\": venue pair_decimals is negative"))?;
         let amount = |field: &str, value: &str| {
-            parse_decimal_amount(value, pair_decimals)
+            parse_amount(value, pair_decimals)
                 .wrap_err_with(|| format!("markets.\"{id}\".{field} = {value:?}"))
         };
         out.insert(
@@ -423,6 +434,30 @@ mod tests {
             err.contains(&format!("markets.\"{MARKET}\".max_daily_qty")),
             "{err}"
         );
+    }
+
+    #[test]
+    fn parse_amount_rejects_excess_precision() {
+        let err = parse_amount("1.1234567", 6).unwrap_err().to_string();
+        assert!(err.contains("max 6"), "{err}");
+    }
+
+    #[test]
+    fn parse_amount_accepts_exact_precision() {
+        assert_eq!(parse_amount("1.123456", 6).unwrap(), 1_123_456);
+        assert_eq!(parse_amount("1", 6).unwrap(), 1_000_000);
+    }
+
+    #[test]
+    fn resolve_refuses_limit_with_excess_decimals() {
+        let mut c = cfg_with(&market_block(None, ""));
+        c.markets.get_mut(MARKET).unwrap().max_daily_quote = "1.1234567".into();
+        let err = format!("{:#}", resolve_markets(&c, &venue()).unwrap_err());
+        assert!(
+            err.contains(&format!("markets.\"{MARKET}\".max_daily_quote")),
+            "{err}"
+        );
+        assert!(err.contains("max 6"), "{err}");
     }
 
     #[test]
