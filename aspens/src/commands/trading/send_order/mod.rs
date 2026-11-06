@@ -241,21 +241,11 @@ async fn call_send_order(
     // Create a tonic request
     let request = tonic::Request::new(request);
 
-    // Call the send_order endpoint. A "session changed" refusal means the
-    // venue restarted after `config` was fetched: nothing was placed, and a
-    // NEW order signed for the new session is the way on — never these bytes.
-    let response = client.send_order(request).await.map_err(|s| {
-        if s.code() == tonic::Code::FailedPrecondition && s.message().starts_with("session changed")
-        {
-            eyre::eyre!(
-                "{} — the venue restarted since the configuration was fetched; fetch it again \
-                 (AspensClient::fetch_config) and send a new order",
-                s.message()
-            )
-        } else {
-            eyre::Report::new(s)
-        }
-    })?;
+    // Call the send_order endpoint.
+    let response = client
+        .send_order(request)
+        .await
+        .map_err(send_status_error)?;
 
     // Get the response data
     let response_data = response.into_inner();
@@ -264,6 +254,34 @@ async fn call_send_order(
     tracing::info!("Response received: {}", response_data);
 
     Ok(response_data)
+}
+
+/// The error for a `SendOrder` call the venue answered with `s`.
+///
+/// The status itself stays in the error chain (`downcast_ref::<tonic::Status>()`
+/// finds it), so a caller can tell a definite refusal from a lost answer. A
+/// "session changed" refusal means the venue restarted after the configuration
+/// was fetched: nothing was placed, and a NEW order signed for the new session
+/// is the way on, never these bytes. That case gets context saying so.
+#[doc(hidden)]
+pub fn send_status_error(s: tonic::Status) -> eyre::Report {
+    if s.code() == tonic::Code::FailedPrecondition && s.message().starts_with("session changed") {
+        let msg = format!(
+            "{} — the venue restarted since the configuration was fetched; fetch it again \
+             (AspensClient::fetch_config) and send a new order",
+            s.message()
+        );
+        eyre::Report::new(s).wrap_err(msg)
+    } else {
+        eyre::Report::new(s)
+    }
+}
+
+/// A send error `e` with the deposited-balance explanation `enhanced` as its
+/// message. `e` (and any `tonic::Status` in it) stays in the chain.
+#[doc(hidden)]
+pub fn wrap_balance_error(e: eyre::Report, enhanced: String) -> eyre::Report {
+    e.wrap_err(enhanced)
 }
 
 /// Query deposited (available) balance for a token on a specific chain
@@ -768,7 +786,7 @@ pub async fn send_order_with_wallets(
     // Enhance balance errors with actual balance info (EVM only — Solana balance
     // queries via Alloy don't apply). Use the EVM-side wallet's address since
     // that's the one whose balance the helper actually queries on-chain.
-    if let Err(ref e) = result {
+    if let Err(e) = &result {
         let err_str = e.to_string().to_lowercase();
         if (err_str.contains("insufficient") || err_str.contains("balance"))
             && let Some(evm_wallet) = wallets
@@ -789,7 +807,7 @@ pub async fn send_order_with_wallets(
                 )
                 .await
             {
-                return Err(enhanced);
+                return result.map_err(|e| wrap_balance_error(e, enhanced));
             }
         }
     }
@@ -806,7 +824,7 @@ async fn enhance_balance_error(
     price_raw: Option<&str>,
     user_address: Address,
     pair_decimals: u32,
-) -> Option<eyre::Report> {
+) -> Option<String> {
     // BUY: need quote token, SELL: need base token
     let (chain_network, token_symbol, token_decimals) = if side == 1 {
         (
@@ -882,7 +900,7 @@ async fn enhance_balance_error(
 
     let required_str = format_balance_for_display(required, token_decimals);
 
-    Some(eyre::eyre!(
+    Some(format!(
         "Insufficient deposited balance on {}.\n\
          Token: {}\n\
          Required: {} {}\n\
@@ -902,6 +920,46 @@ async fn enhance_balance_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn status_in(e: &eyre::Report) -> Option<&tonic::Status> {
+        e.chain().find_map(|c| c.downcast_ref::<tonic::Status>())
+    }
+
+    #[test]
+    fn session_changed_keeps_its_status() {
+        let e = send_status_error(tonic::Status::failed_precondition(
+            "session changed: 3 -> 4",
+        ));
+        let shown = e.to_string();
+        assert!(shown.starts_with("session changed: 3 -> 4"), "{shown}");
+        assert!(shown.contains("fetch it again"), "{shown}");
+        let s = status_in(&e).expect("the status stays in the chain");
+        assert_eq!(s.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(s.message(), "session changed: 3 -> 4");
+    }
+
+    #[test]
+    fn other_statuses_pass_through() {
+        // FailedPrecondition without the session prefix gets no extra context.
+        let e = send_status_error(tonic::Status::failed_precondition("market halted"));
+        assert_eq!(e.chain().count(), 1);
+        assert_eq!(status_in(&e).unwrap().message(), "market halted");
+        let e = send_status_error(tonic::Status::invalid_argument("session changed"));
+        assert_eq!(e.chain().count(), 1);
+        assert_eq!(status_in(&e).unwrap().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn balance_enhancement_keeps_the_status() {
+        let original = send_status_error(tonic::Status::invalid_argument(
+            "insufficient balance for order",
+        ));
+        let e = wrap_balance_error(original, "Insufficient deposited balance on base.".into());
+        assert_eq!(e.to_string(), "Insufficient deposited balance on base.");
+        let s = status_in(&e).expect("the status stays in the chain");
+        assert_eq!(s.code(), tonic::Code::InvalidArgument);
+        assert_eq!(s.message(), "insufficient balance for order");
+    }
 
     #[test]
     fn test_send_order_response_order_id() {

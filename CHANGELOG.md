@@ -39,8 +39,52 @@ bump (see **Versioning** in `README.md`).
   withdraw flows read it from `ASPENS_TRON_API_KEY_<NETWORK>`, beside the
   endpoint's `ASPENS_RPC_URL_<NETWORK>`.
 
+- `commands::trading::book_snapshot::fetch_book_snapshot`: a strict orderbook
+  reader. It collects the stream for a window and returns a `BookState` built
+  by applying every entry, removals included, so an order added and then
+  cancelled or filled inside the window is not the best price.
+  `BookState::best_bid` / `best_ask` / `bids` / `asks` read it.
+- `commands::trading::stream_trades::fetch_trades_snapshot`: collect the
+  trades stream for a window and return the trades, with the same rules as
+  `fetch_book_snapshot` (window from establishment, an error rather than an
+  empty list when the stream is not established or fails).
+- `book_snapshot::marketable_price` and `marketable_price_from_top`: the
+  slippage-capped limit price of a marketable order, from a snapshot or from a
+  best bid / best ask pair (moved here from `aspens-cli`). An error when the
+  side being taken is empty.
+- `commands::trading::balance::fetch_balances` returns the balances as data
+  (`Balances`: per token, per chain `ChainBalanceView`s with wallet, available
+  and locked readings, plus native gas) instead of printing them. Each
+  `ChainBalanceView` carries that chain's token `decimals`, since one symbol can
+  have different decimals on different chains, and a failed reading keeps its
+  reason (`BalanceValue::Error`). `balance_from_config_with_wallets` now prints
+  from it.
+- **`aspens-mcp`**, a new workspace binary: a stdio MCP server over the SDK so
+  an autonomous agent can trade within per-market limits set in config (order
+  and daily qty and quote caps, a price guard against the venue's own book, a
+  settle-address allowlist, optional venue pinning), with a persistent `halt`
+  that only `aspens-mcp resume` lifts. Withdrawals are off unless enabled. See
+  `aspens-mcp/README.md`, including its custody warning.
+
 ### Changed
 
+- `fetch_book_snapshot` and `fetch_top_of_book` count their collection window
+  from when the stream is established (the `Orderbook` RPC has answered), not
+  from the call. A stream not established within 10 seconds is an error;
+  before, a slow venue returned an empty book.
+- `stream_orderbook::apply_slippage` rounds a sell's floor price up (it
+  rounded down), so the result never lands more than `slippage_bps` under the
+  bid. `aspens-cli sell-marketable` can price one unit higher than before on a
+  bid that does not divide evenly; buys are unchanged.
+- `send_order` keeps the venue's `tonic::Status` in the error chain when it
+  adds context: the "session changed" refusal and the deposited-balance
+  explanation are now context on the status rather than a new error, so
+  `downcast_ref::<tonic::Status>()` over `chain()` finds the code. The
+  top-level message is unchanged.
+- `aspens-cli buy-marketable` / `sell-marketable` resolve their price from
+  the strict snapshot (`fetch_book_snapshot` + `marketable_price_from_top`)
+  instead of `fetch_top_of_book`, which keeps the best price of any entry seen
+  in its window even after that entry was cancelled or filled.
 - **BREAKING: `wallet::chain_curve` returns `Result<CurveType>`** (it returned
   `CurveType`). An unknown architecture is an error instead of secp256k1.
 - **BREAKING: `chain_client::ChainClient` has a new `Tron` variant.** The enum

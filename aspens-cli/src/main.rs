@@ -4,7 +4,8 @@ use aspens::commands::trading::arborter_pb::{SendOrderResponse, Side};
 use aspens::commands::trading::fce_actions;
 use aspens::commands::trading::send_order::{origin_network_for_side, parse_side};
 use aspens::commands::trading::{
-    balance, cancel_order, deposit, send_order, stream_orderbook, stream_trades, withdraw,
+    balance, book_snapshot, cancel_order, deposit, send_order, stream_orderbook, stream_trades,
+    withdraw,
 };
 use aspens::tdx_verify::reportdata::CurveTag;
 use aspens::{
@@ -362,23 +363,6 @@ async fn dispatch_send_order(
     Ok(SentOrder::from(resp))
 }
 
-/// Top-of-book via the gRPC orderbook stream. The 1.5s window is enough for the
-/// matching engine to flush its historical-open-orders burst; live updates after
-/// the deadline are ignored.
-fn grpc_top_of_book(
-    executor: &DirectExecutor,
-    stack_url: String,
-    market_id: String,
-) -> Result<stream_orderbook::TopOfBook> {
-    executor
-        .execute(stream_orderbook::fetch_top_of_book(
-            stack_url,
-            market_id,
-            std::time::Duration::from_millis(1_500),
-        ))
-        .map_err(|e| eyre::eyre!(format_error(&e, "fetch top-of-book")))
-}
-
 /// Resolve a slippage-capped limit price for the `buy-marketable` /
 /// `sell-marketable` CLI commands.
 ///
@@ -420,51 +404,50 @@ async fn resolve_marketable_price(
     let pair_decimals = market.pair_decimals as u32;
 
     // Over FCE the book arrives as a one-shot snapshot, so there is no stream to
-    // drain and no collection window to wait out. Both branches produce the same
-    // `TopOfBook`, so the slippage math below is shared verbatim.
+    // drain and no collection window to wait out. Either source yields a best
+    // bid/ask pair, so the slippage math is shared verbatim. The 1.5s gRPC window
+    // is enough for the matching engine to flush its historical-open-orders burst.
+    let grpc_top = || -> Result<(Option<u128>, Option<u128>)> {
+        let book = executor
+            .execute(book_snapshot::fetch_book_snapshot(
+                stack_url.clone(),
+                market.market_id.clone(),
+                None,
+                std::time::Duration::from_millis(1_500),
+            ))
+            .map_err(|e| eyre::eyre!(format_error(&e, "fetch top-of-book")))?;
+        Ok((book.best_bid(), book.best_ask()))
+    };
     #[cfg(feature = "fce")]
-    let top = if client.uses_fce() {
-        fce_actions::top_of_book(client, &market.market_id)
+    let (best_bid, best_ask) = if client.uses_fce() {
+        let top = fce_actions::top_of_book(client, &market.market_id)
             .await
-            .map_err(|e| eyre::eyre!(format_error(&e, "fetch top-of-book")))?
+            .map_err(|e| eyre::eyre!(format_error(&e, "fetch top-of-book")))?;
+        (top.best_bid, top.best_ask)
     } else {
-        grpc_top_of_book(executor, stack_url, market.market_id.clone())?
+        grpc_top()?
     };
     #[cfg(not(feature = "fce"))]
-    let top = grpc_top_of_book(executor, stack_url, market.market_id.clone())?;
+    let (best_bid, best_ask) = grpc_top()?;
 
-    let (is_buy, reference, label) = match side {
-        Side::Bid => (
-            true,
-            top.best_ask.ok_or_else(|| {
-                eyre::eyre!(
-                    "no resting asks on {} — cannot compute a marketable buy price. \
-                         Place a limit buy at a price you're willing to pay.",
-                    market_id
-                )
-            })?,
-            "best ask",
-        ),
-        Side::Ask => (
-            false,
-            top.best_bid.ok_or_else(|| {
-                eyre::eyre!(
-                    "no resting bids on {} — cannot compute a marketable sell price. \
-                         Place a limit sell at a price you're willing to accept.",
-                    market_id
-                )
-            })?,
-            "best bid",
-        ),
+    let (is_buy, label) = match side {
+        Side::Bid => (true, "best ask"),
+        Side::Ask => (false, "best bid"),
         Side::Unspecified => return Err(eyre::eyre!("side must be Bid or Ask")),
     };
-
-    let raw_capped = stream_orderbook::apply_slippage(reference, slippage_bps, is_buy)
-        .map_err(|e| eyre::eyre!("apply slippage: {e}"))?;
+    let reference = if is_buy { best_ask } else { best_bid };
+    let raw_capped =
+        book_snapshot::marketable_price_from_top(best_bid, best_ask, is_buy, slippage_bps)
+            .map_err(|e| eyre::eyre!("{e} (market {market_id})"))?;
     let price = aspens::decimals::format_decimal_amount(raw_capped, pair_decimals);
     info!(
         "marketable price resolved: {} = {} (raw {}), slippage cap {} bps -> limit price {} (raw {})",
-        label, reference, reference, slippage_bps, price, raw_capped
+        label,
+        reference.unwrap_or_default(),
+        reference.unwrap_or_default(),
+        slippage_bps,
+        price,
+        raw_capped
     );
     Ok(price)
 }

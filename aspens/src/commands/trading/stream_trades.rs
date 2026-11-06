@@ -4,7 +4,9 @@ use super::arborter_pb::arborter_service_client::ArborterServiceClient;
 use super::arborter_pb::{Trade, TradeRequest, TradeRole};
 use eyre::Result;
 use futures::StreamExt;
+use tokio::sync::{mpsc, oneshot};
 
+use super::stream_window::{ForwardedStream, STREAM_ESTABLISH_TIMEOUT, collect_window};
 use super::{format_timestamp, truncate_address};
 use crate::grpc::create_channel;
 
@@ -64,6 +66,26 @@ pub async fn stream_trades<F>(
 where
     F: FnMut(Trade),
 {
+    stream_trades_with(url, options, None, |trade| {
+        callback(trade);
+        std::future::ready(true)
+    })
+    .await
+}
+
+/// Internal core: stream trades, invoking an async callback per trade. The
+/// callback returns whether to keep streaming. `on_established` fires once
+/// the RPC has returned its response, before the first trade.
+async fn stream_trades_with<F, Fut>(
+    url: String,
+    options: StreamTradesOptions,
+    on_established: Option<oneshot::Sender<()>>,
+    mut callback: F,
+) -> Result<()>
+where
+    F: FnMut(Trade) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
     // Create a channel to connect to the gRPC server
     let channel = create_channel(&url).await?;
 
@@ -82,6 +104,9 @@ where
 
     // Call the trades streaming endpoint
     let response = client.trades(request).await?;
+    if let Some(tx) = on_established {
+        let _ = tx.send(());
+    }
 
     // Get the streaming response
     let mut stream = response.into_inner();
@@ -90,7 +115,9 @@ where
     while let Some(trade_result) = stream.next().await {
         match trade_result {
             Ok(trade) => {
-                callback(trade);
+                if !callback(trade).await {
+                    break;
+                }
             }
             Err(e) => {
                 tracing::error!("Stream error: {}", e);
@@ -100,6 +127,50 @@ where
     }
 
     Ok(())
+}
+
+/// Forward the trades stream to a channel from a background task, with a
+/// signal for when the stream is established.
+fn forward_trades(url: String, options: StreamTradesOptions) -> ForwardedStream<Trade> {
+    let (tx, rx) = mpsc::channel(100);
+    let (established_tx, established) = oneshot::channel();
+    let handle = tokio::spawn(async move {
+        stream_trades_with(url, options, Some(established_tx), |trade| {
+            let tx = tx.clone();
+            // A send error means the receiver was dropped: stop streaming.
+            async move { tx.send(trade).await.is_ok() }
+        })
+        .await
+    });
+    ForwardedStream {
+        rx,
+        established,
+        handle,
+    }
+}
+
+/// Collect the trades stream for `window`, counted from when the stream is
+/// established, and return the trades in the order received. Set
+/// `historical_closed_trades` to get past trades first.
+///
+/// A stream not established within 10 seconds, or one that fails or ends
+/// without succeeding before or at the deadline, is an error, never an empty
+/// list. The stream is stopped when the window ends.
+pub async fn fetch_trades_snapshot(
+    url: String,
+    options: StreamTradesOptions,
+    window: std::time::Duration,
+) -> Result<Vec<Trade>> {
+    let mut trades = Vec::new();
+    collect_window(
+        "trades",
+        forward_trades(url, options),
+        STREAM_ESTABLISH_TIMEOUT,
+        window,
+        |t| trades.push(t),
+    )
+    .await?;
+    Ok(trades)
 }
 
 /// Format a trade for CLI display

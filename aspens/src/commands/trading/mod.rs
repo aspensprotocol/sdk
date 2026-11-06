@@ -21,6 +21,8 @@ pub mod arborter_pb {
 
 /// Query balances across chains (native gas, ERC-20 / SPL, locked / withdrawable).
 pub mod balance;
+/// Strict orderbook snapshot that applies cancels and fills.
+pub mod book_snapshot;
 /// Submit a `cancel_order` request and decode the gRPC response.
 pub mod cancel_order;
 /// Deposit tokens into the trading contract so they're available to trade.
@@ -35,6 +37,8 @@ pub mod send_order;
 pub mod stream_orderbook;
 /// Subscribe to the trades stream for a given market.
 pub mod stream_trades;
+/// Collect a forwarded stream for a window that starts once it is established.
+mod stream_window;
 /// Withdraw tokens from the trading contract back to the user's wallet.
 pub mod withdraw;
 

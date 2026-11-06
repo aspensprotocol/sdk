@@ -1,0 +1,27 @@
+stack_url = "https://<stack>/..."   # the venue's gRPC endpoint
+env_file  = "~/.aspens-mcp/.env"    # trader keys (+ RPC URLs), mode 0600
+state_dir = "~/.aspens-mcp"         # ledger lives here
+
+allow_withdraw = false              # true registers the withdraw tool
+# Settlement-address overrides: off unless addresses are listed here.
+settle_address_allowlist = []       # e.g. ["0xabc…", "So1…"]
+
+[deposits]
+enabled = true
+# Optional per-token ceiling per deposit call, token units, keyed "network:token-address".
+# max_per_call = { "base-sepolia:0x…" = "1000" }
+
+# Optional venue pinning. When set, deposits and orders are refused if GetConfig returns a
+# different contract, or the attestation does not verify against the pinned measurement.
+# [venue]
+# expected_contracts = { "base-sepolia" = "0x…" }
+# attestation_mrtd   = "<hex>"
+
+# One block per tradable market. A market not listed here is not tradable.
+# Every field is required.
+[markets."<market_id>"]
+max_order_qty     = "10"        # base, market units (decimal string)
+max_daily_qty     = "100"       # gross base qty, buys + sells, per UTC day
+max_order_quote   = "25000"     # quote a single buy may commit
+max_daily_quote   = "250000"    # quote committed by all buys, per UTC day
+max_deviation_bps = 100         # how far an order may price through the venue's best opposite price

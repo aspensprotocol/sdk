@@ -4,8 +4,11 @@ use super::arborter_pb::arborter_service_client::ArborterServiceClient;
 use super::arborter_pb::{OrderState, OrderbookEntry, OrderbookRequest, Side};
 use eyre::Result;
 use futures::StreamExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
+use super::stream_window::{
+    AbortOnDrop, ForwardedStream, STREAM_ESTABLISH_TIMEOUT, await_established,
+};
 use super::{format_timestamp, truncate_address};
 use crate::grpc::create_channel;
 
@@ -69,7 +72,7 @@ where
 {
     // Adapt the synchronous callback into the async-callback core by
     // returning an already-ready future for each entry.
-    stream_orderbook_with(url, options, |entry| {
+    stream_orderbook_with(url, options, None, |entry| {
         callback(entry);
         std::future::ready(true)
     })
@@ -78,7 +81,8 @@ where
 
 /// Internal core: stream orderbook entries, invoking an **async** callback
 /// per entry. The callback returns whether to keep streaming; `false` drops
-/// the gRPC stream and returns `Ok(())`.
+/// the gRPC stream and returns `Ok(())`. `on_established` fires once the RPC
+/// has returned its response, before the first entry.
 ///
 /// Both the sync-callback [`stream_orderbook`] and the channel-based
 /// [`stream_orderbook_channel`] delegate here. The async callback is what
@@ -87,6 +91,7 @@ where
 async fn stream_orderbook_with<F, Fut>(
     url: String,
     options: StreamOrderbookOptions,
+    on_established: Option<oneshot::Sender<()>>,
     mut callback: F,
 ) -> Result<()>
 where
@@ -111,6 +116,10 @@ where
 
     // Call the orderbook streaming endpoint
     let response = client.orderbook(request).await?;
+    if let Some(tx) = on_established {
+        // Nobody waiting is fine: the plain channel API does not.
+        let _ = tx.send(());
+    }
 
     // Get the streaming response
     let mut stream = response.into_inner();
@@ -145,7 +154,9 @@ pub struct TopOfBook {
 }
 
 /// Snapshot the top-of-book for `market_id` by listening on the
-/// orderbook stream for up to `collection_window`.
+/// orderbook stream for up to `collection_window`, counted from when the
+/// stream is established. A stream not established within 10 seconds is an
+/// error, never an empty book.
 ///
 /// Filters to `OrderState::Confirmed` and non-zero `quantity` — only
 /// those orders match against a new aggressor (per
@@ -164,13 +175,24 @@ pub async fn fetch_top_of_book(
     market_id: String,
     collection_window: std::time::Duration,
 ) -> Result<TopOfBook> {
-    let (mut rx, handle) = stream_orderbook_channel(
+    let ForwardedStream {
+        mut rx,
+        established,
+        handle,
+    } = forward_orderbook(
         url,
         StreamOrderbookOptions {
             market_id,
             historical_open_orders: true,
             filter_by_trader: None,
         },
+    );
+    let mut handle = AbortOnDrop(handle);
+    await_established(
+        "orderbook",
+        &mut handle,
+        established,
+        STREAM_ESTABLISH_TIMEOUT,
     )
     .await?;
 
@@ -213,7 +235,7 @@ pub async fn fetch_top_of_book(
     // The orderbook stream never ends on its own (live updates follow the
     // snapshot), so stop it now rather than leave it open for the life of the
     // process.
-    handle.abort();
+    handle.0.abort();
 
     Ok(top)
 }
@@ -222,8 +244,11 @@ pub async fn fetch_top_of_book(
 ///
 /// - `is_buy = true`: `reference * (10_000 + slippage_bps) / 10_000` — the
 ///   maximum the user is willing to pay above best ask.
-/// - `is_buy = false`: `reference * (10_000 - slippage_bps) / 10_000` — the
-///   minimum the user is willing to accept below best bid.
+/// - `is_buy = false`: `reference * (10_000 - slippage_bps) / 10_000`, rounded
+///   up — the minimum the user is willing to accept below best bid. Rounding
+///   up keeps the result within `slippage_bps` of the bid, so a guard that
+///   allows exactly that many bps accepts it; rounding the buy cap down does
+///   the same for a buyer.
 ///
 /// Takes a plain `bool` rather than the proto `Side` enum so callers
 /// that never touch the generated types (tests, CLI arg parsing) don't
@@ -245,10 +270,14 @@ pub fn apply_slippage(reference_price: u128, slippage_bps: u32, is_buy: bool) ->
             .checked_sub(bps)
             .ok_or_else(|| eyre::eyre!("slippage scale underflow"))?
     };
-    reference_price
+    let scaled = reference_price
         .checked_mul(scale)
-        .ok_or_else(|| eyre::eyre!("slippage * price overflow"))
-        .map(|v| v / 10_000)
+        .ok_or_else(|| eyre::eyre!("slippage * price overflow"))?;
+    Ok(if is_buy {
+        scaled / 10_000
+    } else {
+        scaled.div_ceil(10_000)
+    })
 }
 
 /// Stream orderbook entries to a channel.
@@ -271,10 +300,21 @@ pub async fn stream_orderbook_channel(
     mpsc::Receiver<OrderbookEntry>,
     tokio::task::JoinHandle<Result<()>>,
 )> {
+    let ForwardedStream { rx, handle, .. } = forward_orderbook(url, options);
+    Ok((rx, handle))
+}
+
+/// Forward the orderbook stream to a channel from a background task, with a
+/// signal for when the stream is established.
+pub(crate) fn forward_orderbook(
+    url: String,
+    options: StreamOrderbookOptions,
+) -> ForwardedStream<OrderbookEntry> {
     let (tx, rx) = mpsc::channel(100);
+    let (established_tx, established) = oneshot::channel();
 
     let handle = tokio::spawn(async move {
-        stream_orderbook_with(url, options, |entry| {
+        stream_orderbook_with(url, options, Some(established_tx), |entry| {
             // Async send: `await`s backpressure instead of blocking the
             // runtime thread. `blocking_send` panics inside a multi-thread
             // tokio runtime. Clone the sender so the returned future owns
@@ -287,7 +327,11 @@ pub async fn stream_orderbook_channel(
         .await
     });
 
-    Ok((rx, handle))
+    ForwardedStream {
+        rx,
+        established,
+        handle,
+    }
 }
 
 /// Format an orderbook entry for CLI display
@@ -351,11 +395,16 @@ mod tests {
     }
 
     #[test]
-    fn apply_slippage_truncates_toward_zero() {
-        // 1_001 * 1.0001 = 1001.1001 -> truncated to 1001.
+    fn apply_slippage_rounds_toward_the_reference() {
+        // Buy: 1_001 * 1.0001 = 1001.1001 -> rounded down to 1001.
         assert_eq!(apply_slippage(1_001, 1, true).unwrap(), 1_001);
-        // 1_001 * 0.9999 = 1000.8999 -> truncated to 1000.
-        assert_eq!(apply_slippage(1_001, 1, false).unwrap(), 1_000);
+        // Sell: 1_001 * 0.9999 = 1000.8999 -> rounded up to 1001.
+        assert_eq!(apply_slippage(1_001, 1, false).unwrap(), 1_001);
+        // Sell: 1_990_001 * 0.995 = 1980050.995 -> 1980051, not 1980050 (which
+        // is more than 50 bps under the bid).
+        assert_eq!(apply_slippage(1_990_001, 50, false).unwrap(), 1_980_051);
+        // An exact product is unchanged either way.
+        assert_eq!(apply_slippage(2_000_000, 50, false).unwrap(), 1_990_000);
     }
 
     #[test]
