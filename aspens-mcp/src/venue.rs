@@ -149,8 +149,10 @@ pub trait Venue: Send + Sync + 'static {
     fn addresses(&self) -> Addresses;
 }
 
-/// gRPC codes that mean the venue looked at the order and refused it.
-const DEFINITIVE_REJECTIONS: [tonic::Code; 9] = [
+/// gRPC codes that mean the venue looked at the order and refused it. OutOfRange
+/// is absent: tonic builds it on the client when decoding an oversized response,
+/// after the request was written.
+const DEFINITIVE_REJECTIONS: [tonic::Code; 8] = [
     tonic::Code::InvalidArgument,
     tonic::Code::FailedPrecondition,
     tonic::Code::PermissionDenied,
@@ -158,7 +160,6 @@ const DEFINITIVE_REJECTIONS: [tonic::Code; 9] = [
     tonic::Code::NotFound,
     tonic::Code::AlreadyExists,
     tonic::Code::ResourceExhausted,
-    tonic::Code::OutOfRange,
     tonic::Code::Unimplemented,
 ];
 
@@ -167,14 +168,20 @@ fn find_status(e: &eyre::Report) -> Option<&tonic::Status> {
 }
 
 /// Map a send error. Only a server status that definitively refuses the order is
-/// `Failed`; anything else (a timeout, a dropped connection, an error that is not
-/// a status) may have placed the order and is `Unknown`.
+/// `Failed`: a code in [`DEFINITIVE_REJECTIONS`] on a status with no `source()`.
+/// A status with a source was built by tonic on the client from a transport
+/// error (an h2 reset, an io error), possibly after the request was written.
+/// Anything else (a timeout, a dropped connection, an error that is not a
+/// status) may have placed the order and is `Unknown`.
 pub fn classify_send_error(e: &eyre::Report) -> SendResult {
+    use std::error::Error as _;
     match find_status(e) {
-        Some(s) if DEFINITIVE_REJECTIONS.contains(&s.code()) => SendResult::Failed {
-            code: format!("{:?}", s.code()),
-            message: s.message().to_string(),
-        },
+        Some(s) if s.source().is_none() && DEFINITIVE_REJECTIONS.contains(&s.code()) => {
+            SendResult::Failed {
+                code: format!("{:?}", s.code()),
+                message: s.message().to_string(),
+            }
+        }
         _ => SendResult::Unknown,
     }
 }
@@ -209,48 +216,56 @@ pub fn is_maker(trade: &Trade, agent: &str) -> bool {
         .any(|m| canonical_address(m) == agent)
 }
 
-/// A trade's qty and price as pair-decimal `u128`s, `None` (logged) when unparseable.
-fn trade_amounts(t: &Trade) -> Option<(u128, u128)> {
+/// A trade's qty and price as pair-decimal `u128`s.
+fn trade_amounts(t: &Trade) -> Result<(u128, u128)> {
     match (t.qty.parse::<u128>(), t.price.parse::<u128>()) {
-        (Ok(q), Ok(p)) => Some((q, p)),
-        _ => {
-            tracing::warn!(qty = %t.qty, price = %t.price, ts = t.timestamp, "skipping trade with unparseable amounts");
-            None
-        }
+        (Ok(q), Ok(p)) => Ok((q, p)),
+        _ => Err(eyre!(
+            "trade at ts {} has unparseable amounts: qty {:?}, price {:?}",
+            t.timestamp,
+            t.qty,
+            t.price
+        )),
     }
 }
 
-/// Map a placement response. The id must be exactly 32 bytes; every fill's
-/// `ts` is the venue's `Trade.timestamp`.
+/// Map a placement response. The venue processed the order, so a response
+/// that can't be read in full (an id that is not 32 bytes, a taker fill with
+/// unparseable amounts) is `Unknown`, never `Failed`. Every fill's `ts` is the
+/// venue's `Trade.timestamp`.
 pub fn send_result_from_response(resp: &SendOrderResponse) -> SendResult {
     let Ok(id) = <[u8; 32]>::try_from(resp.order_id.as_slice()) else {
-        return SendResult::Failed {
-            code: "bad_order_id".to_string(),
-            message: format!(
-                "venue returned a {}-byte order id (expected 32)",
-                resp.order_id.len()
-            ),
-        };
+        tracing::warn!(
+            len = resp.order_id.len(),
+            "venue returned an order id that is not 32 bytes; outcome unknown"
+        );
+        return SendResult::Unknown;
     };
+    let mut taker_fills = Vec::with_capacity(resp.trades.len());
+    for t in &resp.trades {
+        match trade_amounts(t) {
+            Ok((qty, price)) => taker_fills.push(Fill {
+                qty,
+                price,
+                ts: t.timestamp,
+            }),
+            Err(e) => {
+                // Dropping it would under-report spend.
+                tracing::warn!(error = %e, "unreadable taker fill; outcome unknown");
+                return SendResult::Unknown;
+            }
+        }
+    }
     SendResult::Accepted {
         order_id: order_id_hex(&id),
         in_book: resp.order_in_book,
-        taker_fills: resp
-            .trades
-            .iter()
-            .filter_map(|t| {
-                trade_amounts(t).map(|(qty, price)| Fill {
-                    qty,
-                    price,
-                    ts: t.timestamp,
-                })
-            })
-            .collect(),
+        taker_fills,
     }
 }
 
-/// Map one Trades-stream entry to the agent's fill, `None` when it can't be read.
-pub fn trade_fill(t: &Trade, agent: &str) -> Option<TradeFill> {
+/// Map one Trades-stream entry to the agent's fill. Unparseable amounts are an
+/// error: a dropped fill would under-report usage.
+pub fn trade_fill(t: &Trade, agent: &str) -> Result<TradeFill> {
     let (qty, price) = trade_amounts(t)?;
     let order_hit = match t.order_hit.len() {
         0 => None,
@@ -266,7 +281,7 @@ pub fn trade_fill(t: &Trade, agent: &str) -> Option<TradeFill> {
             }
         },
     };
-    Some(TradeFill {
+    Ok(TradeFill {
         order_hit,
         qty,
         price,
@@ -303,6 +318,15 @@ fn wire_side(side: Side) -> arborter_pb::Side {
     match side {
         Side::Buy => arborter_pb::Side::Bid,
         Side::Sell => arborter_pb::Side::Ask,
+    }
+}
+
+/// Aborts the task when dropped; dropping a bare `JoinHandle` detaches it.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -410,9 +434,15 @@ impl Venue for SdkVenue {
             historical_closed_trades: true,
             filter_by_trader: Some(trader.clone()),
         };
-        let mut handle = tokio::spawn(stream_trades(self.url.clone(), opts, move |t| {
-            let _ = tx.send(t);
-        }));
+        // Aborted on drop too: a caller that drops this future mid-window
+        // must not leave the stream running.
+        let mut handle = AbortOnDrop(tokio::spawn(stream_trades(
+            self.url.clone(),
+            opts,
+            move |t| {
+                let _ = tx.send(t);
+            },
+        )));
         let deadline = tokio::time::sleep(STREAM_WINDOW);
         tokio::pin!(deadline);
         let mut trades = Vec::new();
@@ -420,11 +450,11 @@ impl Venue for SdkVenue {
             tokio::select! {
                 _ = &mut deadline => {
                     // The stream never ends on its own; stop it rather than leak it.
-                    handle.abort();
+                    handle.0.abort();
                     break;
                 }
                 Some(t) = rx.recv() => trades.push(t),
-                res = &mut handle => {
+                res = &mut handle.0 => {
                     // A failed stream is an error, never an empty fill list.
                     res.map_err(|e| eyre!("trades stream task: {e}"))??;
                     break;
@@ -434,10 +464,7 @@ impl Venue for SdkVenue {
         while let Ok(t) = rx.try_recv() {
             trades.push(t);
         }
-        Ok(trades
-            .iter()
-            .filter_map(|t| trade_fill(t, &trader))
-            .collect())
+        trades.iter().map(|t| trade_fill(t, &trader)).collect()
     }
 
     async fn send_limit(
@@ -460,10 +487,7 @@ impl Venue for SdkVenue {
                 };
             }
         };
-        let wire = match side {
-            Side::Buy => 1,
-            Side::Sell => 2,
-        };
+        let wire = wire_side(side) as i32;
         let result = send_order_with_wallets(
             self.url.clone(),
             market_id,
@@ -631,6 +655,7 @@ mod tests {
 
     #[test]
     fn timeout_maps_to_unknown_server_status_maps_to_failed() {
+        assert_eq!(DEFINITIVE_REJECTIONS.len(), 8);
         for code in DEFINITIVE_REJECTIONS {
             match classify_send_error(&status_err(code)) {
                 SendResult::Failed { code: c, message } => {
@@ -656,6 +681,7 @@ mod tests {
             tonic::Code::Aborted,
             tonic::Code::DataLoss,
             tonic::Code::Ok,
+            tonic::Code::OutOfRange,
         ] {
             assert_eq!(
                 classify_send_error(&status_err(code)),
@@ -714,7 +740,6 @@ mod tests {
             order_id: vec![0xab; 32],
             trades: vec![
                 priced(1_700, "40", "2500", vec![]),
-                priced(1_701, "x", "2500", vec![]),
                 priced(1_702, "60", "2600", vec![]),
             ],
             ..Default::default()
@@ -738,14 +763,64 @@ mod tests {
                 ],
             }
         );
-        let short = SendOrderResponse {
-            order_id: vec![1; 31],
+    }
+
+    #[test]
+    fn bad_order_id_in_ok_response_is_unknown() {
+        for len in [0, 31, 33] {
+            let resp = SendOrderResponse {
+                order_in_book: true,
+                order_id: vec![1; len],
+                ..Default::default()
+            };
+            assert_eq!(
+                send_result_from_response(&resp),
+                SendResult::Unknown,
+                "{len}"
+            );
+        }
+    }
+
+    #[test]
+    fn unparseable_taker_fill_makes_send_unknown() {
+        let resp = SendOrderResponse {
+            order_id: vec![0xab; 32],
+            trades: vec![
+                priced(1_700, "40", "2500", vec![]),
+                priced(1_701, "x", "2500", vec![]),
+            ],
             ..Default::default()
         };
-        assert!(matches!(
-            send_result_from_response(&short),
-            SendResult::Failed { code, .. } if code == "bad_order_id"
-        ));
+        assert_eq!(send_result_from_response(&resp), SendResult::Unknown);
+    }
+
+    #[test]
+    fn out_of_range_is_unknown() {
+        // Built by tonic's decoder on the client, after the request went out.
+        let s = tonic::Status::out_of_range("Error, decoded message length too large");
+        assert_eq!(
+            classify_send_error(&eyre::Report::new(s)),
+            SendResult::Unknown
+        );
+    }
+
+    #[test]
+    fn status_with_source_is_unknown() {
+        for code in DEFINITIVE_REJECTIONS {
+            let mut s = tonic::Status::new(code, "h2 reset");
+            s.set_source(std::sync::Arc::new(std::io::Error::other("x")));
+            assert_eq!(
+                classify_send_error(&eyre::Report::new(s)),
+                SendResult::Unknown,
+                "{code:?}"
+            );
+        }
+        // Status::from_error over an io error: also client-side, also Unknown.
+        let s = tonic::Status::from_error(Box::new(std::io::Error::other("x")));
+        assert_eq!(
+            classify_send_error(&eyre::Report::new(s)),
+            SendResult::Unknown
+        );
     }
 
     #[test]
@@ -754,7 +829,7 @@ mod tests {
         let mut t = priced(1_900, "70", "3100", vec![0xcd; 32]);
         t.maker_base_address = agent.to_lowercase();
         assert_eq!(
-            trade_fill(&t, agent),
+            trade_fill(&t, agent).ok(),
             Some(TradeFill {
                 order_hit: Some(format!("0x{}", "cd".repeat(32))),
                 qty: 70,
@@ -766,7 +841,7 @@ mod tests {
         let empty_hit = priced(1_901, "70", "3100", vec![]);
         let f = trade_fill(&empty_hit, agent).unwrap();
         assert_eq!((f.order_hit, f.maker), (None, false));
-        assert_eq!(trade_fill(&priced(1_902, "70", "-1", vec![]), agent), None);
+        assert!(trade_fill(&priced(1_902, "70", "-1", vec![]), agent).is_err());
     }
 
     #[test]
