@@ -15,7 +15,7 @@ use aspens::commands::trading::book_snapshot::{BookState, fetch_book_snapshot};
 use aspens::commands::trading::cancel_order::call_cancel_order_from_config_with_wallet;
 use aspens::commands::trading::deposit::call_deposit_from_config_with_wallet;
 use aspens::commands::trading::send_order::{origin_network_for_side, send_order_with_wallets};
-use aspens::commands::trading::stream_trades::{StreamTradesOptions, stream_trades};
+use aspens::commands::trading::stream_trades::{StreamTradesOptions, fetch_trades_snapshot};
 use aspens::commands::trading::withdraw::{
     WithdrawOpts, call_withdraw_from_config_with_wallet_opts,
 };
@@ -327,15 +327,6 @@ fn wire_side(side: Side) -> arborter_pb::Side {
     }
 }
 
-/// Aborts the task when dropped; dropping a bare `JoinHandle` detaches it.
-struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
-
-impl<T> Drop for AbortOnDrop<T> {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 /// [`Venue`] over the `aspens` SDK.
 pub struct SdkVenue {
     url: String,
@@ -434,42 +425,14 @@ impl Venue for SdkVenue {
     }
 
     async fn my_fills(&self, market_id: String, trader: String) -> Result<Vec<TradeFill>> {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Trade>();
         let opts = StreamTradesOptions {
             market_id,
             historical_closed_trades: true,
             filter_by_trader: Some(trader.clone()),
         };
-        // Aborted on drop too: a caller that drops this future mid-window
-        // must not leave the stream running.
-        let mut handle = AbortOnDrop(tokio::spawn(stream_trades(
-            self.url.clone(),
-            opts,
-            move |t| {
-                let _ = tx.send(t);
-            },
-        )));
-        let deadline = tokio::time::sleep(STREAM_WINDOW);
-        tokio::pin!(deadline);
-        let mut trades = Vec::new();
-        loop {
-            tokio::select! {
-                _ = &mut deadline => {
-                    // The stream never ends on its own; stop it rather than leak it.
-                    handle.0.abort();
-                    break;
-                }
-                Some(t) = rx.recv() => trades.push(t),
-                res = &mut handle.0 => {
-                    // A failed stream is an error, never an empty fill list.
-                    res.map_err(|e| eyre!("trades stream task: {e}"))??;
-                    break;
-                }
-            }
-        }
-        while let Ok(t) = rx.try_recv() {
-            trades.push(t);
-        }
+        // The window starts once the stream is established; a stream that is
+        // not established, or fails, is an error, never an empty fill list.
+        let trades = fetch_trades_snapshot(self.url.clone(), opts, STREAM_WINDOW).await?;
         trades.iter().map(|t| trade_fill(t, &trader)).collect()
     }
 

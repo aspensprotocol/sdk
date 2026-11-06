@@ -37,6 +37,8 @@ pub mod send_order;
 pub mod stream_orderbook;
 /// Subscribe to the trades stream for a given market.
 pub mod stream_trades;
+/// Collect a forwarded stream for a window that starts once it is established.
+mod stream_window;
 /// Withdraw tokens from the trading contract back to the user's wallet.
 pub mod withdraw;
 

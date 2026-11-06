@@ -149,7 +149,7 @@ tonic-prost-build.workspace = true
 tempfile.workspace = true
 # Unconditional dev-dep so async unit tests (e.g. sign_message) run under
 # every feature config, including lean-signing builds.
-tokio = { workspace = true, features = ["macros", "rt", "net", "time", "sync"] }
+tokio = { workspace = true, features = ["macros", "rt", "net", "time", "sync", "test-util"] }
 # Fake gRPC server for the orderbook-stream tests.
 h2.workspace = true
 http.workspace = true
