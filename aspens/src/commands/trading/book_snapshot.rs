@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use eyre::Result;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use super::arborter_pb::{OrderState, OrderbookEntry, Side};
 use super::stream_orderbook::{StreamOrderbookOptions, apply_slippage, stream_orderbook_channel};
@@ -143,13 +145,17 @@ pub fn marketable_price(book: &BookState, is_buy: bool, slippage_bps: u32) -> Re
 
 /// Collect the orderbook stream for `window` (historical open orders first,
 /// then live updates) and return the resulting book state.
+///
+/// A stream that fails, or ends without succeeding, before or at the deadline
+/// is an error, never an empty book: with `filter_by_trader` an empty book
+/// reads as "no open orders".
 pub async fn fetch_book_snapshot(
     url: String,
     market_id: String,
     filter_by_trader: Option<String>,
     window: Duration,
 ) -> Result<BookState> {
-    let (mut rx, handle) = stream_orderbook_channel(
+    let (rx, handle) = stream_orderbook_channel(
         url,
         StreamOrderbookOptions {
             market_id,
@@ -158,25 +164,62 @@ pub async fn fetch_book_snapshot(
         },
     )
     .await?;
+    collect_book(rx, handle, window).await
+}
 
+/// Aborts the task when dropped; dropping a bare `JoinHandle` detaches it.
+struct AbortOnDrop<T>(JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Apply entries from `rx` until `window` elapses, then stop the stream task.
+/// The task is also stopped if this future is dropped.
+async fn collect_book(
+    mut rx: mpsc::Receiver<OrderbookEntry>,
+    handle: JoinHandle<Result<()>>,
+    window: Duration,
+) -> Result<BookState> {
+    let mut handle = AbortOnDrop(handle);
     let mut book = BookState::default();
     let deadline = tokio::time::sleep(window);
     tokio::pin!(deadline);
 
     loop {
         tokio::select! {
-            _ = &mut deadline => break,
-            maybe_entry = rx.recv() => {
-                let Some(entry) = maybe_entry else { break };
-                book.apply(&entry);
+            // The task's own outcome first, so a failure at the deadline wins.
+            biased;
+            res = &mut handle.0 => {
+                finished(res)?;
+                while let Ok(entry) = rx.try_recv() {
+                    book.apply(&entry);
+                }
+                return Ok(book);
+            }
+            maybe_entry = rx.recv() => match maybe_entry {
+                Some(entry) => book.apply(&entry),
+                // The sender is gone, so the task has ended: report how.
+                None => {
+                    finished((&mut handle.0).await)?;
+                    return Ok(book);
+                }
+            },
+            _ = &mut deadline => {
+                // The stream never ends on its own; stop it rather than leak it.
+                handle.0.abort();
+                return Ok(book);
             }
         }
     }
+}
 
-    // The stream never ends on its own; stop it rather than leak it.
-    handle.abort();
-
-    Ok(book)
+/// The stream task's result: its own error, or a join error (panic, abort).
+fn finished(res: std::result::Result<Result<()>, tokio::task::JoinError>) -> Result<()> {
+    res.map_err(|e| eyre::eyre!("orderbook stream task: {e}"))?
+        .map_err(|e| e.wrap_err("orderbook stream"))
 }
 
 #[cfg(test)]
@@ -322,5 +365,100 @@ mod tests {
         assert_eq!(b.best_bid(), Some(92));
         assert_eq!(b.best_ask(), Some(108));
         assert_eq!(b.asks()[0].maker_quote_address, "quote5");
+    }
+
+    mod collect {
+        use super::super::*;
+        use std::sync::Arc;
+
+        fn live(n: u8) -> OrderbookEntry {
+            OrderbookEntry {
+                timestamp: 2_000 + n as u64,
+                order_id: vec![n; 32],
+                price: "300".to_string(),
+                quantity: "7".to_string(),
+                side: Side::Bid as i32,
+                state: OrderState::Confirmed as i32,
+                ..Default::default()
+            }
+        }
+
+        const WINDOW: Duration = Duration::from_millis(200);
+
+        #[tokio::test]
+        async fn a_failed_stream_is_an_error_not_an_empty_book() {
+            let (tx, rx) = mpsc::channel(8);
+            let handle = tokio::spawn(async move {
+                tx.send(live(1)).await.unwrap();
+                Err(eyre::eyre!("connect refused"))
+            });
+            let err = collect_book(rx, handle, WINDOW).await.unwrap_err();
+            assert!(format!("{err:#}").contains("connect refused"), "{err:#}");
+        }
+
+        #[tokio::test]
+        async fn a_task_that_ends_without_succeeding_is_an_error() {
+            let (tx, rx) = mpsc::channel::<OrderbookEntry>(8);
+            let handle = tokio::spawn(async move {
+                let _tx = tx;
+                std::future::pending::<Result<()>>().await
+            });
+            handle.abort();
+            assert!(collect_book(rx, handle, WINDOW).await.is_err());
+        }
+
+        #[tokio::test]
+        async fn a_stream_that_ends_cleanly_keeps_its_entries() {
+            let (tx, rx) = mpsc::channel(8);
+            let handle = tokio::spawn(async move {
+                tx.send(live(1)).await.unwrap();
+                tx.send(live(2)).await.unwrap();
+                Ok(())
+            });
+            let book = collect_book(rx, handle, WINDOW).await.unwrap();
+            assert_eq!(book.bids().len(), 2);
+        }
+
+        /// Wait (bounded) for the task holding `probe` to be dropped.
+        async fn released(probe: &Arc<()>) -> bool {
+            for _ in 0..100 {
+                if Arc::strong_count(probe) == 1 {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            false
+        }
+
+        #[tokio::test]
+        async fn a_live_stream_is_collected_then_aborted_at_the_deadline() {
+            let (tx, rx) = mpsc::channel(8);
+            let probe = Arc::new(());
+            let held = probe.clone();
+            let handle = tokio::spawn(async move {
+                let _held = held;
+                tx.send(live(3)).await.unwrap();
+                std::future::pending::<Result<()>>().await
+            });
+            let book = collect_book(rx, handle, WINDOW).await.unwrap();
+            assert_eq!(book.best_bid(), Some(300));
+            assert!(released(&probe).await, "stream task still running");
+        }
+
+        #[tokio::test]
+        async fn dropping_the_collection_aborts_the_stream() {
+            let (tx, rx) = mpsc::channel::<OrderbookEntry>(8);
+            let probe = Arc::new(());
+            let held = probe.clone();
+            let handle = tokio::spawn(async move {
+                let _held = held;
+                let _tx = tx;
+                std::future::pending::<Result<()>>().await
+            });
+            let collecting = tokio::spawn(collect_book(rx, handle, Duration::from_secs(60)));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            collecting.abort();
+            assert!(released(&probe).await, "stream task leaked");
+        }
     }
 }
