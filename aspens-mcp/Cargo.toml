@@ -20,6 +20,7 @@ path = "src/main.rs"
 # don't silently affect this binary.
 aspens = { path = "../aspens", default-features = false, features = ["client", "trader", "evm", "solana", "tron"] }
 
+chrono.workspace = true
 eyre.workspace = true
 clap.workspace = true
 serde.workspace = true
