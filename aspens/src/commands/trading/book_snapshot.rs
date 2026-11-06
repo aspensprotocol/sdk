@@ -8,7 +8,7 @@ use std::time::Duration;
 use eyre::Result;
 
 use super::arborter_pb::{OrderState, OrderbookEntry, Side};
-use super::stream_orderbook::{StreamOrderbookOptions, stream_orderbook_channel};
+use super::stream_orderbook::{StreamOrderbookOptions, apply_slippage, stream_orderbook_channel};
 
 /// A resting order on one side of the book. Price and quantity are raw
 /// pair-decimal integers, as reported on the wire.
@@ -38,10 +38,6 @@ impl BookState {
         let Ok(id) = <[u8; 32]>::try_from(entry.order_id.as_slice()) else {
             return;
         };
-        let side = match Side::try_from(entry.side) {
-            Ok(s @ (Side::Bid | Side::Ask)) => s,
-            _ => return,
-        };
         let live = if entry.state == OrderState::Confirmed as i32 {
             // Unparseable numbers on a Confirmed entry: ignore the entry
             // entirely rather than guess.
@@ -54,9 +50,17 @@ impl BookState {
         } else {
             None
         };
+        // A Confirmed entry needs a valid side to be placed; removal does not.
+        let side = match Side::try_from(entry.side) {
+            Ok(s @ (Side::Bid | Side::Ask)) => Some(s),
+            _ => None,
+        };
+        if live.is_some() && side.is_none() {
+            return;
+        }
         self.bids.remove(&id);
         self.asks.remove(&id);
-        if let Some((price, quantity)) = live {
+        if let (Some((price, quantity)), Some(side)) = (live, side) {
             let order = BookLevelOrder {
                 order_id: id,
                 price,
@@ -103,6 +107,38 @@ impl BookState {
         });
         v
     }
+}
+
+/// Slippage-capped limit price (raw pair-decimal integer) from a top of book.
+/// A buy references the best ask, a sell the best bid. The error names no
+/// market; the caller adds that context.
+pub fn marketable_price_from_top(
+    best_bid: Option<u128>,
+    best_ask: Option<u128>,
+    is_buy: bool,
+    slippage_bps: u32,
+) -> Result<u128> {
+    let reference = if is_buy {
+        best_ask.ok_or_else(|| {
+            eyre::eyre!(
+                "no resting asks — cannot compute a marketable buy price. \
+                 Place a limit buy at a price you're willing to pay."
+            )
+        })?
+    } else {
+        best_bid.ok_or_else(|| {
+            eyre::eyre!(
+                "no resting bids — cannot compute a marketable sell price. \
+                 Place a limit sell at a price you're willing to accept."
+            )
+        })?
+    };
+    apply_slippage(reference, slippage_bps, is_buy)
+}
+
+/// Slippage-capped limit price from a snapshot's best opposing price.
+pub fn marketable_price(book: &BookState, is_buy: bool, slippage_bps: u32) -> Result<u128> {
+    marketable_price_from_top(book.best_bid(), book.best_ask(), is_buy, slippage_bps)
 }
 
 /// Collect the orderbook stream for `window` (historical open orders first,
@@ -215,6 +251,50 @@ mod tests {
         e.side = 0;
         b.apply(&e);
         assert!(b.asks().is_empty() && b.bids().is_empty());
+    }
+
+    #[test]
+    fn removal_ignores_side() {
+        let mut b = BookState::default();
+        b.apply(&entry(1, Side::Ask, OrderState::Confirmed, "105", "7"));
+        let mut e = entry(1, Side::Ask, OrderState::Canceled, "105", "7");
+        e.side = 0;
+        b.apply(&e);
+        assert!(b.asks().is_empty());
+        // A Confirmed entry with an invalid side stays ignored.
+        b.apply(&entry(2, Side::Ask, OrderState::Confirmed, "105", "7"));
+        let mut c = entry(2, Side::Ask, OrderState::Confirmed, "105", "7");
+        c.side = 0;
+        b.apply(&c);
+        assert_eq!(b.asks().len(), 1);
+    }
+
+    #[test]
+    fn marketable_buy_caps_off_best_ask() {
+        let mut b = BookState::default();
+        b.apply(&entry(1, Side::Bid, OrderState::Confirmed, "1990", "5"));
+        b.apply(&entry(2, Side::Ask, OrderState::Confirmed, "2000", "5"));
+        assert_eq!(marketable_price(&b, true, 50).unwrap(), 2010);
+    }
+
+    #[test]
+    fn marketable_sell_caps_off_best_bid() {
+        let mut b = BookState::default();
+        b.apply(&entry(1, Side::Bid, OrderState::Confirmed, "1990", "5"));
+        b.apply(&entry(2, Side::Ask, OrderState::Confirmed, "2000", "5"));
+        assert_eq!(marketable_price(&b, false, 50).unwrap(), 1980);
+    }
+
+    #[test]
+    fn marketable_errors_on_empty_reference_side() {
+        let mut b = BookState::default();
+        b.apply(&entry(1, Side::Bid, OrderState::Confirmed, "1990", "5"));
+        let e = marketable_price(&b, true, 50).unwrap_err().to_string();
+        assert!(e.contains("no resting asks"), "{e}");
+        let mut b = BookState::default();
+        b.apply(&entry(2, Side::Ask, OrderState::Confirmed, "2000", "5"));
+        let e = marketable_price(&b, false, 50).unwrap_err().to_string();
+        assert!(e.contains("no resting bids"), "{e}");
     }
 
     #[test]
