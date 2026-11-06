@@ -123,6 +123,22 @@ async fn venue_config(stack: &str) -> GetConfigResponse {
     panic!("GetConfig at {stack} failed: {:#}", last.unwrap());
 }
 
+/// Panic unless `url`'s host is loopback (`localhost`, `127.0.0.1` or `::1`).
+fn assert_loopback(what: &str, url: &str) {
+    let host = reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string));
+    let ok = matches!(
+        host.as_deref(),
+        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+    );
+    assert!(
+        ok,
+        "refusing to run the rig e2e: {what} is {url:?}, whose host is not loopback \
+         (localhost, 127.0.0.1 or ::1). This suite sends real orders and transfers; point it \
+         at a local rig only"
+    );
+}
 impl Rig {
     async fn load() -> Rig {
         assert_eq!(std::env::var("RIG").as_deref(), Ok("1"), "{HELP}");
@@ -159,6 +175,15 @@ impl Rig {
             .ok()
             .or_else(|| tvars.get("ASPENS_MARKET_STACK_URL").cloned())
             .unwrap_or_else(|| "http://localhost:50051".to_string());
+        // This suite signs and sends real orders and transfers: only ever
+        // against a local rig, never a deployed venue or a remote chain.
+        assert_loopback("the stack URL", &stack);
+        for (k, v) in tvars
+            .iter()
+            .filter(|(k, _)| k.starts_with("ASPENS_RPC_URL_"))
+        {
+            assert_loopback(k, v);
+        }
         let cfg = venue_config(&stack).await;
         let m = cfg
             .get_market_by_id(&market)
@@ -1044,7 +1069,7 @@ async fn s5_refusals_each_for_its_own_reason() {
         "place_limit_order",
         args,
         "order",
-        "is not in the settle",
+        "is not in settle_address_allowlist",
     )
     .await;
 
@@ -1220,4 +1245,30 @@ async fn s8_withdraw_gated_and_lands() {
         "venue balance moved by the wrong amount"
     );
     mcp.stop().await;
+}
+
+/// Runs without the rig: the loopback guard accepts local hosts only.
+#[test]
+fn loopback_guard_accepts_only_local_hosts() {
+    for ok in [
+        "http://localhost:50051",
+        "http://127.0.0.1:8545",
+        "http://[::1]:8545",
+    ] {
+        assert_loopback("url", ok);
+    }
+    for bad in [
+        "https://beta-1.axby.fi",
+        "http://10.0.0.5:8545",
+        "https://base-mainnet.g.alchemy.com/v2/KEY",
+        "http://localhost.evil.example:50051",
+        "not a url",
+    ] {
+        // Quiet the expected panics' messages.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let r = std::panic::catch_unwind(|| assert_loopback("url", bad));
+        std::panic::set_hook(hook);
+        assert!(r.is_err(), "{bad} passed the loopback guard");
+    }
 }

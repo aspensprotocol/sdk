@@ -87,7 +87,8 @@ Read:
 - `get_order`: one of those orders by id, with its fills.
 - `my_fills`: your fills on a market, maker and taker, newest last.
 - `account_status`: your addresses per curve, which keys are loaded, venue reachability, halt
-  state and reason, whether the venue is pinned.
+  state and reason, whether the venue is pinned, and `venueTrust`: with no `[venue]` pin it says
+  the `stack_url` endpoint is trusted.
 - `limits`: the configured limits and today's usage and remaining budget per market.
 - `venue_attestation`: the venue's attestation report for a fresh nonce.
 
@@ -132,10 +133,16 @@ aspens-mcp resume --config ~/.aspens-mcp/aspens-mcp.toml
   order, deposit or withdraw touches (both legs of a market) needs an entry.
 - **A venue restart that changes a market's pair decimals refuses orders on that market until
   aspens-mcp restarts.** The limits were resolved in the old units; restarting re-resolves them.
-- **If the process exits mid-send, usage is still counted, but the order may not appear in
-  `my_orders`.** Usage is fsynced before the order is signed; the outcome record comes after the
-  venue answers. Check the venue directly (for example `aspens-cli`) for an order sent just before
-  a crash.
+- **An order whose send was cut off shows as `unknown`.** Usage (with the order's qty and price)
+  is fsynced before the order is signed; the outcome record comes after the venue answers. When
+  the client goes away (stdin closes) mid-send, the server waits up to 70 s for the send to finish
+  and record its outcome before exiting. If the process dies before that, the next start replays
+  the usage record as a sent order in state `unknown`, listed by `my_orders` and still counted
+  against the day's limits. It has no order id, so check the venue directly (for example
+  `aspens-cli`) to see whether it was placed.
+- **`halt` and `cancel_order` can wait up to about 60 s behind an order in flight.** The ledger is
+  held from an order's usage record until its outcome record, across the send (whose gRPC
+  timeout is 60 s), and both tools need the ledger.
 - **A second aspens-mcp on the same `state_dir` refuses to start.** The ledger has a single
   writer.
 - **Amounts with more decimal places than the market or token allows are rejected, not rounded.**

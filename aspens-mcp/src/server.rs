@@ -637,10 +637,19 @@ impl<V: Venue> Server<V> {
         let halted = self.ledger.lock().await.halted();
         let addrs = self.venue.addresses();
         let health = self.venue.health().await;
+        let trust = match &self.cfg.venue {
+            None => "stack_url is trusted (no [venue] pin)",
+            Some(p) if p.attestation_mrtd.is_some() => {
+                "pinned: trade contracts are checked against [venue] expected_contracts, and \
+                 attestation_mrtd needs a verified attestation"
+            }
+            Some(_) => "pinned: trade contracts are checked against [venue] expected_contracts",
+        };
         Ok(json!({
             "halted": halted.is_some(),
             "haltReason": halted.flatten(),
             "venuePinned": self.cfg.venue.is_some(),
+            "venueTrust": trust,
             "allowWithdraw": self.cfg.allow_withdraw,
             "addresses": { "evm": addrs.evm, "solana": addrs.solana },
             "keys": { "evm": addrs.evm.is_some(), "solana": addrs.solana.is_some() },

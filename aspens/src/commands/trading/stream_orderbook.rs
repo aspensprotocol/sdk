@@ -244,8 +244,11 @@ pub async fn fetch_top_of_book(
 ///
 /// - `is_buy = true`: `reference * (10_000 + slippage_bps) / 10_000` — the
 ///   maximum the user is willing to pay above best ask.
-/// - `is_buy = false`: `reference * (10_000 - slippage_bps) / 10_000` — the
-///   minimum the user is willing to accept below best bid.
+/// - `is_buy = false`: `reference * (10_000 - slippage_bps) / 10_000`, rounded
+///   up — the minimum the user is willing to accept below best bid. Rounding
+///   up keeps the result within `slippage_bps` of the bid, so a guard that
+///   allows exactly that many bps accepts it; rounding the buy cap down does
+///   the same for a buyer.
 ///
 /// Takes a plain `bool` rather than the proto `Side` enum so callers
 /// that never touch the generated types (tests, CLI arg parsing) don't
@@ -267,10 +270,14 @@ pub fn apply_slippage(reference_price: u128, slippage_bps: u32, is_buy: bool) ->
             .checked_sub(bps)
             .ok_or_else(|| eyre::eyre!("slippage scale underflow"))?
     };
-    reference_price
+    let scaled = reference_price
         .checked_mul(scale)
-        .ok_or_else(|| eyre::eyre!("slippage * price overflow"))
-        .map(|v| v / 10_000)
+        .ok_or_else(|| eyre::eyre!("slippage * price overflow"))?;
+    Ok(if is_buy {
+        scaled / 10_000
+    } else {
+        scaled.div_ceil(10_000)
+    })
 }
 
 /// Stream orderbook entries to a channel.
@@ -388,11 +395,16 @@ mod tests {
     }
 
     #[test]
-    fn apply_slippage_truncates_toward_zero() {
-        // 1_001 * 1.0001 = 1001.1001 -> truncated to 1001.
+    fn apply_slippage_rounds_toward_the_reference() {
+        // Buy: 1_001 * 1.0001 = 1001.1001 -> rounded down to 1001.
         assert_eq!(apply_slippage(1_001, 1, true).unwrap(), 1_001);
-        // 1_001 * 0.9999 = 1000.8999 -> truncated to 1000.
-        assert_eq!(apply_slippage(1_001, 1, false).unwrap(), 1_000);
+        // Sell: 1_001 * 0.9999 = 1000.8999 -> rounded up to 1001.
+        assert_eq!(apply_slippage(1_001, 1, false).unwrap(), 1_001);
+        // Sell: 1_990_001 * 0.995 = 1980050.995 -> 1980051, not 1980050 (which
+        // is more than 50 bps under the bid).
+        assert_eq!(apply_slippage(1_990_001, 50, false).unwrap(), 1_980_051);
+        // An exact product is unchanged either way.
+        assert_eq!(apply_slippage(2_000_000, 50, false).unwrap(), 1_990_000);
     }
 
     #[test]

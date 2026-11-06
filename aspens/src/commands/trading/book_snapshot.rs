@@ -286,7 +286,8 @@ mod tests {
         let mut b = BookState::default();
         b.apply(&entry(1, Side::Bid, OrderState::Confirmed, "1990", "5"));
         b.apply(&entry(2, Side::Ask, OrderState::Confirmed, "2000", "5"));
-        assert_eq!(marketable_price(&b, false, 50).unwrap(), 1980);
+        // 1990 * 0.995 = 1980.05, rounded up to stay within 50 bps of the bid.
+        assert_eq!(marketable_price(&b, false, 50).unwrap(), 1981);
     }
 
     #[test]

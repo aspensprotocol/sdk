@@ -48,7 +48,7 @@ test-lib:
 
 # Run tests for the MCP server only
 test-mcp:
-    cargo test -p aspens-mcp
+    cargo test -p aspens-mcp --features test-fake
 
 # Clean build artifacts
 clean:

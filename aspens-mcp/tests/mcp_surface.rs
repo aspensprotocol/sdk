@@ -646,6 +646,7 @@ async fn account_status_and_venue_config() {
     assert_eq!(s["halted"], true);
     assert_eq!(s["haltReason"], "drawdown");
     assert_eq!(s["venuePinned"], false);
+    assert_eq!(s["venueTrust"], "stack_url is trusted (no [venue] pin)");
     assert_eq!(s["addresses"]["evm"], AGENT);
     assert_eq!(s["addresses"]["solana"], Value::Null);
     assert_eq!(s["keys"]["evm"], true);
@@ -1126,7 +1127,10 @@ async fn settle_override_allowlisted_passes_and_reaches_venue() {
 
     let mut bad = limit_buy("1", "2.5");
     bad["settle_quote_address"] = json!("0x0000000000000000000000000000000000000bad");
-    assert_refused(&h.call("place_limit_order", bad).await, "allowlist");
+    assert_refused(
+        &h.call("place_limit_order", bad).await,
+        "is not in settle_address_allowlist",
+    );
     assert_nothing_signed(&probe);
     assert_eq!(count_kind(h.dir(), "usage"), 0);
 
@@ -1741,6 +1745,20 @@ fn pinned(contract: &str, mrtd: Option<&str>) -> impl FnOnce(&mut Config) {
 }
 
 #[tokio::test]
+async fn account_status_says_how_the_venue_is_trusted() {
+    let h = start_with(fake(), pinned(TRADE_CONTRACT, None), |_| {}).await;
+    let s = h.ok("account_status", json!({})).await;
+    assert_eq!(s["venuePinned"], true);
+    let trust = s["venueTrust"].as_str().unwrap();
+    assert!(trust.starts_with("pinned"), "{trust}");
+    assert!(!trust.contains("attestation"), "{trust}");
+    let h = start_with(fake(), pinned(TRADE_CONTRACT, Some("ab")), |_| {}).await;
+    let s = h.ok("account_status", json!({})).await;
+    let trust = s["venueTrust"].as_str().unwrap();
+    assert!(trust.contains("attestation_mrtd"), "{trust}");
+}
+
+#[tokio::test]
 async fn venue_pin_contract_mismatch_refuses_writes() {
     let v = market_venue();
     v.push_send(accepted_send(0xe1));
@@ -2083,4 +2101,41 @@ async fn orphan_usage_shows_as_unknown_after_restart() {
     assert_eq!(l["markets"][0]["usedToday"]["quoteRaw"], "3125000");
     // The file still holds the one usage line.
     assert_eq!(ledger_lines(h.dir()).len(), 1);
+}
+
+#[tokio::test]
+async fn halted_order_says_halted_when_venue_is_down() {
+    // Config unreachable.
+    let v = market_venue();
+    v.set_config_error(Some("connect to https://venue.example/KEY refused"));
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let r = h.call("place_limit_order", limit_buy("1", "2.5")).await;
+    assert_refused(&r, "<url>");
+    assert!(!text(&r).contains("halted"), "{}", text(&r));
+    h.ok("halt", json!({"reason": "ops"})).await;
+    assert_refused(
+        &h.call("place_limit_order", limit_buy("1", "2.5")).await,
+        "halted: ops",
+    );
+    assert_nothing_signed(&probe);
+
+    // Config up, the book unreachable.
+    let v = market_venue();
+    v.set_read_error(Some("transport error: https://venue.example/KEY failed"));
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    h.ok("halt", json!({"reason": "ops"})).await;
+    for (tool, args) in [
+        ("place_limit_order", limit_buy("1", "2.5")),
+        (
+            "place_marketable_order",
+            json!({"market_id": MARKET, "side": "sell", "qty": "1", "slippage_bps": 50}),
+        ),
+    ] {
+        let r = h.call(tool, args).await;
+        assert_refused(&r, "halted: ops");
+        assert!(!text(&r).contains("transport error"), "{}", text(&r));
+    }
+    assert_nothing_signed(&probe);
 }

@@ -115,7 +115,7 @@ impl fmt::Display for Refusal {
             ),
             Refusal::SettleAddressNotAllowed(addr) => write!(
                 f,
-                "settle address {addr} is not in the settle_addresses allowlist"
+                "settle address {addr} is not in settle_address_allowlist"
             ),
             Refusal::Overflow => write!(f, "arithmetic overflow computing order limits"),
             Refusal::VenuePin(msg) => write!(f, "venue pin mismatch: {msg}"),
@@ -670,6 +670,29 @@ mod tests {
             })
             .collect();
         assert_eq!(kinds, ["halted", "oq", "dq", "oqu", "dqu", "pd", "settle"]);
+    }
+
+    /// A marketable order at exactly the guard's bps passes the guard, on a
+    /// reference that does not divide evenly.
+    #[test]
+    fn marketable_price_at_the_guard_bps_passes_the_guard() {
+        use aspens::commands::trading::stream_orderbook::apply_slippage;
+        let top = BookTop {
+            best_bid: Some(1_990_001),
+            best_ask: Some(2_010_003),
+        };
+        let sell = apply_slippage(1_990_001, 50, false).unwrap();
+        assert_eq!(price_guard(Side::Sell, sell, &top, 50), Ok(()));
+        // One unit lower is past the guard: the guard is tight, not loose.
+        assert!(price_guard(Side::Sell, sell - 1, &top, 50).is_err());
+        let buy = apply_slippage(2_010_003, 50, true).unwrap();
+        assert_eq!(price_guard(Side::Buy, buy, &top, 50), Ok(()));
+    }
+
+    #[test]
+    fn settle_refusal_names_the_config_key() {
+        let t = Refusal::SettleAddressNotAllowed("0xbad".into()).to_string();
+        assert_eq!(t, "settle address 0xbad is not in settle_address_allowlist");
     }
 
     #[test]

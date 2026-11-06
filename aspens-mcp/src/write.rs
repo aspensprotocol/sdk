@@ -144,7 +144,8 @@ impl<V: Venue> Writer<'_, V> {
         out
     }
 
-    /// The order path. In order: take one venue config snapshot (everything
+    /// The order path. In order: the checks that need no venue (halted); take
+    /// one venue config snapshot (everything
     /// below is checked against it, and the order is signed against it); parse
     /// amounts; read the book; check the venue pin; then take the ledger, check
     /// the limits, and in a spawned task record the usage, send, and record the
@@ -154,38 +155,42 @@ impl<V: Venue> Writer<'_, V> {
     /// is dropped, so a usage record is never left without its outcome.
     pub async fn place(&self, req: PlaceRequest) -> Result<Value> {
         let what = "order";
+        // The refusals that need no venue, first: a halted server says so even
+        // when the venue is unreachable. The limits check below re-reads the
+        // halt under the ledger lock; these only lead an early refusal.
+        let offline = self.offline_checks(false).await;
+        let early = |reason: String| {
+            let mut rs = offline.clone();
+            rs.push(reason);
+            refused(what, &rs)
+        };
         let Some(limits) = self.markets.get(&req.market_id) else {
-            let mut rs = Vec::new();
-            if let Some(h) = self.ledger.lock().await.halted() {
-                rs.push(Refusal::Halted(h));
-            }
-            rs.push(Refusal::MarketNotTradable(req.market_id.clone()));
-            return Err(refused(what, &refusal_texts(&rs)));
+            return Err(early(
+                Refusal::MarketNotTradable(req.market_id.clone()).to_string(),
+            ));
         };
         let d = limits.pair_decimals;
 
         // The one config snapshot. Limits were resolved in the pair units of
         // the config at startup; a venue that changed them since would have
         // these amounts scaled differently than they were checked.
-        let vcfg = self.venue.config().await?;
+        let vcfg = match self.venue.config().await {
+            Ok(c) => c,
+            Err(_) if !offline.is_empty() => return Err(refused(what, &offline)),
+            Err(e) => return Err(e),
+        };
         let market = vcfg.get_market_by_id(&req.market_id).ok_or_else(|| {
-            refused(
-                what,
-                &[format!(
-                    "market {} is no longer in the venue config",
-                    req.market_id
-                )],
-            )
+            early(format!(
+                "market {} is no longer in the venue config",
+                req.market_id
+            ))
         })?;
         if i64::from(market.pair_decimals) != i64::from(d) {
-            return Err(refused(
-                what,
-                &[format!(
-                    "venue changed this market's pair decimals ({d} \u{2192} {}); restart \
-                     aspens-mcp to re-resolve limits",
-                    market.pair_decimals
-                )],
-            ));
+            return Err(early(format!(
+                "venue changed this market's pair decimals ({d} \u{2192} {}); restart \
+                 aspens-mcp to re-resolve limits",
+                market.pair_decimals
+            )));
         }
         let networks = [
             market.base_chain_network.clone(),
@@ -193,18 +198,22 @@ impl<V: Venue> Writer<'_, V> {
         ];
 
         // 1. Amounts, rejecting any precision the market cannot carry.
-        let qty = parse_amount(&req.qty, d)
-            .map_err(|e| refused(what, &[format!("qty {:?}: {e:#}", req.qty)]))?;
+        let qty =
+            parse_amount(&req.qty, d).map_err(|e| early(format!("qty {:?}: {e:#}", req.qty)))?;
         // `Ok(price)` for a limit order; `Err(slippage_bps)` until the book is read.
-        let limit_price: std::result::Result<u128, u32> =
-            match &req.pricing {
-                Pricing::Limit(p) => Ok(parse_amount(p, d)
-                    .map_err(|e| refused(what, &[format!("price {p:?}: {e:#}")]))?),
-                Pricing::Marketable { slippage_bps } => Err(*slippage_bps),
-            };
+        let limit_price: std::result::Result<u128, u32> = match &req.pricing {
+            Pricing::Limit(p) => {
+                Ok(parse_amount(p, d).map_err(|e| early(format!("price {p:?}: {e:#}")))?)
+            }
+            Pricing::Marketable { slippage_bps } => Err(*slippage_bps),
+        };
 
         // 2. One book read: the price guard's reference, and a marketable price.
-        let book = self.venue.book(req.market_id.clone(), None).await?;
+        let book = match self.venue.book(req.market_id.clone(), None).await {
+            Ok(b) => b,
+            Err(_) if !offline.is_empty() => return Err(refused(what, &offline)),
+            Err(e) => return Err(e),
+        };
         let top = BookTop {
             best_bid: book.best_bid(),
             best_ask: book.best_ask(),
@@ -212,7 +221,7 @@ impl<V: Venue> Writer<'_, V> {
         let price = match limit_price {
             Ok(p) => p,
             Err(slippage_bps) => marketable_price(&book, req.side == Side::Buy, slippage_bps)
-                .map_err(|e| refused(what, &[format!("{e:#}")]))?,
+                .map_err(|e| early(format!("{e:#}")))?,
         };
 
         // 3. The venue pin, on both legs' networks, against the snapshot.

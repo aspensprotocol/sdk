@@ -72,6 +72,10 @@ bump (see **Versioning** in `README.md`).
   from when the stream is established (the `Orderbook` RPC has answered), not
   from the call. A stream not established within 10 seconds is an error;
   before, a slow venue returned an empty book.
+- `stream_orderbook::apply_slippage` rounds a sell's floor price up (it
+  rounded down), so the result never lands more than `slippage_bps` under the
+  bid. `aspens-cli sell-marketable` can price one unit higher than before on a
+  bid that does not divide evenly; buys are unchanged.
 - `send_order` keeps the venue's `tonic::Status` in the error chain when it
   adds context: the "session changed" refusal and the deposited-balance
   explanation are now context on the status rather than a new error, so
