@@ -23,24 +23,86 @@ struct TokenInfo {
     decimals: u32,
 }
 
+/// One balance reading: a raw integer in the unit's base units, or the reason
+/// there is none.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub enum BalanceValue {
+    /// Base units (the token's own decimals; the native unit's for gas).
+    Raw(u128),
+    /// No supplied wallet matches the chain's curve.
+    NoWallet,
+    /// The read failed or has no value; the text says why.
+    Error(String),
+}
+
+impl BalanceValue {
+    /// Classify a reading the read helpers produce as text: a decimal integer
+    /// is a balance, anything else ("error", "not deployed", ...) is the reason.
+    fn from_wire(s: String) -> Self {
+        match s.parse::<u128>() {
+            Ok(v) => BalanceValue::Raw(v),
+            Err(_) => BalanceValue::Error(s),
+        }
+    }
+
+    /// The text the balances table shows for this reading.
+    fn display(&self, decimals: u32) -> String {
+        match self {
+            BalanceValue::Raw(v) => format_balance_with_decimals(&v.to_string(), decimals),
+            BalanceValue::NoWallet => "no wallet".to_string(),
+            BalanceValue::Error(e) => e.clone(),
+        }
+    }
+}
+
 /// Balance information for a token on a specific chain
-#[derive(Debug)]
-struct ChainBalance {
-    chain_network: String,
-    wallet_balance: String,
-    available_balance: String,
-    locked_balance: String,
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChainBalanceView {
+    pub network: String,
+    pub wallet: BalanceValue,
+    pub available: BalanceValue,
+    pub locked: BalanceValue,
+}
+
+impl ChainBalanceView {
+    fn all(network: String, v: BalanceValue) -> Self {
+        Self {
+            network,
+            wallet: v.clone(),
+            available: v.clone(),
+            locked: v,
+        }
+    }
+
+    fn all_err(network: String, msg: &str) -> Self {
+        Self::all(network, BalanceValue::Error(msg.to_string()))
+    }
 }
 
 /// Native gas token balance for a chain
-#[derive(Debug)]
-struct NativeBalance {
-    chain_network: String,
-    balance: String,
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NativeBalanceView {
+    pub network: String,
     /// Decimals of the native unit the balance is in. `None` when the chain's
     /// architecture is unknown: the unit is then unknown too, and `balance`
     /// says so.
-    decimals: Option<u32>,
+    pub decimals: Option<u32>,
+    pub balance: BalanceValue,
+}
+
+/// Aggregated balance for a single token across all chains
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TokenBalances {
+    pub symbol: String,
+    pub decimals: u32,
+    pub chains: Vec<ChainBalanceView>,
+}
+
+/// Everything `fetch_balances` read: per-token rows per chain, and native gas.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Balances {
+    pub tokens: Vec<TokenBalances>,
+    pub native: Vec<NativeBalanceView>,
 }
 
 /// Decimals of a chain's native gas unit as `native_balance` reports it: wei
@@ -51,13 +113,6 @@ fn native_decimals(chain: &Chain) -> Result<u32> {
         Architecture::Tron => 6,
         Architecture::Evm | Architecture::Solana => 18,
     })
-}
-
-/// Aggregated balance for a single token across all chains
-#[derive(Debug)]
-struct TokenBalance {
-    token_info: TokenInfo,
-    chain_balances: Vec<ChainBalance>,
 }
 
 /// Extract all unique tokens from configuration chains
@@ -101,10 +156,9 @@ fn format_balance_with_decimals(balance_str: &str, decimals: u32) -> String {
 }
 
 /// Display all token balances in a single table grouped by chain
-fn display_all_token_balances(
-    all_token_balances: &[TokenBalance],
-    native_balances: &[NativeBalance],
-) -> String {
+fn display_all_token_balances(balances: &Balances) -> String {
+    let all_token_balances = &balances.tokens;
+    let native_balances = &balances.native;
     if all_token_balances.is_empty() {
         return String::new();
     }
@@ -112,9 +166,9 @@ fn display_all_token_balances(
     // Collect all unique chain networks across all tokens and sort them
     let mut all_chains: Vec<String> = Vec::new();
     for token_balance in all_token_balances {
-        for chain_balance in &token_balance.chain_balances {
-            if !all_chains.contains(&chain_balance.chain_network) {
-                all_chains.push(chain_balance.chain_network.clone());
+        for chain_balance in &token_balance.chains {
+            if !all_chains.contains(&chain_balance.network) {
+                all_chains.push(chain_balance.network.clone());
             }
         }
     }
@@ -153,10 +207,10 @@ fn display_all_token_balances(
         ]);
 
         // Add native gas balance for this chain
-        if let Some(native) = native_balances.iter().find(|nb| nb.chain_network == *chain) {
+        if let Some(native) = native_balances.iter().find(|nb| nb.network == *chain) {
             let gas_balance = match native.decimals {
-                Some(decimals) => format_balance_with_decimals(&native.balance, decimals),
-                None => native.balance.clone(),
+                Some(decimals) => native.balance.display(decimals),
+                None => native.balance.display(0),
             };
             table.add_row(vec![
                 "GAS".to_string(),
@@ -169,18 +223,14 @@ fn display_all_token_balances(
         // Add tokens for this chain
         for token_balance in all_token_balances {
             // Find if this token exists on this chain
-            if let Some(chain_balance) = token_balance
-                .chain_balances
-                .iter()
-                .find(|cb| cb.chain_network == *chain)
+            if let Some(chain_balance) = token_balance.chains.iter().find(|cb| cb.network == *chain)
             {
-                let decimals = token_balance.token_info.decimals;
-                let symbol = &token_balance.token_info.symbol;
+                let decimals = token_balance.decimals;
+                let symbol = &token_balance.symbol;
 
-                let wallet = format_balance_with_decimals(&chain_balance.wallet_balance, decimals);
-                let deposited =
-                    format_balance_with_decimals(&chain_balance.available_balance, decimals);
-                let locked = format_balance_with_decimals(&chain_balance.locked_balance, decimals);
+                let wallet = chain_balance.wallet.display(decimals);
+                let deposited = chain_balance.available.display(decimals);
+                let locked = chain_balance.locked.display(decimals);
 
                 table.add_row(vec![symbol.clone(), wallet, deposited, locked]);
             }
@@ -256,30 +306,20 @@ async fn query_token_balance_via_client(
     chain: &Chain,
     token_symbol: &str,
     owner_address: &str,
-) -> ChainBalance {
+) -> ChainBalanceView {
     let chain_network = chain.network.clone();
     // Resolved once: the arborter masks rpc_url, so without a client-side
     // override every read below would fail identically and unhelpfully.
     let rpc = match crate::chain_client::chain_rpc_url(chain) {
         Ok(u) => u,
         Err(_) => {
-            return ChainBalance {
-                chain_network,
-                wallet_balance: "no rpc".to_string(),
-                available_balance: "no rpc".to_string(),
-                locked_balance: "no rpc".to_string(),
-            };
+            return ChainBalanceView::all_err(chain_network, "no rpc");
         }
     };
     let token = match chain.tokens.get(token_symbol) {
         Some(t) => t,
         None => {
-            return ChainBalance {
-                chain_network,
-                wallet_balance: "missing token".to_string(),
-                available_balance: "missing token".to_string(),
-                locked_balance: "missing token".to_string(),
-            };
+            return ChainBalanceView::all_err(chain_network, "missing token");
         }
     };
 
@@ -287,12 +327,7 @@ async fn query_token_balance_via_client(
         Ok(c) => c,
         Err(e) => {
             warn!("Failed to build client for {}: {}", chain_network, e);
-            return ChainBalance {
-                chain_network,
-                wallet_balance: "error".to_string(),
-                available_balance: "error".to_string(),
-                locked_balance: "error".to_string(),
-            };
+            return ChainBalanceView::all_err(chain_network, "error");
         }
     };
 
@@ -311,9 +346,9 @@ async fn query_token_balance_via_client(
     let wallet_balance = wallet_result.map_or_else(
         |e| {
             warn!("Failed to get wallet balance on {}: {}", chain_network, e);
-            "error".to_string()
+            BalanceValue::Error("error".to_string())
         },
-        |v| v.to_string(),
+        BalanceValue::Raw,
     );
 
     // Locked/deposited balances come from the trade contract: the Midrib
@@ -323,26 +358,30 @@ async fn query_token_balance_via_client(
         Ok(a) => a,
         Err(e) => {
             warn!("{e}");
-            return ChainBalance {
-                chain_network,
-                wallet_balance,
-                available_balance: "bad architecture".to_string(),
-                locked_balance: "bad architecture".to_string(),
+            return ChainBalanceView {
+                network: chain_network,
+                wallet: wallet_balance,
+                available: BalanceValue::Error("bad architecture".to_string()),
+                locked: BalanceValue::Error("bad architecture".to_string()),
             };
         }
     };
     let (available_balance, locked_balance) = if architecture == Architecture::Solana {
-        solana_user_balance(chain, token, owner_address).await
+        let (available, locked) = solana_user_balance(chain, token, owner_address).await;
+        (
+            BalanceValue::from_wire(available),
+            BalanceValue::from_wire(locked),
+        )
     } else {
         let rpc = match crate::chain_client::evm_read_url_for(chain, &rpc) {
             Ok(u) => u,
             Err(e) => {
                 warn!("No EVM read endpoint for {}: {}", chain_network, e);
-                return ChainBalance {
-                    chain_network,
-                    wallet_balance,
-                    available_balance: "error".to_string(),
-                    locked_balance: "error".to_string(),
+                return ChainBalanceView {
+                    network: chain_network,
+                    wallet: wallet_balance,
+                    available: BalanceValue::Error("error".to_string()),
+                    locked: BalanceValue::Error("error".to_string()),
                 };
             }
         };
@@ -353,18 +392,21 @@ async fn query_token_balance_via_client(
             .unwrap_or_default();
 
         if contract_address.is_empty() {
-            ("not deployed".to_string(), "not deployed".to_string())
+            (
+                BalanceValue::Error("not deployed".to_string()),
+                BalanceValue::Error("not deployed".to_string()),
+            )
         } else {
             // Reuse existing EVM helpers — they need a privkey to derive the address,
             // but we already have the address. Use *_for_address variants.
             let owner: Address = match owner_address.parse() {
                 Ok(a) => a,
                 Err(_) => {
-                    return ChainBalance {
-                        chain_network,
-                        wallet_balance,
-                        available_balance: "bad address".to_string(),
-                        locked_balance: "bad address".to_string(),
+                    return ChainBalanceView {
+                        network: chain_network,
+                        wallet: wallet_balance,
+                        available: BalanceValue::Error("bad address".to_string()),
+                        locked: BalanceValue::Error("bad address".to_string()),
                     };
                 }
             };
@@ -382,9 +424,9 @@ async fn query_token_balance_via_client(
                         "Failed to get available balance on {}: {}",
                         chain_network, e
                     );
-                    "error".to_string()
+                    BalanceValue::Error("error".to_string())
                 },
-                |v| v.to_string(),
+                |v| BalanceValue::Raw(v.to::<u128>()),
             );
             let locked =
                 call_get_locked_balance_for_address(&rpc, &token.address, &contract_address, owner)
@@ -392,19 +434,19 @@ async fn query_token_balance_via_client(
                     .map_or_else(
                         |e| {
                             warn!("Failed to get locked balance on {}: {}", chain_network, e);
-                            "error".to_string()
+                            BalanceValue::Error("error".to_string())
                         },
-                        |v| v.to_string(),
+                        |v| BalanceValue::Raw(v.to::<u128>()),
                     );
             (available, locked)
         }
     };
 
-    ChainBalance {
-        chain_network,
-        wallet_balance,
-        available_balance,
-        locked_balance,
+    ChainBalanceView {
+        network: chain_network,
+        wallet: wallet_balance,
+        available: available_balance,
+        locked: locked_balance,
     }
 }
 
@@ -424,33 +466,27 @@ fn select_wallet_for_chain<'a>(chain: &Chain, wallets: &'a [&'a Wallet]) -> Opti
     wallets.iter().copied().find(|w| w.curve() == wanted)
 }
 
-/// Curve-aware, multi-wallet config-driven balance function.
+/// Curve-aware, multi-wallet config-driven balance read, as data.
 ///
 /// Each chain in the config gets matched to a wallet with the same curve
 /// (EVM chains → `Wallet::Evm`, Solana chains → `Wallet::Solana`). A chain
-/// with no matching wallet is reported as "no wallet" rather than failing
-/// the whole call.
-pub async fn balance_from_config_with_wallets(
-    config: GetConfigResponse,
-    wallets: &[&Wallet],
-) -> Result<()> {
+/// with no matching wallet is reported as [`BalanceValue::NoWallet`] rather
+/// than failing the whole call; a failed read is [`BalanceValue::Error`].
+pub async fn fetch_balances(config: GetConfigResponse, wallets: &[&Wallet]) -> Result<Balances> {
     let configuration = config
         .config
         .ok_or_else(|| eyre::eyre!("No configuration found in response"))?;
 
     let tokens = extract_all_tokens_from_config(&configuration);
 
-    if tokens.is_empty() {
-        info!("No tokens found in configuration");
-        return Ok(());
+    if !tokens.is_empty() {
+        info!("Found {} unique token(s) across all chains", tokens.len());
     }
 
-    info!("Found {} unique token(s) across all chains", tokens.len());
-
-    let mut all_token_balances: Vec<TokenBalance> = Vec::new();
+    let mut all_token_balances: Vec<TokenBalances> = Vec::new();
 
     for (symbol, token_info) in tokens {
-        let mut chain_balances = Vec::new();
+        let mut chains = Vec::new();
 
         for chain in &configuration.chains {
             if !chain.tokens.contains_key(&symbol) {
@@ -458,26 +494,22 @@ pub async fn balance_from_config_with_wallets(
             }
             let cb = match select_wallet_for_chain(chain, wallets) {
                 Some(w) => query_token_balance_via_client(chain, &symbol, &w.address()).await,
-                None => ChainBalance {
-                    chain_network: chain.network.clone(),
-                    wallet_balance: "no wallet".to_string(),
-                    available_balance: "no wallet".to_string(),
-                    locked_balance: "no wallet".to_string(),
-                },
+                None => ChainBalanceView::all(chain.network.clone(), BalanceValue::NoWallet),
             };
-            chain_balances.push(cb);
+            chains.push(cb);
         }
 
-        all_token_balances.push(TokenBalance {
-            token_info: token_info.clone(),
-            chain_balances,
+        all_token_balances.push(TokenBalances {
+            symbol: token_info.symbol,
+            decimals: token_info.decimals,
+            chains,
         });
     }
 
-    all_token_balances.sort_by(|a, b| a.token_info.symbol.cmp(&b.token_info.symbol));
+    all_token_balances.sort_by(|a, b| a.symbol.cmp(&b.symbol));
 
     // Native gas balances per chain
-    let mut native_balances: Vec<NativeBalance> = Vec::new();
+    let mut native_balances: Vec<NativeBalanceView> = Vec::new();
     let mut seen: HashMap<String, ()> = HashMap::new();
     for chain in &configuration.chains {
         if seen.contains_key(&chain.network) {
@@ -489,9 +521,9 @@ pub async fn balance_from_config_with_wallets(
             Ok(d) => Some(d),
             Err(e) => {
                 warn!("{e}");
-                native_balances.push(NativeBalance {
-                    chain_network: chain.network.clone(),
-                    balance: "bad architecture".to_string(),
+                native_balances.push(NativeBalanceView {
+                    network: chain.network.clone(),
+                    balance: BalanceValue::Error("bad architecture".to_string()),
                     decimals: None,
                 });
                 continue;
@@ -501,10 +533,10 @@ pub async fn balance_from_config_with_wallets(
         let owner_address = match select_wallet_for_chain(chain, wallets) {
             Some(w) => w.address(),
             None => {
-                native_balances.push(NativeBalance {
-                    chain_network: chain.network.clone(),
+                native_balances.push(NativeBalanceView {
+                    network: chain.network.clone(),
                     decimals,
-                    balance: "no wallet".to_string(),
+                    balance: BalanceValue::NoWallet,
                 });
                 continue;
             }
@@ -514,10 +546,10 @@ pub async fn balance_from_config_with_wallets(
             Ok(c) => c,
             Err(e) => {
                 warn!("Failed to build client for {}: {}", chain.network, e);
-                native_balances.push(NativeBalance {
-                    chain_network: chain.network.clone(),
+                native_balances.push(NativeBalanceView {
+                    network: chain.network.clone(),
                     decimals,
-                    balance: "error".to_string(),
+                    balance: BalanceValue::Error("error".to_string()),
                 });
                 continue;
             }
@@ -525,18 +557,36 @@ pub async fn balance_from_config_with_wallets(
         let balance = client.native_balance(&owner_address).await.map_or_else(
             |e| {
                 warn!("Failed to get native balance on {}: {}", chain.network, e);
-                "error".to_string()
+                BalanceValue::Error("error".to_string())
             },
-            |v| v.to_string(),
+            BalanceValue::Raw,
         );
-        native_balances.push(NativeBalance {
-            chain_network: chain.network.clone(),
+        native_balances.push(NativeBalanceView {
+            network: chain.network.clone(),
             balance,
             decimals,
         });
     }
 
-    let output = display_all_token_balances(&all_token_balances, &native_balances);
+    Ok(Balances {
+        tokens: all_token_balances,
+        native: native_balances,
+    })
+}
+
+/// [`fetch_balances`], logged as the balances table. Used by the CLI and REPL.
+pub async fn balance_from_config_with_wallets(
+    config: GetConfigResponse,
+    wallets: &[&Wallet],
+) -> Result<()> {
+    let balances = fetch_balances(config, wallets).await?;
+
+    if balances.tokens.is_empty() {
+        info!("No tokens found in configuration");
+        return Ok(());
+    }
+
+    let output = display_all_token_balances(&balances);
     info!("{}", output);
 
     Ok(())
@@ -805,24 +855,22 @@ mod tests {
         };
         assert!(native_decimals(&sui).is_err());
 
-        let token = TokenBalance {
-            token_info: TokenInfo {
+        let balances = Balances {
+            tokens: vec![TokenBalances {
                 symbol: "USDC".to_string(),
                 decimals: 6,
-            },
-            chain_balances: vec![ChainBalance {
-                chain_network: "sui".to_string(),
-                wallet_balance: "bad architecture".to_string(),
-                available_balance: "bad architecture".to_string(),
-                locked_balance: "bad architecture".to_string(),
+                chains: vec![ChainBalanceView::all_err(
+                    "sui".to_string(),
+                    "bad architecture",
+                )],
+            }],
+            native: vec![NativeBalanceView {
+                network: "sui".to_string(),
+                balance: BalanceValue::Error("bad architecture".to_string()),
+                decimals: None,
             }],
         };
-        let native = NativeBalance {
-            chain_network: "sui".to_string(),
-            balance: "bad architecture".to_string(),
-            decimals: None,
-        };
-        let shown = display_all_token_balances(&[token], &[native]);
+        let shown = display_all_token_balances(&balances);
         let gas = shown
             .lines()
             .find(|l| l.contains("GAS"))
@@ -850,5 +898,70 @@ mod tests {
         let w = evm_wallet();
         let wallets: [&Wallet; 1] = [&w];
         assert!(select_wallet_for_chain(&solana_chain(), &wallets).is_none());
+    }
+
+    #[test]
+    fn balance_value_strings_round_trip_existing_display() {
+        // Expected text captured from the pre-refactor display function for
+        // the same fixture (string-holding structs, same inputs).
+        let balances = Balances {
+            tokens: vec![TokenBalances {
+                symbol: "USDC".into(),
+                decimals: 6,
+                chains: vec![
+                    ChainBalanceView {
+                        network: "base".into(),
+                        wallet: BalanceValue::Raw(1_500_000),
+                        available: BalanceValue::Raw(2_000_001),
+                        locked: BalanceValue::Raw(0),
+                    },
+                    ChainBalanceView {
+                        network: "solana".into(),
+                        wallet: BalanceValue::NoWallet,
+                        available: BalanceValue::NoWallet,
+                        locked: BalanceValue::NoWallet,
+                    },
+                ],
+            }],
+            native: vec![
+                NativeBalanceView {
+                    network: "base".into(),
+                    decimals: Some(18),
+                    balance: BalanceValue::Raw(1_234_567_890_123_456_789),
+                },
+                NativeBalanceView {
+                    network: "solana".into(),
+                    decimals: Some(18),
+                    balance: BalanceValue::NoWallet,
+                },
+            ],
+        };
+        let expected = "
+═══════════════════════════════════════════════════════════════════════════
+                                 BALANCES
+═══════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────┐
+│ Token          Wallet                 Deposited   Locked    │
+╞═════════════════════════════════════════════════════════════╡
+│ ── base ──                                                  │
+│ GAS            1.234567890123456789                         │
+│ USDC           1.500000               2.000001    0.000000  │
+│                                                             │
+│ ── solana ──                                                │
+│ GAS            no wallet                                    │
+│ USDC           no wallet              no wallet   no wallet │
+└─────────────────────────────────────────────────────────────┘
+";
+        assert_eq!(display_all_token_balances(&balances), expected);
+    }
+
+    #[test]
+    fn balance_value_from_wire_splits_numbers_from_sentinels() {
+        assert_eq!(BalanceValue::from_wire("42".into()), BalanceValue::Raw(42));
+        assert_eq!(
+            BalanceValue::from_wire("not deployed".into()),
+            BalanceValue::Error("not deployed".into())
+        );
     }
 }
