@@ -101,7 +101,7 @@ pub enum Record {
 }
 
 /// File operations the ledger needs; a seam so tests can inject disk faults.
-trait LedgerFile {
+trait LedgerFile: Send {
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()>;
     fn sync_data(&mut self) -> io::Result<()>;
     fn set_len(&mut self, len: u64) -> io::Result<()>;

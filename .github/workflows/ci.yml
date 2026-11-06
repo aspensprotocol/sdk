@@ -174,7 +174,7 @@ jobs:
         run: cargo test -p aspens --all-features --verbose
 
       - name: Run MCP server tests
-        run: cargo test -p aspens-mcp --verbose
+        run: cargo test -p aspens-mcp --features test-fake --verbose
 
   doc:
     name: Documentation

@@ -3,6 +3,10 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use aspens_mcp::config;
+use aspens_mcp::ledger::Ledger;
+use aspens_mcp::server::Server;
+use aspens_mcp::venue::{SdkVenue, Venue};
+use rmcp::ServiceExt;
 
 const DEFAULT_CONFIG: &str = "~/.aspens-mcp/aspens-mcp.toml";
 
@@ -24,10 +28,20 @@ enum Command {
     Resume,
 }
 
-fn serve(path: &std::path::Path) -> eyre::Result<()> {
+async fn serve(path: &std::path::Path) -> eyre::Result<()> {
     let cfg = config::load(path)?;
     let keys = config::startup_keys(&cfg)?;
     tracing::info!(evm = keys.evm, solana = keys.solana, "config loaded");
+    let venue = SdkVenue::new(&cfg)?;
+    let venue_cfg = venue.config().await?;
+    let markets = config::resolve_markets(&cfg, &venue_cfg)?;
+    let ledger = Ledger::open(&cfg.state_dir)?;
+    let server = Server::new(venue, cfg, markets, ledger);
+    server
+        .serve(rmcp::transport::stdio())
+        .await?
+        .waiting()
+        .await?;
     Ok(())
 }
 
@@ -44,7 +58,7 @@ fn main() -> eyre::Result<()> {
     let cli = Cli::parse();
     let path = config::expand_tilde(&cli.config);
     match cli.command {
-        None | Some(Command::Serve) => serve(&path),
+        None | Some(Command::Serve) => tokio::runtime::Runtime::new()?.block_on(serve(&path)),
         // Parsed only; lifting a halt is implemented with the ledger.
         Some(Command::Resume) => Ok(()),
     }

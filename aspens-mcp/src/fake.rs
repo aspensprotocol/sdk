@@ -69,6 +69,7 @@ struct State {
     healthy: bool,
     attestation: AttestationView,
     on_send: Option<SendHook>,
+    read_error: Option<String>,
     calls: Vec<Call>,
 }
 
@@ -106,6 +107,7 @@ impl FakeVenue {
                 note: None,
             },
             on_send: None,
+            read_error: None,
             calls: Vec::new(),
         };
         Self {
@@ -161,6 +163,19 @@ impl FakeVenue {
         self.lock().on_send = Some(hook);
     }
 
+    /// Make every read that can fail (`book`, `my_fills`, `balances`,
+    /// `attestation`) return `Err(msg)`; `None` restores normal reads.
+    pub fn set_read_error(&self, msg: Option<&str>) {
+        self.lock().read_error = msg.map(str::to_string);
+    }
+
+    fn read_result(&self) -> Result<()> {
+        match &self.lock().read_error {
+            Some(m) => Err(eyre!(m.clone())),
+            None => Ok(()),
+        }
+    }
+
     /// Every recorded call, in order.
     pub fn calls(&self) -> Vec<Call> {
         self.lock().calls.clone()
@@ -190,12 +205,14 @@ impl Venue for FakeVenue {
             market_id,
             filter_by_trader,
         });
+        self.read_result()?;
         Ok(self.lock().books.get(&key).cloned().unwrap_or_default())
     }
 
     async fn my_fills(&self, market_id: String, trader: String) -> Result<Vec<TradeFill>> {
         let key = (market_id.clone(), trader.clone());
         self.record(Call::MyFills { market_id, trader });
+        self.read_result()?;
         Ok(self.lock().fills.get(&key).cloned().unwrap_or_default())
     }
 
@@ -269,6 +286,7 @@ impl Venue for FakeVenue {
 
     async fn balances(&self) -> Result<Balances> {
         self.record(Call::Balances);
+        self.read_result()?;
         Ok(self.lock().balances.clone())
     }
 
@@ -285,6 +303,7 @@ impl Venue for FakeVenue {
 
     async fn attestation(&self, _nonce: Vec<u8>) -> Result<AttestationView> {
         self.record(Call::Attestation);
+        self.read_result()?;
         Ok(self.lock().attestation.clone())
     }
 
