@@ -15,6 +15,10 @@ path = "src/lib.rs"
 name = "aspens-mcp"
 path = "src/main.rs"
 
+[features]
+# Exposes `fake::FakeVenue` outside this crate's own tests.
+test-fake = []
+
 [dependencies]
 # Features declared explicitly so changes to the aspens crate's defaults
 # don't silently affect this binary.
@@ -26,6 +30,8 @@ hex.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tonic.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

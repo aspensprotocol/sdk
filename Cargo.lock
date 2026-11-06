@@ -1288,7 +1288,9 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "toml",
+ "tonic",
  "tracing",
  "tracing-subscriber",
 ]
