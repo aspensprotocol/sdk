@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aspens::commands::config::config_pb::GetConfigResponse;
@@ -27,6 +28,7 @@ use crate::orders::{OrderState, VenueView, derive, order_id_hex, resolve_unknown
 pub use crate::redact::redact;
 use crate::venue::{TradeFill, Venue, base_leg_address};
 use crate::views;
+use crate::write::{PlaceRequest, Pricing, Writer};
 
 /// The MCP `instructions` string sent at initialization.
 pub const INSTRUCTIONS: &str = "Check `limits` before placing an order; amounts are decimal \
@@ -44,6 +46,8 @@ pub struct Server<V: Venue> {
     cfg: Arc<Config>,
     markets: Arc<BTreeMap<String, MarketLimits>>,
     ledger: Arc<Mutex<Ledger>>,
+    /// The venue's attestation verified once; only a pass is remembered.
+    attested: Arc<AtomicBool>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -59,7 +63,6 @@ impl<V: Venue> Server<V> {
     ) -> Server<V> {
         let mut tool_router = Self::tool_router();
         if !cfg.allow_withdraw {
-            // A no-op until the write tools register `withdraw`.
             tool_router.remove_route("withdraw");
         }
         Server {
@@ -67,6 +70,7 @@ impl<V: Venue> Server<V> {
             cfg: Arc::new(cfg),
             markets: Arc::new(markets),
             ledger: Arc::new(Mutex::new(ledger)),
+            attested: Arc::new(AtomicBool::new(false)),
             tool_router,
         }
     }
@@ -113,6 +117,100 @@ pub struct GetOrderArgs {
     pub order_id: String,
 }
 
+/// An order side, as the agent writes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SideArg {
+    Buy,
+    Sell,
+}
+
+impl From<SideArg> for Side {
+    fn from(s: SideArg) -> Side {
+        match s {
+            SideArg::Buy => Side::Buy,
+            SideArg::Sell => Side::Sell,
+        }
+    }
+}
+
+// Write arguments refuse unknown fields: a parameter the server does not
+// implement is an error, never silently dropped.
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlaceLimitArgs {
+    /// The market id, as `venue_config` lists it.
+    pub market_id: String,
+    /// `buy` or `sell`.
+    pub side: SideArg,
+    /// Base quantity, a decimal string in market units.
+    pub qty: String,
+    /// Limit price, a decimal string in market units.
+    pub price: String,
+    /// Rest only: the venue refuses the order rather than let it take liquidity.
+    #[serde(default)]
+    pub post_only: bool,
+    /// Settle the base leg to this address instead of your own; it must be in
+    /// the operator's settle address allowlist.
+    #[serde(default)]
+    pub settle_base_address: Option<String>,
+    /// Settle the quote leg to this address instead of your own; it must be in
+    /// the operator's settle address allowlist.
+    #[serde(default)]
+    pub settle_quote_address: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlaceMarketableArgs {
+    /// The market id, as `venue_config` lists it.
+    pub market_id: String,
+    /// `buy` or `sell`.
+    pub side: SideArg,
+    /// Base quantity, a decimal string in market units.
+    pub qty: String,
+    /// How far past the best opposite price the limit is set, in basis points
+    /// (default 50).
+    #[serde(default)]
+    pub slippage_bps: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CancelArgs {
+    /// The order id: `0x` followed by 64 hex digits.
+    pub order_id: String,
+    /// Required only for an order this server did not send.
+    #[serde(default)]
+    pub market_id: Option<String>,
+    /// Required only for an order this server did not send.
+    #[serde(default)]
+    pub side: Option<SideArg>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TransferArgs {
+    /// The chain's network name, as `venue_config` lists it.
+    pub network: String,
+    /// The token symbol on that network.
+    pub token: String,
+    /// A decimal string in the token's own units on that network.
+    pub amount: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HaltArgs {
+    /// Why trading is halted; shown by `account_status` and every refusal.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Default `place_marketable_order` slippage, in basis points.
+const DEFAULT_SLIPPAGE_BPS: u32 = 50;
+
 // ---- helpers ----
 
 fn respond(r: Result<Value>) -> Result<CallToolResult, ErrorData> {
@@ -122,7 +220,7 @@ fn respond(r: Result<Value>) -> Result<CallToolResult, ErrorData> {
     })
 }
 
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
@@ -140,7 +238,7 @@ fn pair_decimals(cfg: &GetConfigResponse, market_id: &str) -> Result<u32> {
 }
 
 /// Parse an order id given by the agent: `0x` + 64 hex, any case.
-fn parse_order_id(s: &str) -> Result<String> {
+pub(crate) fn parse_order_id(s: &str) -> Result<String> {
     let s = s.trim();
     let bad = || eyre!("order_id must be 0x followed by 64 hex digits");
     let hex_part = s
@@ -203,6 +301,17 @@ fn venue_view(book: &BookState, fills: Vec<TradeFill>) -> VenueView {
 // ---- tool bodies ----
 
 impl<V: Venue> Server<V> {
+    fn writer(&self) -> Writer<'_, V> {
+        Writer {
+            venue: &self.venue,
+            cfg: &self.cfg,
+            markets: &self.markets,
+            ledger: &self.ledger,
+            attested: &self.attested,
+            now: now_secs(),
+        }
+    }
+
     async fn venue_config_json(&self) -> Result<Value> {
         let cfg = self.venue.config().await?;
         let c = cfg
@@ -619,6 +728,128 @@ impl<V: Venue> Server<V> {
     )]
     async fn venue_attestation(&self) -> Result<CallToolResult, ErrorData> {
         respond(self.venue_attestation_json().await)
+    }
+
+    #[tool(
+        description = "Place a limit order. qty and price are decimal strings in market units. \
+        Refused, with nothing signed, when it breaks a limit (see `limits`), prices more than \
+        max_deviation_bps through the best opposite price, or trading is halted. Its qty and \
+        quote count against today's budget once sent, even if it is later cancelled. A result in \
+        state `unknown` got no answer: check it with `my_orders`, never resubmit it.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn place_limit_order(
+        &self,
+        Parameters(a): Parameters<PlaceLimitArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let req = PlaceRequest {
+            market_id: a.market_id,
+            side: a.side.into(),
+            qty: a.qty,
+            pricing: Pricing::Limit(a.price),
+            post_only: a.post_only,
+            settle_base: a.settle_base_address,
+            settle_quote: a.settle_quote_address,
+        };
+        respond(self.writer().place(req).await)
+    }
+
+    #[tool(
+        description = "Take liquidity: a limit order priced at the best opposite price moved \
+        slippage_bps against you (default 50). The same limits apply as for \
+        `place_limit_order`; slippage beyond max_deviation_bps is refused. Refused when the \
+        opposite side of the book is empty.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn place_marketable_order(
+        &self,
+        Parameters(a): Parameters<PlaceMarketableArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let req = PlaceRequest {
+            market_id: a.market_id,
+            side: a.side.into(),
+            qty: a.qty,
+            pricing: Pricing::Marketable {
+                slippage_bps: a.slippage_bps.unwrap_or(DEFAULT_SLIPPAGE_BPS),
+            },
+            post_only: false,
+            settle_base: None,
+            settle_quote: None,
+        };
+        respond(self.writer().place(req).await)
+    }
+
+    #[tool(
+        description = "Cancel an order by id. For an order this server sent, the market and \
+        side come from its records; for any other, give market_id and side. `already_gone` \
+        means it was not live (filled, cancelled earlier, or never placed). Allowed while halted.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn cancel_order(
+        &self,
+        Parameters(a): Parameters<CancelArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let side = a.side.map(Side::from);
+        respond(self.writer().cancel(&a.order_id, a.market_id, side).await)
+    }
+
+    #[tool(
+        description = "Deposit a token from your wallet into the venue. amount is a decimal \
+        string in the token's own units on that network. Refused when halted, when deposits are \
+        disabled, or over the operator's per-call ceiling.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn deposit(
+        &self,
+        Parameters(a): Parameters<TransferArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        respond(self.writer().deposit(a.network, a.token, a.amount).await)
+    }
+
+    #[tool(
+        description = "Withdraw a token from the venue to your own wallet address on that \
+        network. amount is a decimal string in the token's own units. Refused when halted.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn withdraw(
+        &self,
+        Parameters(a): Parameters<TransferArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        respond(self.writer().withdraw(a.network, a.token, a.amount).await)
+    }
+
+    #[tool(
+        description = "Stop all new orders, deposits and withdrawals until the operator resumes \
+        trading; you cannot resume it yourself. Cancels stay allowed. Halting while halted keeps \
+        the first reason.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    async fn halt(&self, Parameters(a): Parameters<HaltArgs>) -> Result<CallToolResult, ErrorData> {
+        respond(self.writer().halt(a.reason).await)
     }
 }
 

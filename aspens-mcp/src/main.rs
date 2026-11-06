@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use aspens_mcp::config;
-use aspens_mcp::ledger::Ledger;
+use aspens_mcp::ledger::{Ledger, Record};
 use aspens_mcp::server::Server;
 use aspens_mcp::venue::{SdkVenue, Venue};
 use rmcp::ServiceExt;
@@ -45,6 +45,33 @@ async fn serve(path: &std::path::Path) -> eyre::Result<()> {
     Ok(())
 }
 
+/// Lift a halt: append `Resume` to the ledger if it is halted. Needs no venue.
+/// Refuses while a running server holds the ledger.
+fn resume(path: &std::path::Path) -> eyre::Result<()> {
+    let cfg = config::load(path)?;
+    let mut ledger = Ledger::open(&cfg.state_dir).map_err(|e| {
+        let msg = format!("{e:#}");
+        if msg.starts_with("another aspens-mcp is using") {
+            eyre::eyre!("{msg}: stop the running aspens-mcp server first, then run resume again")
+        } else {
+            e
+        }
+    })?;
+    let Some(reason) = ledger.halted() else {
+        eprintln!("aspens-mcp: not halted; nothing to resume");
+        return Ok(());
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    ledger.append(Record::Resume { ts })?;
+    eprintln!(
+        "aspens-mcp: resumed trading (was halted: {})",
+        reason.as_deref().unwrap_or("no reason recorded")
+    );
+    Ok(())
+}
+
 fn main() -> eyre::Result<()> {
     // Logs go to stderr only: stdout carries nothing but JSON-RPC frames.
     tracing_subscriber::fmt()
@@ -59,8 +86,7 @@ fn main() -> eyre::Result<()> {
     let path = config::expand_tilde(&cli.config);
     match cli.command {
         None | Some(Command::Serve) => tokio::runtime::Runtime::new()?.block_on(serve(&path)),
-        // Parsed only; lifting a halt is implemented with the ledger.
-        Some(Command::Resume) => Ok(()),
+        Some(Command::Resume) => resume(&path),
     }
 }
 

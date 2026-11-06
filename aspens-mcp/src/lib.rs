@@ -10,3 +10,4 @@ pub mod redact;
 pub mod server;
 pub mod venue;
 pub mod views;
+mod write;

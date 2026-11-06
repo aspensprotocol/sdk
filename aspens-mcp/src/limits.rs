@@ -187,7 +187,7 @@ fn is_hex_addr(s: &str) -> bool {
 }
 
 /// `0x`-hex addresses compare case-insensitively; anything else (base58) exactly.
-fn addr_matches(candidate: &str, allowed: &str) -> bool {
+pub(crate) fn addr_matches(candidate: &str, allowed: &str) -> bool {
     if is_hex_addr(candidate) && is_hex_addr(allowed) {
         candidate.eq_ignore_ascii_case(allowed)
     } else {

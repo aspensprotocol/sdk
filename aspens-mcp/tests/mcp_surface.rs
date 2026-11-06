@@ -4,18 +4,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aspens::commands::config::config_pb::{Chain, Configuration, GetConfigResponse, Market};
+use aspens::commands::config::config_pb::{
+    Chain, Configuration, GetConfigResponse, Market, Token, TradeContract,
+};
 use aspens::commands::trading::arborter_pb::{self, OrderbookEntry};
 use aspens::commands::trading::balance::{
     BalanceValue, Balances, ChainBalanceView, NativeBalanceView, TokenBalances,
 };
 use aspens::commands::trading::book_snapshot::BookState;
-use aspens_mcp::config::{Config, DepositsConfig, MarketLimits};
+use aspens_mcp::config::{Config, DepositsConfig, MarketLimits, VenuePin};
 use aspens_mcp::fake::{Call, FakeVenue};
 use aspens_mcp::ledger::{Fill, Ledger, Record, SentOutcome, SentRecord, Side};
 use aspens_mcp::limits::utc_day;
 use aspens_mcp::server::Server;
-use aspens_mcp::venue::{Addresses, TradeFill};
+use aspens_mcp::venue::{Addresses, AttestationView, CancelResult, SendResult, TradeFill};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
@@ -24,6 +26,11 @@ use serde_json::{Value, json};
 const MARKET: &str = "base::0xaaa::base::0xbbb";
 const AGENT: &str = "0xagent";
 const PAIR_DECIMALS: u32 = 6;
+/// Token addresses as the venue spells them: mixed case, so a case-sensitive
+/// comparison is caught.
+const AAA_ADDR: &str = "0xAaAa00000000000000000000000000000000Aa01";
+const BBB_ADDR: &str = "0xBbBb00000000000000000000000000000000Bb02";
+const TRADE_CONTRACT: &str = "0xC0c0000000000000000000000000000000C0c003";
 
 const READ_TOOLS: [&str; 10] = [
     "venue_config",
@@ -36,6 +43,14 @@ const READ_TOOLS: [&str; 10] = [
     "account_status",
     "limits",
     "venue_attestation",
+];
+
+const WRITE_TOOLS: [&str; 5] = [
+    "place_limit_order",
+    "place_marketable_order",
+    "cancel_order",
+    "deposit",
+    "halt",
 ];
 
 fn id(b: u8) -> [u8; 32] {
@@ -53,6 +68,21 @@ fn venue_config() -> GetConfigResponse {
                 network: "base".into(),
                 architecture: "evm".into(),
                 chain_id: 8453,
+                trade_contract: Some(TradeContract {
+                    address: TRADE_CONTRACT.into(),
+                }),
+                tokens: [("AAA", AAA_ADDR, 18), ("BBB", BBB_ADDR, 8)]
+                    .into_iter()
+                    .map(|(symbol, address, decimals)| {
+                        let t = Token {
+                            name: symbol.into(),
+                            symbol: symbol.into(),
+                            address: address.into(),
+                            decimals,
+                        };
+                        (symbol.to_string(), t)
+                    })
+                    .collect(),
                 ..Default::default()
             }],
             markets: vec![Market {
@@ -109,10 +139,22 @@ fn config(dir: &std::path::Path) -> Config {
 
 struct Harness {
     client: RunningService<RoleClient, ()>,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
+    server: tokio::task::JoinHandle<()>,
 }
 
 impl Harness {
+    fn dir(&self) -> &std::path::Path {
+        self.dir.path()
+    }
+
+    /// Close the client and wait for the server to exit, releasing the ledger.
+    async fn stop(self) -> tempfile::TempDir {
+        self.client.cancel().await.unwrap();
+        self.server.await.unwrap();
+        self.dir
+    }
+
     async fn call(&self, tool: &str, args: Value) -> CallToolResult {
         let mut p = CallToolRequestParams::new(tool.to_string());
         if let Value::Object(m) = args {
@@ -140,18 +182,42 @@ fn text(r: &CallToolResult) -> String {
 
 /// Start the server with `seed` applied to a fresh ledger.
 async fn start(venue: FakeVenue, seed: impl FnOnce(&mut Ledger)) -> Harness {
-    let dir = tempfile::tempdir().unwrap();
+    start_with(venue, |_| {}, seed).await
+}
+
+/// Start the server with `edit` applied to the config and `seed` to a fresh ledger.
+async fn start_with(
+    venue: FakeVenue,
+    edit: impl FnOnce(&mut Config),
+    seed: impl FnOnce(&mut Ledger),
+) -> Harness {
+    start_in(tempfile::tempdir().unwrap(), venue, edit, seed).await
+}
+
+/// Start the server on the ledger in `dir` (kept as it is, then `seed`ed).
+async fn start_in(
+    dir: tempfile::TempDir,
+    venue: FakeVenue,
+    edit: impl FnOnce(&mut Config),
+    seed: impl FnOnce(&mut Ledger),
+) -> Harness {
     let mut ledger = Ledger::open(dir.path()).unwrap();
     seed(&mut ledger);
-    let server = Server::new(venue, config(dir.path()), limits(), ledger);
+    let mut cfg = config(dir.path());
+    edit(&mut cfg);
+    let server = Server::new(venue, cfg, limits(), ledger);
     let (server_io, client_io) = tokio::io::duplex(1 << 16);
-    tokio::spawn(async move {
+    let server = tokio::spawn(async move {
         if let Ok(running) = server.serve(server_io).await {
             let _ = running.waiting().await;
         }
     });
     let client = ().serve(client_io).await.unwrap();
-    Harness { client, _dir: dir }
+    Harness {
+        client,
+        dir,
+        server,
+    }
 }
 
 fn now() -> u64 {
@@ -222,7 +288,12 @@ async fn tool_list_default() {
         .into_iter()
         .map(|t| t.name.to_string())
         .collect();
-    let want: BTreeSet<String> = READ_TOOLS.iter().map(|s| s.to_string()).collect();
+    let want: BTreeSet<String> = READ_TOOLS
+        .iter()
+        .chain(&WRITE_TOOLS)
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(names.len(), 15);
     assert_eq!(names, want);
 }
 
@@ -792,4 +863,975 @@ async fn keyless_base_leg_does_not_break_order_reads() {
         one["note"].as_str().unwrap().contains("no trader key"),
         "{one}"
     );
+}
+
+// ---- write tools ----
+
+const BID: u128 = 2_400_000;
+const ASK: u128 = 2_600_000;
+
+/// A venue whose public book has a bid at 2.4 and an ask at 2.6.
+fn market_venue() -> FakeVenue {
+    let v = fake();
+    v.set_book(
+        MARKET,
+        None,
+        book(&[
+            book_entry(0x01, arborter_pb::Side::Bid, BID, 500_000),
+            book_entry(0x02, arborter_pb::Side::Ask, ASK, 400_000),
+        ]),
+    );
+    v
+}
+
+fn accepted_send(b: u8) -> SendResult {
+    SendResult::Accepted {
+        order_id: id_hex(b),
+        in_book: true,
+        taker_fills: vec![],
+    }
+}
+
+/// Every ledger line, parsed.
+fn ledger_lines(dir: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(dir.join("ledger.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+fn count_kind(dir: &std::path::Path, kind: &str) -> usize {
+    ledger_lines(dir)
+        .iter()
+        .filter(|l| l["kind"] == kind)
+        .count()
+}
+
+/// The venue saw no send, deposit or withdrawal.
+fn assert_nothing_signed(v: &FakeVenue) {
+    let calls = v.calls();
+    assert!(
+        !calls.iter().any(|c| matches!(
+            c,
+            Call::SendLimit { .. } | Call::Deposit { .. } | Call::Withdraw { .. }
+        )),
+        "{calls:?}"
+    );
+}
+
+/// `r` is an error naming `needle`.
+fn assert_refused(r: &CallToolResult, needle: &str) {
+    let t = text(r);
+    assert_eq!(r.is_error, Some(true), "not refused: {t}");
+    assert!(t.contains(needle), "refusal lacks {needle:?}: {t}");
+}
+
+fn limit_buy(qty: &str, price: &str) -> Value {
+    json!({"market_id": MARKET, "side": "buy", "qty": qty, "price": price})
+}
+
+fn send_call(qty: &str, price: &str, side: Side) -> Call {
+    Call::SendLimit {
+        market_id: MARKET.into(),
+        side,
+        qty: qty.into(),
+        price: price.into(),
+        post_only: false,
+        settle_base: None,
+        settle_quote: None,
+    }
+}
+
+/// The resume subcommand, run as the real binary against `dir`.
+fn run_resume(dir: &std::path::Path) -> std::process::Output {
+    let cfg = dir.join("resume.toml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "stack_url = \"https://venue.example\"\nstate_dir = {:?}\n",
+            dir.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    std::process::Command::new(env!("CARGO_BIN_EXE_aspens-mcp"))
+        .args(["resume", "--config", cfg.to_str().unwrap()])
+        .output()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn tool_list_with_withdraw() {
+    let h = start_with(fake(), |c| c.allow_withdraw = true, |_| {}).await;
+    let names: BTreeSet<String> = h
+        .client
+        .list_all_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name.to_string())
+        .collect();
+    assert_eq!(names.len(), 16);
+    assert!(names.contains("withdraw"));
+}
+
+#[tokio::test]
+async fn no_schema_accepts_hidden_dealroom_or_market() {
+    let h = start_with(fake(), |c| c.allow_withdraw = true, |_| {}).await;
+    let tools = h.client.list_all_tools().await.unwrap();
+    for t in &tools {
+        let schema = serde_json::to_string(&t.input_schema).unwrap();
+        for banned in ["hidden", "match_order_ids", "quote_budget"] {
+            assert!(!schema.contains(banned), "{}: {banned} in {schema}", t.name);
+        }
+    }
+    let schema = |name: &str| {
+        let t = tools.iter().find(|t| t.name == name).unwrap();
+        serde_json::to_value(&t.input_schema).unwrap()
+    };
+    let limit = schema("place_limit_order");
+    let required: Vec<&str> = limit["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for f in ["market_id", "side", "qty", "price"] {
+        assert!(required.contains(&f), "{f} not required: {limit}");
+    }
+    let marketable = schema("place_marketable_order");
+    assert!(
+        marketable["properties"]["slippage_bps"].is_object(),
+        "{marketable}"
+    );
+    assert!(marketable["properties"]["price"].is_null(), "{marketable}");
+}
+
+#[tokio::test]
+async fn write_tools_annotations() {
+    let h = start_with(fake(), |c| c.allow_withdraw = true, |_| {}).await;
+    let tools = h.client.list_all_tools().await.unwrap();
+    let ann = |name: &str| {
+        let t = tools.iter().find(|t| t.name == name).unwrap();
+        t.annotations.clone().unwrap_or_else(|| panic!("{name}"))
+    };
+    for name in [
+        "place_limit_order",
+        "place_marketable_order",
+        "cancel_order",
+        "deposit",
+        "withdraw",
+    ] {
+        let a = ann(name);
+        assert_eq!(a.destructive_hint, Some(true), "{name}");
+        assert_eq!(a.idempotent_hint, Some(false), "{name}");
+        assert_eq!(a.read_only_hint, Some(false), "{name}");
+    }
+    let a = ann("halt");
+    assert_eq!(a.read_only_hint, Some(false));
+    assert_eq!(a.destructive_hint, Some(false));
+    assert_eq!(a.idempotent_hint, Some(true));
+}
+
+#[tokio::test]
+async fn limit_order_reaches_venue_and_ledger() {
+    let v = market_venue();
+    v.push_send(accepted_send(0xa1));
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let o = h.ok("place_limit_order", limit_buy("1.2", "2.5")).await;
+    assert_eq!(o["orderId"], id_hex(0xa1));
+    assert_eq!(o["state"], "open");
+    assert_eq!(o["qtyRaw"], "1200000");
+    assert_eq!(o["priceRaw"], "2500000");
+    assert_eq!(o["remainingRaw"], "1200000");
+    assert_eq!(
+        probe.sends(),
+        vec![send_call("1.200000", "2.500000", Side::Buy)]
+    );
+
+    let lines = ledger_lines(h.dir());
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0]["kind"], "usage");
+    assert_eq!(lines[0]["qty"], "1200000");
+    // ceil(1.2 * 2.5) in pair units.
+    assert_eq!(lines[0]["quote"], "3000000");
+    assert_eq!(lines[0]["day"], utc_day(now()));
+    assert_eq!(lines[1]["kind"], "sent");
+    assert_eq!(lines[1]["outcome"]["status"], "accepted");
+
+    let one = h.ok("get_order", json!({"order_id": id_hex(0xa1)})).await;
+    assert_eq!(one["side"], "buy");
+    let l = h.ok("limits", json!({})).await;
+    assert_eq!(l["markets"][0]["usedToday"]["qtyRaw"], "1200000");
+}
+
+#[tokio::test]
+async fn sell_commits_no_quote() {
+    let v = market_venue();
+    v.push_send(accepted_send(0xa2));
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let args = json!({"market_id": MARKET, "side": "sell", "qty": "0.75", "price": "2.45"});
+    h.ok("place_limit_order", args).await;
+    assert_eq!(
+        probe.sends(),
+        vec![send_call("0.750000", "2.450000", Side::Sell)]
+    );
+    let usage = &ledger_lines(h.dir())[0];
+    assert_eq!(usage["side"], "sell");
+    assert_eq!(usage["qty"], "750000");
+    assert_eq!(usage["quote"], "0");
+}
+
+#[tokio::test]
+async fn post_only_passes_through() {
+    let v = market_venue();
+    v.push_send(accepted_send(0xa3));
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let mut args = limit_buy("1", "2.5");
+    args["post_only"] = json!(true);
+    h.ok("place_limit_order", args).await;
+    let sends = probe.sends();
+    assert!(
+        matches!(
+            &sends[..],
+            [Call::SendLimit {
+                post_only: true,
+                ..
+            }]
+        ),
+        "{sends:?}"
+    );
+}
+
+#[tokio::test]
+async fn settle_override_allowlisted_passes_and_reaches_venue() {
+    const SETTLE: &str = "0x5e77000000000000000000000000000000005E77";
+    let v = market_venue();
+    v.push_send(accepted_send(0xa4));
+    let probe = v.clone();
+    let h = start_with(
+        v,
+        // The allowlist spells it in another case: 0x hex compares case-insensitively.
+        |c| c.settle_address_allowlist = vec![SETTLE.to_lowercase()],
+        |_| {},
+    )
+    .await;
+
+    let mut bad = limit_buy("1", "2.5");
+    bad["settle_quote_address"] = json!("0x0000000000000000000000000000000000000bad");
+    assert_refused(&h.call("place_limit_order", bad).await, "allowlist");
+    assert_nothing_signed(&probe);
+    assert_eq!(count_kind(h.dir(), "usage"), 0);
+
+    let mut args = limit_buy("1", "2.5");
+    args["settle_base_address"] = json!(SETTLE);
+    h.ok("place_limit_order", args).await;
+    let sends = probe.sends();
+    assert!(
+        matches!(&sends[..], [Call::SendLimit { settle_base: Some(b), settle_quote: None, .. }] if b == SETTLE),
+        "{sends:?}"
+    );
+}
+
+#[tokio::test]
+async fn refusal_signs_nothing() {
+    let v = market_venue();
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    // max_order_qty is 1.5.
+    let r = h.call("place_limit_order", limit_buy("1.6", "2.5")).await;
+    assert_refused(&r, "max_order_qty");
+    assert!(!text(&r).contains("max_daily_qty"), "{}", text(&r));
+    assert_nothing_signed(&probe);
+    assert_eq!(count_kind(h.dir(), "usage"), 0);
+}
+
+#[tokio::test]
+async fn refusal_lists_every_failure() {
+    let v = market_venue();
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    // Over max_order_qty, and priced far above the ask.
+    let r = h.call("place_limit_order", limit_buy("1.6", "9")).await;
+    assert_refused(&r, "max_order_qty");
+    assert_refused(&r, "max_deviation_bps");
+    assert_nothing_signed(&probe);
+}
+
+#[tokio::test]
+async fn untradable_market_refused() {
+    let v = market_venue();
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let args =
+        json!({"market_id": "base::0xAAA::base::0xbbb", "side": "buy", "qty": "1", "price": "2.5"});
+    assert_refused(&h.call("place_limit_order", args).await, "not configured");
+    assert_nothing_signed(&probe);
+    assert_eq!(count_kind(h.dir(), "usage"), 0);
+}
+
+#[tokio::test]
+async fn excess_precision_qty_refused_signs_nothing() {
+    let v = market_venue();
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    // Pair decimals are 6: a 7th digit would be truncated silently by the SDK.
+    let r = h
+        .call("place_limit_order", limit_buy("1.0000001", "2.5"))
+        .await;
+    assert_refused(&r, "too many decimal places");
+    let r = h
+        .call("place_limit_order", limit_buy("1", "2.5000001"))
+        .await;
+    assert_refused(&r, "too many decimal places");
+    assert_nothing_signed(&probe);
+    assert_eq!(count_kind(h.dir(), "usage"), 0);
+}
+
+#[tokio::test]
+async fn unknown_fields_are_rejected() {
+    let v = market_venue();
+    v.push_send(accepted_send(0xa5));
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let mut args = limit_buy("1", "2.5");
+    args["hidden"] = json!(true);
+    let r = h.call("place_limit_order", args).await;
+    assert_refused(&r, "hidden");
+    assert_nothing_signed(&probe);
+}
+
+#[tokio::test]
+async fn usage_written_before_send() {
+    let v = market_venue();
+    v.push_send(accepted_send(0xa6));
+    let h = start(v.clone(), |_| {}).await;
+    let path = h.dir().join("ledger.jsonl");
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let s = seen.clone();
+    v.set_on_send(std::sync::Arc::new(move || {
+        *s.lock().unwrap() = Some(std::fs::read_to_string(&path).unwrap_or_default());
+    }));
+    h.ok("place_limit_order", limit_buy("1", "2.5")).await;
+    let at_send = seen.lock().unwrap().clone().expect("send hook did not run");
+    let lines: Vec<Value> = at_send
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1, "{at_send}");
+    assert_eq!(lines[0]["kind"], "usage");
+    assert_eq!(lines[0]["qty"], "1000000");
+}
+
+#[tokio::test]
+async fn unknown_is_not_resent() {
+    let v = market_venue();
+    v.push_send(SendResult::Unknown);
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let o = h.ok("place_limit_order", limit_buy("1", "2.5")).await;
+    assert_eq!(o["state"], "unknown");
+    assert_eq!(o["orderId"], Value::Null);
+    assert_eq!(probe.sends().len(), 1);
+    h.ok("my_orders", json!({"status": "all"})).await;
+    let _ = h.call("get_order", json!({"order_id": id_hex(0x77)})).await;
+    h.ok("my_orders", json!({})).await;
+    assert_eq!(probe.sends().len(), 1, "{:?}", probe.calls());
+}
+
+#[tokio::test]
+async fn unknown_send_is_recorded_and_counted() {
+    let v = market_venue();
+    v.push_send(SendResult::Unknown);
+    let h = start(v, |_| {}).await;
+    h.ok("place_limit_order", limit_buy("1.25", "2.5")).await;
+    let lines = ledger_lines(h.dir());
+    assert_eq!(lines[1]["kind"], "sent");
+    assert_eq!(lines[1]["outcome"]["status"], "unknown");
+    let l = h.ok("limits", json!({})).await;
+    assert_eq!(l["markets"][0]["usedToday"]["qtyRaw"], "1250000");
+    assert_eq!(l["markets"][0]["usedToday"]["quoteRaw"], "3125000");
+    // An unresolved unknown has no id to look up by, so `my_orders` shows it.
+    let open = h.ok("my_orders", json!({})).await;
+    assert_eq!(open["orders"][0]["state"], "unknown");
+    assert_eq!(open["orders"][0]["qtyRaw"], "1250000");
+}
+
+#[tokio::test]
+async fn venue_rejection_is_recorded_and_counted() {
+    let v = market_venue();
+    v.push_send(SendResult::Failed {
+        code: "InvalidArgument".into(),
+        message: "insufficient balance".into(),
+    });
+    let h = start(v, |_| {}).await;
+    let o = h.ok("place_limit_order", limit_buy("1", "2.5")).await;
+    assert_eq!(o["state"], "rejected");
+    assert!(o["note"].as_str().unwrap().contains("insufficient balance"));
+    let l = h.ok("limits", json!({})).await;
+    assert_eq!(l["markets"][0]["usedToday"]["qtyRaw"], "1000000");
+}
+
+#[tokio::test]
+async fn daily_cap_burned_by_cancelled_orders() {
+    let v = market_venue();
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    // 5 x 1.4 = 7.0 = max_daily_qty, each cancelled straight away.
+    for b in 1..=5u8 {
+        probe.push_send(accepted_send(b));
+        let o = h.ok("place_limit_order", limit_buy("1.4", "2.5")).await;
+        assert_eq!(o["orderId"], id_hex(b));
+        let c = h.ok("cancel_order", json!({"order_id": id_hex(b)})).await;
+        assert_eq!(c["result"], "cancelled");
+    }
+    let r = h
+        .call("place_limit_order", limit_buy("0.000001", "2.5"))
+        .await;
+    assert_refused(&r, "max_daily_qty");
+    assert!(!text(&r).contains("max_daily_quote"), "{}", text(&r));
+    assert_eq!(probe.sends().len(), 5);
+    assert_eq!(count_kind(h.dir(), "usage"), 5);
+    assert_eq!(count_kind(h.dir(), "cancelled"), 5);
+}
+
+#[tokio::test]
+async fn halt_blocks_orders_deposits_withdraws_not_cancels() {
+    let v = market_venue();
+    let probe = v.clone();
+    let h = start_with(
+        v,
+        |c| c.allow_withdraw = true,
+        |l| {
+            l.append(sent(Side::Buy, 1_000_000, 2_500_000, accepted(0xaa)))
+                .unwrap();
+        },
+    )
+    .await;
+    let r = h.ok("halt", json!({"reason": "drawdown"})).await;
+    assert_eq!(r["halted"], true);
+    assert_eq!(r["haltReason"], "drawdown");
+
+    let place = h.call("place_limit_order", limit_buy("1", "2.5")).await;
+    assert_refused(&place, "halted: drawdown");
+    let args = json!({"market_id": MARKET, "side": "buy", "qty": "1"});
+    assert_refused(&h.call("place_marketable_order", args).await, "halted");
+    let transfer = json!({"network": "base", "token": "BBB", "amount": "10"});
+    assert_refused(&h.call("deposit", transfer.clone()).await, "halted");
+    assert_refused(&h.call("withdraw", transfer).await, "halted");
+    assert_nothing_signed(&probe);
+    assert_eq!(count_kind(h.dir(), "usage"), 0);
+
+    let c = h
+        .ok("cancel_order", json!({"order_id": id_hex(0xaa)}))
+        .await;
+    assert_eq!(c["result"], "cancelled");
+    assert!(
+        probe
+            .calls()
+            .iter()
+            .any(|c| matches!(c, Call::Cancel { .. }))
+    );
+}
+
+#[tokio::test]
+async fn halt_is_idempotent() {
+    let h = start(fake(), |_| {}).await;
+    h.ok("halt", json!({"reason": "first"})).await;
+    let r = h.ok("halt", json!({"reason": "second"})).await;
+    assert_eq!(r["halted"], true);
+    assert_eq!(r["haltReason"], "first");
+    assert_eq!(count_kind(h.dir(), "halt"), 1);
+    let s = h.ok("account_status", json!({})).await;
+    assert_eq!(s["haltReason"], "first");
+}
+
+#[tokio::test]
+async fn halt_survives_restart() {
+    let h = start(market_venue(), |_| {}).await;
+    h.ok("halt", json!({})).await;
+    let dir = h.stop().await;
+
+    let v = market_venue();
+    let probe = v.clone();
+    let h = start_in(dir, v, |_| {}, |_| {}).await;
+    let s = h.ok("account_status", json!({})).await;
+    assert_eq!(s["halted"], true);
+    assert_refused(
+        &h.call("place_limit_order", limit_buy("1", "2.5")).await,
+        "halted",
+    );
+    assert_nothing_signed(&probe);
+
+    // resume refuses while a server holds the ledger.
+    let out = run_resume(h.dir());
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("stop"), "{err}");
+    let dir = h.stop().await;
+
+    let out = run_resume(dir.path());
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("resumed"));
+    assert_eq!(count_kind(dir.path(), "resume"), 1);
+    // A second resume has nothing to lift and appends nothing.
+    let out = run_resume(dir.path());
+    assert!(out.status.success());
+    assert_eq!(count_kind(dir.path(), "resume"), 1);
+
+    let v = market_venue();
+    v.push_send(accepted_send(0xb0));
+    let probe = v.clone();
+    let h = start_in(dir, v, |_| {}, |_| {}).await;
+    h.ok("place_limit_order", limit_buy("1", "2.5")).await;
+    assert_eq!(probe.sends().len(), 1);
+}
+
+#[tokio::test]
+async fn marketable_order_prices_from_book() {
+    let v = market_venue();
+    v.push_send(accepted_send(0xc1));
+    v.push_send(accepted_send(0xc2));
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let buy = json!({"market_id": MARKET, "side": "buy", "qty": "0.5", "slippage_bps": 50});
+    let o = h.ok("place_marketable_order", buy).await;
+    // ask 2.6 + 50 bps.
+    assert_eq!(o["priceRaw"], "2613000");
+    // Default slippage is 50 bps: bid 2.4 - 50 bps.
+    let sell = json!({"market_id": MARKET, "side": "sell", "qty": "0.5"});
+    h.ok("place_marketable_order", sell).await;
+    assert_eq!(
+        probe.sends(),
+        vec![
+            send_call("0.500000", "2.613000", Side::Buy),
+            send_call("0.500000", "2.388000", Side::Sell),
+        ]
+    );
+    let books = probe
+        .calls()
+        .iter()
+        .filter(|c| {
+            matches!(
+                c,
+                Call::Book {
+                    filter_by_trader: None,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(books, 2, "one book read per order");
+}
+
+#[tokio::test]
+async fn marketable_slippage_beyond_deviation_refused() {
+    let v = market_venue();
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let args = json!({"market_id": MARKET, "side": "buy", "qty": "0.5", "slippage_bps": 150});
+    assert_refused(
+        &h.call("place_marketable_order", args).await,
+        "max_deviation_bps",
+    );
+    assert_nothing_signed(&probe);
+    assert_eq!(count_kind(h.dir(), "usage"), 0);
+}
+
+#[tokio::test]
+async fn marketable_with_empty_side_refused() {
+    let v = fake();
+    v.set_book(
+        MARKET,
+        None,
+        book(&[book_entry(0x01, arborter_pb::Side::Bid, BID, 500_000)]),
+    );
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let args = json!({"market_id": MARKET, "side": "buy", "qty": "0.5"});
+    assert_refused(
+        &h.call("place_marketable_order", args).await,
+        "no resting asks",
+    );
+    assert_nothing_signed(&probe);
+    assert_eq!(count_kind(h.dir(), "usage"), 0);
+}
+
+#[tokio::test]
+async fn cancel_unknown_id_requires_side() {
+    let v = fake();
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let r = h
+        .call(
+            "cancel_order",
+            json!({"order_id": id_hex(0x99), "market_id": MARKET}),
+        )
+        .await;
+    assert_refused(&r, "side");
+    let r = h
+        .call(
+            "cancel_order",
+            json!({"order_id": id_hex(0x99), "side": "sell"}),
+        )
+        .await;
+    assert_refused(&r, "market_id");
+    assert!(
+        !probe
+            .calls()
+            .iter()
+            .any(|c| matches!(c, Call::Cancel { .. }))
+    );
+
+    // A market the venue does not list is refused too.
+    let r = h
+        .call(
+            "cancel_order",
+            json!({"order_id": id_hex(0x99), "market_id": "nope", "side": "sell"}),
+        )
+        .await;
+    assert_refused(&r, "nope");
+    assert!(
+        !probe
+            .calls()
+            .iter()
+            .any(|c| matches!(c, Call::Cancel { .. }))
+    );
+
+    let upper = format!("0X{}", "99".repeat(32)).to_uppercase();
+    let c = h
+        .ok(
+            "cancel_order",
+            json!({"order_id": upper, "market_id": MARKET, "side": "sell"}),
+        )
+        .await;
+    assert_eq!(c["orderId"], id_hex(0x99));
+    let cancels: Vec<Call> = probe
+        .calls()
+        .into_iter()
+        .filter(|c| matches!(c, Call::Cancel { .. }))
+        .collect();
+    assert_eq!(
+        cancels,
+        vec![Call::Cancel {
+            market_id: MARKET.into(),
+            side: Side::Sell,
+            order_id: id(0x99),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn cancel_ledger_order_uses_ledger_market_and_side() {
+    let v = fake();
+    let probe = v.clone();
+    let h = start(v, |l| {
+        l.append(sent(Side::Sell, 1_000_000, 2_500_000, accepted(0xab)))
+            .unwrap();
+    })
+    .await;
+    // The arguments disagree with the ledger and are ignored.
+    let c = h
+        .ok(
+            "cancel_order",
+            json!({"order_id": id_hex(0xab), "market_id": "nope", "side": "buy"}),
+        )
+        .await;
+    assert_eq!(c["result"], "cancelled");
+    assert_eq!(c["side"], "sell");
+    let cancels: Vec<Call> = probe
+        .calls()
+        .into_iter()
+        .filter(|c| matches!(c, Call::Cancel { .. }))
+        .collect();
+    assert_eq!(
+        cancels,
+        vec![Call::Cancel {
+            market_id: MARKET.into(),
+            side: Side::Sell,
+            order_id: id(0xab),
+        }]
+    );
+    let lines = ledger_lines(h.dir());
+    let last = lines.last().unwrap();
+    assert_eq!(last["kind"], "cancelled");
+    assert_eq!(last["order_id"], id_hex(0xab));
+    let o = h.ok("get_order", json!({"order_id": id_hex(0xab)})).await;
+    assert_eq!(o["state"], "cancelled");
+}
+
+#[tokio::test]
+async fn cancel_already_gone_appends_nothing() {
+    let v = fake();
+    v.push_cancel(Ok(CancelResult::AlreadyGone));
+    let h = start(v, |l| {
+        l.append(sent(Side::Buy, 1_000_000, 2_500_000, accepted(0xac)))
+            .unwrap();
+    })
+    .await;
+    let before = ledger_lines(h.dir()).len();
+    let c = h
+        .ok("cancel_order", json!({"order_id": id_hex(0xac)}))
+        .await;
+    assert_eq!(c["result"], "already_gone");
+    assert_eq!(ledger_lines(h.dir()).len(), before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_orders_cannot_double_spend_daily_cap() {
+    let today = utc_day(now());
+    let v = market_venue();
+    v.push_send(accepted_send(0xd1));
+    v.push_send(accepted_send(0xd2));
+    // A slow send widens any window between the check and the usage record.
+    v.set_on_send(std::sync::Arc::new(|| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }));
+    let probe = v.clone();
+    let h = start(v, |l| {
+        // 5.5 used: each 1.0 order alone fits under 7, the two together do not.
+        l.append(Record::Usage {
+            ts: 1,
+            day: today.clone(),
+            market_id: MARKET.into(),
+            side: Side::Sell,
+            qty: 5_500_000,
+            quote: 0,
+        })
+        .unwrap();
+    })
+    .await;
+    let (a, b) = tokio::join!(
+        h.call("place_limit_order", limit_buy("1", "2.5")),
+        h.call("place_limit_order", limit_buy("1", "2.5")),
+    );
+    let passed = [&a, &b].iter().filter(|r| r.is_error != Some(true)).count();
+    assert_eq!(passed, 1, "{} / {}", text(&a), text(&b));
+    let refused = if a.is_error == Some(true) { &a } else { &b };
+    assert_refused(refused, "max_daily_qty");
+    assert_eq!(probe.sends().len(), 1);
+    assert_eq!(count_kind(h.dir(), "usage"), 2);
+}
+
+#[tokio::test]
+async fn deposit_reaches_venue_in_token_units() {
+    let v = fake();
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let r = h
+        .ok(
+            "deposit",
+            json!({"network": "base", "token": "BBB", "amount": "12.5"}),
+        )
+        .await;
+    assert_eq!(r["amountRaw"], "1250000000");
+    assert_eq!(
+        probe.calls(),
+        vec![Call::Deposit {
+            network: "base".into(),
+            token_symbol: "BBB".into(),
+            amount: 1_250_000_000,
+        }]
+    );
+    // Deposits are not usage.
+    assert!(ledger_lines(h.dir()).is_empty());
+}
+
+#[tokio::test]
+async fn deposit_over_max_per_call_refused() {
+    let v = fake();
+    let probe = v.clone();
+    // Keyed by the lowercase address; the venue spells it mixed case.
+    let key = format!("base:{}", BBB_ADDR.to_lowercase());
+    let h = start_with(
+        v,
+        |c| c.deposits.max_per_call = BTreeMap::from([(key, "100".to_string())]),
+        |_| {},
+    )
+    .await;
+    let over = json!({"network": "base", "token": "BBB", "amount": "100.00000001"});
+    assert_refused(&h.call("deposit", over).await, "max_per_call");
+    // BBB has 8 decimals: a 9th is refused, never truncated.
+    let precise = json!({"network": "base", "token": "BBB", "amount": "1.000000001"});
+    assert_refused(&h.call("deposit", precise).await, "too many decimal places");
+    assert_nothing_signed(&probe);
+
+    h.ok(
+        "deposit",
+        json!({"network": "base", "token": "BBB", "amount": "100"}),
+    )
+    .await;
+    // The cap is per token: AAA has none.
+    h.ok(
+        "deposit",
+        json!({"network": "base", "token": "AAA", "amount": "1000"}),
+    )
+    .await;
+    let deposits: Vec<u128> = probe
+        .calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            Call::Deposit { amount, .. } => Some(amount),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deposits, vec![10_000_000_000, 1_000 * 10u128.pow(18)]);
+}
+
+#[tokio::test]
+async fn deposits_disabled_refused() {
+    let v = fake();
+    let probe = v.clone();
+    let h = start_with(v, |c| c.deposits.enabled = false, |_| {}).await;
+    let args = json!({"network": "base", "token": "BBB", "amount": "1"});
+    assert_refused(&h.call("deposit", args).await, "deposits are disabled");
+    assert_nothing_signed(&probe);
+}
+
+#[tokio::test]
+async fn withdraw_reaches_venue_in_token_units() {
+    let v = fake();
+    let probe = v.clone();
+    let h = start_with(v, |c| c.allow_withdraw = true, |_| {}).await;
+    h.ok(
+        "withdraw",
+        json!({"network": "base", "token": "AAA", "amount": "0.5"}),
+    )
+    .await;
+    assert_eq!(
+        probe.calls(),
+        vec![Call::Withdraw {
+            network: "base".into(),
+            token_symbol: "AAA".into(),
+            amount: 5 * 10u128.pow(17),
+        }]
+    );
+}
+
+fn pinned(contract: &str, mrtd: Option<&str>) -> impl FnOnce(&mut Config) {
+    let pin = VenuePin {
+        expected_contracts: BTreeMap::from([("base".to_string(), contract.to_string())]),
+        attestation_mrtd: mrtd.map(str::to_string),
+    };
+    move |c: &mut Config| {
+        c.allow_withdraw = true;
+        c.venue = Some(pin);
+    }
+}
+
+#[tokio::test]
+async fn venue_pin_contract_mismatch_refuses_writes() {
+    let v = market_venue();
+    v.push_send(accepted_send(0xe1));
+    let probe = v.clone();
+    let wrong = "0x00000000000000000000000000000000000BAD01";
+    let h = start_with(v, pinned(wrong, None), |_| {}).await;
+    assert_refused(
+        &h.call("place_limit_order", limit_buy("1", "2.5")).await,
+        "venue pin",
+    );
+    let transfer = json!({"network": "base", "token": "BBB", "amount": "1"});
+    assert_refused(&h.call("deposit", transfer.clone()).await, "venue pin");
+    assert_refused(&h.call("withdraw", transfer).await, "venue pin");
+    assert_nothing_signed(&probe);
+    assert_eq!(count_kind(h.dir(), "usage"), 0);
+}
+
+#[tokio::test]
+async fn venue_pin_contract_match_passes() {
+    let v = market_venue();
+    v.push_send(accepted_send(0xe2));
+    let probe = v.clone();
+    // The pin spells the contract lowercase; the venue mixed case.
+    let h = start_with(v, pinned(&TRADE_CONTRACT.to_lowercase(), None), |_| {}).await;
+    h.ok("place_limit_order", limit_buy("1", "2.5")).await;
+    h.ok(
+        "deposit",
+        json!({"network": "base", "token": "BBB", "amount": "1"}),
+    )
+    .await;
+    assert_eq!(probe.sends().len(), 1);
+    assert!(!probe.calls().contains(&Call::Attestation));
+}
+
+#[tokio::test]
+async fn venue_pin_unverified_attestation_fails_closed() {
+    let v = market_venue();
+    v.push_send(accepted_send(0xe3));
+    let probe = v.clone();
+    let h = start_with(v, pinned(TRADE_CONTRACT, Some("ab12")), |_| {}).await;
+    let r = h.call("place_limit_order", limit_buy("1", "2.5")).await;
+    assert_refused(&r, "attestation");
+    assert_refused(&r, "fail");
+    let transfer = json!({"network": "base", "token": "BBB", "amount": "1"});
+    assert_refused(&h.call("deposit", transfer).await, "attestation");
+    assert_nothing_signed(&probe);
+    // A failure is never cached: each write asks again.
+    let asked = probe
+        .calls()
+        .iter()
+        .filter(|c| **c == Call::Attestation)
+        .count();
+    assert_eq!(asked, 2);
+}
+
+#[tokio::test]
+async fn venue_pin_verified_attestation_is_cached() {
+    let v = market_venue();
+    v.set_attestation(AttestationView {
+        report: Value::Null,
+        verified: Some(true),
+        note: None,
+    });
+    v.push_send(accepted_send(0xe4));
+    v.push_send(accepted_send(0xe5));
+    let probe = v.clone();
+    let h = start_with(v, pinned(TRADE_CONTRACT, Some("ab12")), |_| {}).await;
+    h.ok("place_limit_order", limit_buy("1", "2.5")).await;
+    h.ok("place_limit_order", limit_buy("1", "2.5")).await;
+    assert_eq!(probe.sends().len(), 2);
+    let asked = probe
+        .calls()
+        .iter()
+        .filter(|c| **c == Call::Attestation)
+        .count();
+    assert_eq!(asked, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reads_wait_for_an_inflight_send() {
+    let v = market_venue();
+    // The order rests in the agent's book as soon as the venue has it.
+    v.set_book(
+        MARKET,
+        Some(AGENT),
+        book(&[book_entry(
+            0xf1,
+            arborter_pb::Side::Bid,
+            2_500_000,
+            1_000_000,
+        )]),
+    );
+    v.push_send(accepted_send(0xf1));
+    v.set_on_send(std::sync::Arc::new(|| {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }));
+    let h = start(v, |_| {}).await;
+    let read = async {
+        // Issued while the send is in flight.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        h.ok("my_orders", json!({"status": "all"})).await
+    };
+    let (placed, orders) = tokio::join!(h.call("place_limit_order", limit_buy("1", "2.5")), read);
+    assert_ne!(placed.is_error, Some(true), "{}", text(&placed));
+    // The read waited for the outcome record: it sees the order, not nothing.
+    assert_eq!(by_id(&orders, &id_hex(0xf1))["state"], "open", "{orders}");
 }
