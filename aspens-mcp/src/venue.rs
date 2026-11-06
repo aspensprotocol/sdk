@@ -505,8 +505,8 @@ impl Venue for SdkVenue {
             Ok(resp) => send_result_from_response(&resp),
             Err(e) => {
                 tracing::warn!(error = %format!("{e:#}"), "send_order failed");
-                // The SDK turns a "session changed" refusal into a plain error;
-                // the venue restarted, so the next `config()` must refetch.
+                // A "session changed" refusal: the venue restarted, so the
+                // next `config()` must refetch.
                 if format!("{e:#}").contains("session changed") {
                     self.invalidate_config();
                 }
@@ -702,6 +702,43 @@ mod tests {
             classify_send_error(&eyre!("transport error: connection reset")),
             SendResult::Unknown
         );
+    }
+
+    #[test]
+    fn session_changed_is_failed_not_unknown() {
+        use aspens::commands::trading::send_order::send_status_error;
+        let e = send_status_error(tonic::Status::failed_precondition(
+            "session changed: 3 -> 4",
+        ));
+        match classify_send_error(&e) {
+            SendResult::Failed { code, message } => {
+                assert_eq!(code, "FailedPrecondition");
+                assert_eq!(message, "session changed: 3 -> 4");
+            }
+            other => panic!("a session-changed refusal placed nothing: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn insufficient_balance_is_failed_not_unknown() {
+        use aspens::commands::trading::send_order::{send_status_error, wrap_balance_error};
+        let e = wrap_balance_error(
+            send_status_error(tonic::Status::invalid_argument("insufficient balance")),
+            "Insufficient deposited balance on base.\nToken: USDC".into(),
+        );
+        match classify_send_error(&e) {
+            SendResult::Failed { code, message } => {
+                assert_eq!(code, "InvalidArgument");
+                assert_eq!(message, "insufficient balance");
+            }
+            other => panic!("an insufficient-balance refusal placed nothing: {other:?}"),
+        }
+        // A lost answer stays Unknown when enhanced too.
+        let lost = wrap_balance_error(
+            send_status_error(tonic::Status::unavailable("insufficient balance?")),
+            "Insufficient deposited balance on base.".into(),
+        );
+        assert_eq!(classify_send_error(&lost), SendResult::Unknown);
     }
 
     fn trade(maker_base: &str, maker_quote: &str, taker_base: &str) -> Trade {
