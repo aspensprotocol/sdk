@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 
 use eyre::{Result, WrapErr, eyre};
@@ -100,8 +100,31 @@ pub enum Record {
     },
 }
 
+/// File operations the ledger needs; a seam so tests can inject disk faults.
+trait LedgerFile {
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()>;
+    fn sync_data(&mut self) -> io::Result<()>;
+    fn set_len(&mut self, len: u64) -> io::Result<()>;
+}
+
+impl LedgerFile for File {
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        Write::write_all(self, buf)
+    }
+    fn sync_data(&mut self) -> io::Result<()> {
+        File::sync_data(self)
+    }
+    fn set_len(&mut self, len: u64) -> io::Result<()> {
+        File::set_len(self, len)
+    }
+}
+
 pub struct Ledger {
-    file: File,
+    file: Box<dyn LedgerFile>,
+    /// Holds the exclusive advisory lock for the ledger's lifetime.
+    _lock: Option<File>,
+    /// Set when a failed write could not be rolled back; no further appends.
+    broken: bool,
     /// Bytes of complete, durable content; a failed write is rolled back to this.
     len: u64,
     usage: HashMap<(String, String), (u128, u128)>,
@@ -122,13 +145,20 @@ impl Ledger {
             .create(true)
             .open(&path)
             .wrap_err_with(|| format!("opening {}", path.display()))?;
+        file.try_lock()
+            .map_err(|_| eyre!("another aspens-mcp is using {}", dir.display()))?;
+        File::open(dir)
+            .and_then(|d| d.sync_all())
+            .wrap_err_with(|| format!("syncing {}", dir.display()))?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
             .wrap_err_with(|| format!("reading {}", path.display()))?;
 
         let complete_len = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
         let mut ledger = Ledger {
-            file: file.try_clone()?,
+            file: Box::new(file.try_clone()?),
+            _lock: None,
+            broken: false,
             len: complete_len as u64,
             usage: HashMap::new(),
             sent: Vec::new(),
@@ -142,6 +172,7 @@ impl Ledger {
                 .map_err(|e| eyre!("{}: line {} is corrupt: {e}", path.display(), i + 1))?;
             ledger.apply(record);
         }
+        ledger._lock = Some(file.try_clone()?);
         if complete_len < bytes.len() {
             tracing::warn!(
                 path = %path.display(),
@@ -159,13 +190,20 @@ impl Ledger {
     pub fn append(&mut self, r: Record) -> Result<()> {
         let mut line = serde_json::to_vec(&r)?;
         line.push(b'\n');
+        if self.broken {
+            return Err(eyre!(
+                "ledger is broken after a failed rollback; restart required"
+            ));
+        }
         let written = self
             .file
             .write_all(&line)
             .and_then(|()| self.file.sync_data());
         if let Err(e) = written {
             // Don't leave a partial line that the next append would join onto.
-            let _ = self.file.set_len(self.len);
+            if self.file.set_len(self.len).is_err() {
+                self.broken = true;
+            }
             return Err(e).wrap_err("writing ledger record");
         }
         self.len += line.len() as u64;
@@ -290,7 +328,7 @@ mod tests {
         let path = dir.path().join(LEDGER_FILE);
         let third = serde_json::to_string(&usage_rec("2026-11-06", "m1", 100, 1000)).unwrap();
         let mut f = OpenOptions::new().append(true).open(&path).unwrap();
-        f.write_all(&third.as_bytes()[..third.len() / 2]).unwrap();
+        Write::write_all(&mut f, &third.as_bytes()[..third.len() / 2]).unwrap();
         drop(f);
 
         let mut l = Ledger::open(dir.path()).unwrap();
@@ -354,5 +392,138 @@ mod tests {
         let l = Ledger::open(dir.path()).unwrap();
         assert_eq!(l.usage("2026-11-06", "m1"), (big, big + 1));
         assert_eq!(l.sent()[0].qty, big + 2);
+    }
+
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Faults {
+        fail_write: bool,
+        fail_set_len: bool,
+        written: Vec<u8>,
+    }
+
+    struct FaultyFile(Arc<Mutex<Faults>>);
+
+    impl LedgerFile for FaultyFile {
+        fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+            let mut f = self.0.lock().unwrap();
+            if f.fail_write {
+                return Err(io::Error::other("injected write failure"));
+            }
+            f.written.extend_from_slice(buf);
+            Ok(())
+        }
+        fn sync_data(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn set_len(&mut self, _len: u64) -> io::Result<()> {
+            if self.0.lock().unwrap().fail_set_len {
+                return Err(io::Error::other("injected truncate failure"));
+            }
+            Ok(())
+        }
+    }
+
+    fn faulty_ledger() -> (Ledger, Arc<Mutex<Faults>>) {
+        let faults = Arc::new(Mutex::new(Faults::default()));
+        let ledger = Ledger {
+            file: Box::new(FaultyFile(faults.clone())),
+            _lock: None,
+            broken: false,
+            len: 0,
+            usage: HashMap::new(),
+            sent: Vec::new(),
+            cancelled: HashSet::new(),
+            halted: None,
+        };
+        (ledger, faults)
+    }
+
+    #[test]
+    fn failed_append_leaves_state_unchanged() {
+        let (mut l, faults) = faulty_ledger();
+        l.append(usage_rec("2026-11-06", "m1", 5, 50)).unwrap();
+        faults.lock().unwrap().fail_write = true;
+        assert!(l.append(usage_rec("2026-11-06", "m1", 2, 20)).is_err());
+        assert_eq!(l.usage("2026-11-06", "m1"), (5, 50));
+        faults.lock().unwrap().fail_write = false;
+        l.append(usage_rec("2026-11-06", "m1", 3, 30)).unwrap();
+        assert_eq!(l.usage("2026-11-06", "m1"), (8, 80));
+    }
+
+    #[test]
+    fn failed_rollback_poisons_ledger() {
+        let (mut l, faults) = faulty_ledger();
+        {
+            let mut f = faults.lock().unwrap();
+            f.fail_write = true;
+            f.fail_set_len = true;
+        }
+        let err = l
+            .append(usage_rec("2026-11-06", "m1", 2, 20))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("writing ledger record"), "{err}");
+        {
+            let mut f = faults.lock().unwrap();
+            f.fail_write = false;
+            f.fail_set_len = false;
+        }
+        let err = l
+            .append(usage_rec("2026-11-06", "m1", 3, 30))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("restart required"), "{err}");
+        assert!(faults.lock().unwrap().written.is_empty());
+        assert_eq!(l.usage("2026-11-06", "m1"), (0, 0));
+    }
+
+    #[test]
+    fn second_open_on_same_dir_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = Ledger::open(dir.path()).unwrap();
+        let err = Ledger::open(dir.path()).err().unwrap().to_string();
+        assert!(err.contains("another aspens-mcp is using"), "{err}");
+        drop(first);
+        Ledger::open(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn torn_tail_that_is_complete_json_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = serde_json::to_string(&usage_rec("2026-11-06", "m1", 5, 50)).unwrap();
+        let unsynced = serde_json::to_string(&usage_rec("2026-11-06", "m1", 9, 90)).unwrap();
+        let path = dir.path().join(LEDGER_FILE);
+        std::fs::write(&path, format!("{good}\n{unsynced}")).unwrap();
+        let l = Ledger::open(dir.path()).unwrap();
+        assert_eq!(l.usage("2026-11-06", "m1"), (5, 50));
+        drop(l);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("{good}\n"));
+    }
+
+    #[test]
+    fn torn_tail_with_no_complete_line_is_empty_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(LEDGER_FILE);
+        std::fs::write(&path, "{\"kind\":\"usa").unwrap();
+        let mut l = Ledger::open(dir.path()).unwrap();
+        assert_eq!(l.usage("2026-11-06", "m1"), (0, 0));
+        l.append(usage_rec("2026-11-06", "m1", 1, 10)).unwrap();
+        drop(l);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
+    }
+
+    #[test]
+    fn corrupt_last_complete_line_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = serde_json::to_string(&usage_rec("2026-11-06", "m1", 5, 50)).unwrap();
+        std::fs::write(
+            dir.path().join(LEDGER_FILE),
+            format!("{good}\n{good}\n{{\"kind\":\"usa\n"),
+        )
+        .unwrap();
+        let err = Ledger::open(dir.path()).err().unwrap().to_string();
+        assert!(err.contains("line 3"), "{err}");
     }
 }
