@@ -22,6 +22,7 @@ aspens = { path = "../aspens", default-features = false, features = ["client", "
 
 chrono.workspace = true
 eyre.workspace = true
+hex.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true

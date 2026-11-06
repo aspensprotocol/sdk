@@ -22,7 +22,7 @@ pub enum Side {
 }
 
 /// Serde adapter writing a `u128` as a decimal string (JSON numbers lose precision).
-mod u128_str {
+pub(crate) mod u128_str {
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(v: &u128, s: S) -> Result<S::Ok, S::Error> {

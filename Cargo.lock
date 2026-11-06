@@ -1282,6 +1282,7 @@ dependencies = [
  "chrono",
  "clap",
  "eyre",
+ "hex",
  "rmcp",
  "schemars 1.2.2",
  "serde",
