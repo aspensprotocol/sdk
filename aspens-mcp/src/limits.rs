@@ -41,6 +41,8 @@ pub struct Commit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     Halted(Option<String>),
+    ZeroQty,
+    ZeroPrice,
     MarketNotTradable(String),
     OrderQty {
         qty: u128,
@@ -78,6 +80,8 @@ impl fmt::Display for Refusal {
         match self {
             Refusal::Halted(Some(reason)) => write!(f, "trading is halted: {reason}"),
             Refusal::Halted(None) => write!(f, "trading is halted (no reason recorded)"),
+            Refusal::ZeroQty => write!(f, "qty must be greater than zero"),
+            Refusal::ZeroPrice => write!(f, "price must be greater than zero"),
             Refusal::MarketNotTradable(id) => write!(
                 f,
                 "market \"{id}\" is not configured for trading (market ids match exactly)"
@@ -198,7 +202,8 @@ fn push_refusal(out: &mut Vec<Refusal>, r: Refusal) {
     out.push(r);
 }
 
-/// Run every check and return every failure, ordered: halted, market, order
+/// Run every check and return every failure, ordered: halted, zero qty, zero
+/// price, market, order
 /// qty, daily qty, order quote, daily quote, price guard, settle. When the
 /// market is not tradable the market-dependent checks cannot run, so only
 /// halted, market and settle are evaluated.
@@ -220,6 +225,13 @@ pub fn check_order(
 
     if let Some(reason) = halted {
         out.push(Refusal::Halted(reason.clone()));
+    }
+
+    if req.qty == 0 {
+        out.push(Refusal::ZeroQty);
+    }
+    if req.price == 0 {
+        out.push(Refusal::ZeroPrice);
     }
 
     match markets.get(req.market_id) {
@@ -566,7 +578,11 @@ mod tests {
         r.settle_quote = Some("SoLaNaAddr1");
         assert!(check_order(&markets(), &allow, None, (0, 0), &book(), &r).is_ok());
         r.settle_quote = Some("solanaaddr1");
-        assert!(check_order(&markets(), &allow, None, (0, 0), &book(), &r).is_err());
+        let e = check_order(&markets(), &allow, None, (0, 0), &book(), &r).unwrap_err();
+        assert_eq!(
+            e,
+            vec![Refusal::SettleAddressNotAllowed("solanaaddr1".into())]
+        );
     }
 
     #[test]
@@ -677,8 +693,21 @@ mod tests {
     fn quote_overflow_is_refusal() {
         let r = req(Side::Buy, u128::MAX, u128::MAX);
         let e = run((0, 0), &book(), &r).unwrap_err();
-        assert!(e.contains(&Refusal::Overflow));
-        assert_eq!(e.iter().filter(|x| **x == Refusal::Overflow).count(), 1);
+        assert_eq!(
+            e,
+            vec![
+                Refusal::OrderQty {
+                    qty: u128::MAX,
+                    max: 10_000
+                },
+                Refusal::DailyQty {
+                    used: 0,
+                    qty: u128::MAX,
+                    max: 25_000
+                },
+                Refusal::Overflow,
+            ]
+        );
         assert_eq!(quote_of(u128::MAX, u128::MAX, 3), None);
         // 10^39 does not fit in u128
         assert_eq!(quote_of(1, 1, 39), None);
@@ -690,7 +719,57 @@ mod tests {
         assert_eq!(e, vec![Refusal::Overflow]);
         // used quote + quote overflow
         let e = run((0, u128::MAX), &book(), &req(Side::Buy, 1, 2_000_000)).unwrap_err();
-        assert!(e.contains(&Refusal::Overflow));
+        assert_eq!(e, vec![Refusal::Overflow]);
+    }
+
+    #[test]
+    fn zero_qty_refused() {
+        let e = run((0, 0), &book(), &req(Side::Buy, 0, 2_000_000)).unwrap_err();
+        assert_eq!(e, vec![Refusal::ZeroQty]);
+        // untradable market: zero checks still run, after halted, before market
+        let h = Some("r".to_string());
+        let mut r = req(Side::Sell, 0, 2_000_000);
+        r.market_id = "nope";
+        let e = check_order(&markets(), &[], Some(&h), (0, 0), &book(), &r).unwrap_err();
+        assert_eq!(
+            e,
+            vec![
+                Refusal::Halted(Some("r".to_string())),
+                Refusal::ZeroQty,
+                Refusal::MarketNotTradable("nope".to_string()),
+            ]
+        );
+        assert_eq!(
+            Refusal::ZeroQty.to_string(),
+            "qty must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn zero_price_refused() {
+        let empty = BookTop {
+            best_bid: None,
+            best_ask: None,
+        };
+        let e = run((0, 0), &empty, &req(Side::Sell, 5, 0)).unwrap_err();
+        assert_eq!(e, vec![Refusal::ZeroPrice]);
+        let e = run((0, 0), &empty, &req(Side::Buy, 5, 0)).unwrap_err();
+        assert_eq!(e, vec![Refusal::ZeroPrice]);
+        let mut r = req(Side::Sell, 0, 0);
+        r.market_id = "nope";
+        let e = check_order(&markets(), &[], None, (0, 0), &empty, &r).unwrap_err();
+        assert_eq!(
+            e,
+            vec![
+                Refusal::ZeroQty,
+                Refusal::ZeroPrice,
+                Refusal::MarketNotTradable("nope".to_string()),
+            ]
+        );
+        assert_eq!(
+            Refusal::ZeroPrice.to_string(),
+            "price must be greater than zero"
+        );
     }
 
     #[test]
