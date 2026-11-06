@@ -15,7 +15,8 @@ use eyre::{Result, eyre};
 use crate::ledger::Side;
 use crate::venue::{Addresses, AttestationView, CancelResult, SendResult, TradeFill, Venue};
 
-/// One recorded call. `Config` reads are not recorded.
+/// One recorded call. `Config` reads are not recorded. A write records
+/// `config_session`: the `session` of the config snapshot it was handed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Call {
     Book {
@@ -27,6 +28,7 @@ pub enum Call {
         trader: String,
     },
     SendLimit {
+        config_session: u64,
         market_id: String,
         side: Side,
         qty: String,
@@ -41,11 +43,13 @@ pub enum Call {
         order_id: [u8; 32],
     },
     Deposit {
+        config_session: u64,
         network: String,
         token_symbol: String,
         amount: u128,
     },
     Withdraw {
+        config_session: u64,
         network: String,
         token_symbol: String,
         amount: u128,
@@ -70,7 +74,9 @@ struct State {
     health_error: Option<String>,
     attestation: AttestationView,
     on_send: Option<SendHook>,
+    on_attestation: Option<SendHook>,
     read_error: Option<String>,
+    config_error: Option<String>,
     calls: Vec<Call>,
 }
 
@@ -109,7 +115,9 @@ impl FakeVenue {
                 note: None,
             },
             on_send: None,
+            on_attestation: None,
             read_error: None,
+            config_error: None,
             calls: Vec::new(),
         };
         Self {
@@ -172,6 +180,16 @@ impl FakeVenue {
         self.lock().on_send = Some(hook);
     }
 
+    /// Run `hook` inside `attestation`, before it returns (lock released).
+    pub fn set_on_attestation(&self, hook: SendHook) {
+        self.lock().on_attestation = Some(hook);
+    }
+
+    /// Make `config` return `Err(msg)`; `None` restores it.
+    pub fn set_config_error(&self, msg: Option<&str>) {
+        self.lock().config_error = msg.map(str::to_string);
+    }
+
     /// Make every read that can fail (`book`, `my_fills`, `balances`,
     /// `attestation`) return `Err(msg)`; `None` restores normal reads.
     pub fn set_read_error(&self, msg: Option<&str>) {
@@ -203,9 +221,18 @@ impl FakeVenue {
     }
 }
 
+/// The `session` of a config snapshot: the identity a write records.
+fn session(cfg: &GetConfigResponse) -> u64 {
+    cfg.config.as_ref().map_or(0, |c| c.session)
+}
+
 impl Venue for FakeVenue {
     async fn config(&self) -> Result<GetConfigResponse> {
-        Ok(self.lock().config.clone())
+        let s = self.lock();
+        match &s.config_error {
+            Some(m) => Err(eyre!(m.clone())),
+            None => Ok(s.config.clone()),
+        }
     }
 
     async fn book(&self, market_id: String, filter_by_trader: Option<String>) -> Result<BookState> {
@@ -227,6 +254,7 @@ impl Venue for FakeVenue {
 
     async fn send_limit(
         &self,
+        cfg: &GetConfigResponse,
         market_id: String,
         side: Side,
         qty: String,
@@ -236,6 +264,7 @@ impl Venue for FakeVenue {
         settle_quote: Option<String>,
     ) -> SendResult {
         self.record(Call::SendLimit {
+            config_session: session(cfg),
             market_id,
             side,
             qty,
@@ -275,8 +304,15 @@ impl Venue for FakeVenue {
         }
     }
 
-    async fn deposit(&self, network: String, token_symbol: String, amount: u128) -> Result<()> {
+    async fn deposit(
+        &self,
+        cfg: &GetConfigResponse,
+        network: String,
+        token_symbol: String,
+        amount: u128,
+    ) -> Result<()> {
         self.record(Call::Deposit {
+            config_session: session(cfg),
             network,
             token_symbol,
             amount,
@@ -284,8 +320,15 @@ impl Venue for FakeVenue {
         Ok(())
     }
 
-    async fn withdraw(&self, network: String, token_symbol: String, amount: u128) -> Result<()> {
+    async fn withdraw(
+        &self,
+        cfg: &GetConfigResponse,
+        network: String,
+        token_symbol: String,
+        amount: u128,
+    ) -> Result<()> {
         self.record(Call::Withdraw {
+            config_session: session(cfg),
             network,
             token_symbol,
             amount,
@@ -315,6 +358,10 @@ impl Venue for FakeVenue {
 
     async fn attestation(&self, _nonce: Vec<u8>) -> Result<AttestationView> {
         self.record(Call::Attestation);
+        let hook = self.lock().on_attestation.clone();
+        if let Some(hook) = hook {
+            hook();
+        }
         self.read_result()?;
         Ok(self.lock().attestation.clone())
     }
@@ -331,6 +378,7 @@ mod tests {
 
     async fn send(v: &FakeVenue, qty: &str) -> SendResult {
         v.send_limit(
+            &GetConfigResponse::default(),
             "m".to_string(),
             Side::Buy,
             qty.to_string(),
@@ -364,6 +412,7 @@ mod tests {
         assert_eq!(
             sends[1],
             Call::SendLimit {
+                config_session: 0,
                 market_id: "m".to_string(),
                 side: Side::Buy,
                 qty: "3".to_string(),

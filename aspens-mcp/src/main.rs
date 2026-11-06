@@ -35,6 +35,7 @@ async fn serve(path: &std::path::Path) -> eyre::Result<()> {
     let venue = SdkVenue::new(&cfg)?;
     let venue_cfg = venue.config().await?;
     let markets = config::resolve_markets(&cfg, &venue_cfg)?;
+    config::validate_deposit_caps(&cfg, &venue_cfg)?;
     let ledger = Ledger::open(&cfg.state_dir)?;
     let server = Server::new(venue, cfg, markets, ledger);
     server

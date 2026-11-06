@@ -5,6 +5,7 @@
 //! lists every failed check and says that nothing was signed.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use aspens::commands::config::config_pb::GetConfigResponse;
@@ -42,10 +43,10 @@ pub(crate) struct PlaceRequest {
 
 /// What the write tools act on, borrowed from the server.
 pub(crate) struct Writer<'a, V: Venue> {
-    pub venue: &'a V,
+    pub venue: &'a Arc<V>,
     pub cfg: &'a Config,
     pub markets: &'a BTreeMap<String, MarketLimits>,
-    pub ledger: &'a Mutex<Ledger>,
+    pub ledger: &'a Arc<Mutex<Ledger>>,
     /// Set once the venue's attestation has verified; a failure is never kept.
     pub attested: &'a AtomicBool,
     pub now: u64,
@@ -140,11 +141,14 @@ impl<V: Venue> Writer<'_, V> {
         out
     }
 
-    /// The order path. In order: parse amounts; read the book; check the venue
-    /// pin; then, holding the ledger, check the limits, record the usage, send,
-    /// and record the outcome. The ledger is held from the check to the outcome
-    /// record, so no read can see a sent order the ledger lacks, and two orders
-    /// cannot both pass on the same usage.
+    /// The order path. In order: take one venue config snapshot (everything
+    /// below is checked against it, and the order is signed against it); parse
+    /// amounts; read the book; check the venue pin; then take the ledger, check
+    /// the limits, and in a spawned task record the usage, send, and record the
+    /// outcome. The ledger is held from the check to the outcome record, so no
+    /// read can see a sent order the ledger lacks, and two orders cannot both
+    /// pass on the same usage. The task runs to completion even if this future
+    /// is dropped, so a usage record is never left without its outcome.
     pub async fn place(&self, req: PlaceRequest) -> Result<Value> {
         let what = "order";
         let Some(limits) = self.markets.get(&req.market_id) else {
@@ -156,6 +160,34 @@ impl<V: Venue> Writer<'_, V> {
             return Err(refused(what, &refusal_texts(&rs)));
         };
         let d = limits.pair_decimals;
+
+        // The one config snapshot. Limits were resolved in the pair units of
+        // the config at startup; a venue that changed them since would have
+        // these amounts scaled differently than they were checked.
+        let vcfg = self.venue.config().await?;
+        let market = vcfg.get_market_by_id(&req.market_id).ok_or_else(|| {
+            refused(
+                what,
+                &[format!(
+                    "market {} is no longer in the venue config",
+                    req.market_id
+                )],
+            )
+        })?;
+        if i64::from(market.pair_decimals) != i64::from(d) {
+            return Err(refused(
+                what,
+                &[format!(
+                    "venue changed this market's pair decimals ({d} \u{2192} {}); restart \
+                     aspens-mcp to re-resolve limits",
+                    market.pair_decimals
+                )],
+            ));
+        }
+        let networks = [
+            market.base_chain_network.clone(),
+            market.quote_chain_network.clone(),
+        ];
 
         // 1. Amounts, rejecting any precision the market cannot carry.
         let qty = parse_amount(&req.qty, d)
@@ -180,23 +212,13 @@ impl<V: Venue> Writer<'_, V> {
                 .map_err(|e| refused(what, &[format!("{e:#}")]))?,
         };
 
-        // 3. The venue pin, on both legs' networks.
-        let pin = if self.cfg.venue.is_some() {
-            let vcfg = self.venue.config().await?;
-            let m = vcfg
-                .get_market_by_id(&req.market_id)
-                .ok_or_else(|| eyre!("no such market in the venue config: {}", req.market_id))?;
-            let networks = [
-                m.base_chain_network.as_str(),
-                m.quote_chain_network.as_str(),
-            ];
-            self.check_pin(&vcfg, &networks).await
-        } else {
-            Vec::new()
-        };
+        // 3. The venue pin, on both legs' networks, against the snapshot.
+        let pin = self
+            .check_pin(&vcfg, &[networks[0].as_str(), networks[1].as_str()])
+            .await;
 
-        // 4. The limits, with the ledger held through step 7.
-        let mut ledger = self.ledger.lock().await;
+        // 4. The limits, with the ledger held until the outcome is recorded.
+        let mut ledger = self.ledger.clone().lock_owned().await;
         let day = utc_day(self.now);
         let used = ledger.usage(&day, &req.market_id);
         let halted = ledger.halted();
@@ -224,63 +246,73 @@ impl<V: Venue> Writer<'_, V> {
             }
         };
 
-        // 5. Usage, durable before anything is signed.
-        ledger
-            .append(Record::Usage {
-                ts: self.now,
-                day,
-                market_id: req.market_id.clone(),
+        // 5-7 run in their own task, which owns the ledger guard: dropping
+        // this future cannot stop it between the usage and the outcome.
+        let venue = self.venue.clone();
+        let now = self.now;
+        let task = tokio::spawn(async move {
+            // 5. Usage, durable before anything is signed.
+            ledger
+                .append(Record::Usage {
+                    ts: now,
+                    day,
+                    market_id: req.market_id.clone(),
+                    side: req.side,
+                    qty: commit.qty,
+                    quote: commit.quote,
+                })
+                .map_err(|e| eyre!("recording usage failed, nothing was signed: {e:#}"))?;
+
+            // 6. Send, signed against the checked snapshot. The SDK takes human
+            // strings and scales them by its pair decimals, checked equal above.
+            let result = venue
+                .send_limit(
+                    &vcfg,
+                    req.market_id.clone(),
+                    req.side,
+                    format_decimal_amount(qty, d),
+                    format_decimal_amount(price, d),
+                    req.post_only,
+                    req.settle_base.clone(),
+                    req.settle_quote.clone(),
+                )
+                .await;
+
+            // 7. The outcome. `Unknown` is recorded as such and never re-sent.
+            let outcome = match result {
+                SendResult::Accepted {
+                    order_id,
+                    in_book,
+                    taker_fills,
+                } => SentOutcome::Accepted {
+                    order_id,
+                    in_book,
+                    taker_fills,
+                },
+                SendResult::Failed { code, message } => SentOutcome::Failed { code, message },
+                SendResult::Unknown => SentOutcome::Unknown,
+            };
+            let sent = SentRecord {
+                ts: now,
+                market_id: req.market_id,
                 side: req.side,
-                qty: commit.qty,
-                quote: commit.quote,
-            })
-            .map_err(|e| eyre!("recording usage failed, nothing was signed: {e:#}"))?;
-
-        // 6. Send. The SDK takes human strings and scales them by pair decimals.
-        let result = self
-            .venue
-            .send_limit(
-                req.market_id.clone(),
-                req.side,
-                format_decimal_amount(qty, d),
-                format_decimal_amount(price, d),
-                req.post_only,
-                req.settle_base.clone(),
-                req.settle_quote.clone(),
-            )
-            .await;
-
-        // 7. The outcome. `Unknown` is recorded as such and never re-sent.
-        let outcome = match result {
-            SendResult::Accepted {
-                order_id,
-                in_book,
-                taker_fills,
-            } => SentOutcome::Accepted {
-                order_id,
-                in_book,
-                taker_fills,
-            },
-            SendResult::Failed { code, message } => SentOutcome::Failed { code, message },
-            SendResult::Unknown => SentOutcome::Unknown,
-        };
-        let sent = SentRecord {
-            ts: self.now,
-            market_id: req.market_id.clone(),
-            side: req.side,
-            qty,
-            price,
-            outcome,
-        };
-        if let Err(e) = ledger.append(Record::Sent(sent.clone())) {
-            tracing::error!(error = %format!("{e:#}"), outcome = ?sent.outcome, "order sent but its outcome was not recorded");
-            return Err(eyre!(
-                "the order was sent ({:?}) but recording its outcome failed: {e:#}. Do not \
-                 resubmit it; its usage is recorded",
-                sent.outcome
-            ));
-        }
-        drop(ledger);
+                qty,
+                price,
+                outcome,
+            };
+            if let Err(e) = ledger.append(Record::Sent(sent.clone())) {
+                tracing::error!(error = %format!("{e:#}"), outcome = ?sent.outcome, "order sent but its outcome was not recorded");
+                return Err(eyre!(
+                    "the order was sent ({:?}) but recording its outcome failed: {e:#}. Do not \
+                     resubmit it; its usage is recorded",
+                    sent.outcome
+                ));
+            }
+            Ok(sent)
+        });
+        let sent = task.await.map_err(|e| {
+            eyre!("internal: the send task failed ({e}); do not resubmit, check my_orders")
+        })??;
 
         // 8. The order as it stands.
         Ok(views::order(&sent, &placed_view(&sent), d))
@@ -383,11 +415,10 @@ impl<V: Venue> Writer<'_, V> {
     }
 
     /// Parse a transfer amount in the token's units; zero is refused.
-    fn transfer_amount(what: &str, amount: &str, decimals: u32) -> Result<u128> {
-        let raw = parse_amount(amount, decimals)
-            .map_err(|e| refused(what, &[format!("amount {amount:?}: {e:#}")]))?;
+    fn transfer_amount(amount: &str, decimals: u32) -> Result<u128> {
+        let raw = parse_amount(amount, decimals).map_err(|e| eyre!("amount {amount:?}: {e:#}"))?;
         if raw == 0 {
-            return Err(refused(what, &["amount must be greater than zero".into()]));
+            return Err(eyre!("amount must be greater than zero"));
         }
         Ok(raw)
     }
@@ -402,58 +433,86 @@ impl<V: Venue> Writer<'_, V> {
         Value::Object(m)
     }
 
-    /// Deposit from the agent's wallet. Checks, in order: halted,
-    /// `deposits.enabled`, `max_per_call`, the venue pin. Not usage.
-    pub async fn deposit(&self, network: String, token: String, amount: String) -> Result<Value> {
-        let what = "deposit";
-        let vcfg = self.venue.config().await?;
-        let (address, decimals) =
-            Self::token(&vcfg, &network, &token).map_err(|e| refused(what, &[format!("{e:#}")]))?;
-        let raw = Self::transfer_amount(what, &amount, decimals)?;
-
+    /// The refusals that need no venue: halted, and for deposits
+    /// `deposits.enabled`. Checked first, so a halted server says so even
+    /// when the venue is unreachable.
+    async fn offline_checks(&self, deposit: bool) -> Vec<String> {
         let mut rs = Vec::new();
         if let Some(h) = self.ledger.lock().await.halted() {
             rs.push(Refusal::Halted(h).to_string());
         }
-        if !self.cfg.deposits.enabled {
+        if deposit && !self.cfg.deposits.enabled {
             rs.push("deposits are disabled ([deposits] enabled = false)".to_string());
         }
-        match self.max_per_call(&network, &address, decimals) {
-            Ok(Some(max)) if raw > max => rs.push(format!(
-                "max_per_call exceeded: amount {raw} > limit {max} for {network}:{address}"
-            )),
-            Ok(_) => {}
+        rs
+    }
+
+    /// The checks of a deposit or withdrawal, against one config snapshot.
+    /// Returns the snapshot and the amount in the token's units, or every
+    /// refusal. Deposit order: halted, `deposits.enabled`, `max_per_call`, the
+    /// venue pin; a withdrawal skips the two deposit checks.
+    async fn check_transfer(
+        &self,
+        what: &str,
+        deposit: bool,
+        network: &str,
+        token: &str,
+        amount: &str,
+    ) -> Result<(GetConfigResponse, u128, u32)> {
+        let mut rs = self.offline_checks(deposit).await;
+        let vcfg = match self.venue.config().await {
+            Ok(c) => c,
+            Err(_) if !rs.is_empty() => return Err(refused(what, &rs)),
+            Err(e) => return Err(e),
+        };
+        let checked = Self::token(&vcfg, network, token).and_then(|(address, decimals)| {
+            let raw = Self::transfer_amount(amount, decimals)?;
+            Ok((address, decimals, raw))
+        });
+        match checked {
             Err(e) => rs.push(format!("{e:#}")),
+            Ok((address, decimals, raw)) => {
+                if deposit {
+                    match self.max_per_call(network, &address, decimals) {
+                        Ok(Some(max)) if raw > max => rs.push(format!(
+                            "max_per_call exceeded: amount {} ({raw}) > limit {} ({max}) for \
+                             {network}:{address}",
+                            format_decimal_amount(raw, decimals),
+                            format_decimal_amount(max, decimals),
+                        )),
+                        Ok(_) => {}
+                        Err(e) => rs.push(format!("{e:#}")),
+                    }
+                }
+                rs.extend(refusal_texts(&self.check_pin(&vcfg, &[network]).await));
+                if rs.is_empty() {
+                    return Ok((vcfg, raw, decimals));
+                }
+            }
         }
-        rs.extend(refusal_texts(&self.check_pin(&vcfg, &[&network]).await));
-        if !rs.is_empty() {
-            return Err(refused(what, &rs));
-        }
+        Err(refused(what, &rs))
+    }
+
+    /// Deposit from the agent's wallet, signed against the checked snapshot.
+    /// Not usage.
+    pub async fn deposit(&self, network: String, token: String, amount: String) -> Result<Value> {
+        let (vcfg, raw, decimals) = self
+            .check_transfer("deposit", true, &network, &token, &amount)
+            .await?;
         self.venue
-            .deposit(network.clone(), token.clone(), raw)
+            .deposit(&vcfg, network.clone(), token.clone(), raw)
             .await?;
         Ok(Self::transfer_view(&network, &token, raw, decimals))
     }
 
-    /// Withdraw to the agent's own address (the SDK pays the signing wallet).
-    /// Checks: halted, the venue pin.
+    /// Withdraw to the agent's own address (the SDK pays the signing wallet),
+    /// signed against the checked snapshot.
     pub async fn withdraw(&self, network: String, token: String, amount: String) -> Result<Value> {
-        let what = "withdraw";
-        let vcfg = self.venue.config().await?;
-        let (_, decimals) =
-            Self::token(&vcfg, &network, &token).map_err(|e| refused(what, &[format!("{e:#}")]))?;
-        let raw = Self::transfer_amount(what, &amount, decimals)?;
-
-        let mut rs = Vec::new();
-        if let Some(h) = self.ledger.lock().await.halted() {
-            rs.push(Refusal::Halted(h).to_string());
-        }
-        rs.extend(refusal_texts(&self.check_pin(&vcfg, &[&network]).await));
-        if !rs.is_empty() {
-            return Err(refused(what, &rs));
-        }
+        let (vcfg, raw, decimals) = self
+            .check_transfer("withdraw", false, &network, &token, &amount)
+            .await?;
         self.venue
-            .withdraw(network.clone(), token.clone(), raw)
+            .withdraw(&vcfg, network.clone(), token.clone(), raw)
             .await?;
         Ok(Self::transfer_view(&network, &token, raw, decimals))
     }
@@ -472,5 +531,149 @@ impl<V: Venue> Writer<'_, V> {
             "halted": true,
             "haltReason": ledger.halted().flatten(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    use aspens::commands::config::config_pb::{Chain, Configuration, Market};
+    use aspens::commands::trading::arborter_pb::{self, OrderbookEntry};
+    use aspens::commands::trading::book_snapshot::BookState;
+
+    use crate::config::DepositsConfig;
+    use crate::fake::FakeVenue;
+
+    const MARKET: &str = "base::0xaaa::base::0xbbb";
+
+    fn venue() -> FakeVenue {
+        let v = FakeVenue::new(GetConfigResponse {
+            config: Some(Configuration {
+                chains: vec![Chain {
+                    network: "base".into(),
+                    architecture: "evm".into(),
+                    ..Default::default()
+                }],
+                markets: vec![Market {
+                    market_id: MARKET.into(),
+                    base_chain_network: "base".into(),
+                    quote_chain_network: "base".into(),
+                    base_chain_token_decimals: 18,
+                    quote_chain_token_decimals: 8,
+                    pair_decimals: 6,
+                    ..Default::default()
+                }],
+                session: 3,
+            }),
+        });
+        let mut book = BookState::default();
+        for (b, side, price) in [
+            (1u8, arborter_pb::Side::Bid, 2_400_000u128),
+            (2, arborter_pb::Side::Ask, 2_600_000),
+        ] {
+            book.apply(&OrderbookEntry {
+                order_id: vec![b; 32],
+                price: price.to_string(),
+                quantity: "500000".into(),
+                side: side as i32,
+                market_id: MARKET.into(),
+                state: arborter_pb::OrderState::Confirmed as i32,
+                ..Default::default()
+            });
+        }
+        v.set_book(MARKET, None, book);
+        v
+    }
+
+    fn config(dir: &std::path::Path) -> Config {
+        Config {
+            stack_url: "https://venue.example".into(),
+            env_file: None,
+            state_dir: dir.to_path_buf(),
+            allow_withdraw: false,
+            settle_address_allowlist: vec![],
+            deposits: DepositsConfig::default(),
+            venue: None,
+            markets: BTreeMap::new(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn dropping_the_handler_mid_send_still_records_the_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = venue();
+        fake.push_send(SendResult::Accepted {
+            order_id: format!("0x{}", "c7".repeat(32)),
+            in_book: true,
+            taker_fills: vec![],
+        });
+        // The send blocks until released, and says when it has started.
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+        let entered_tx = std::sync::Mutex::new(Some(entered_tx));
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = std::sync::Mutex::new(release_rx);
+        fake.set_on_send(Arc::new(move || {
+            if let Some(tx) = entered_tx.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+            // Bounded, so a handler that blocks in its own poll fails, not hangs.
+            let _ = release_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(2));
+        }));
+
+        let venue = Arc::new(fake);
+        let cfg = config(dir.path());
+        let markets = BTreeMap::from([(
+            MARKET.to_string(),
+            MarketLimits {
+                pair_decimals: 6,
+                max_order_qty: 1_500_000,
+                max_daily_qty: 7_000_000,
+                max_order_quote: 25_000_000,
+                max_daily_quote: 250_000_000,
+                max_deviation_bps: 100,
+            },
+        )]);
+        let ledger = Arc::new(Mutex::new(Ledger::open(dir.path()).unwrap()));
+        let attested = AtomicBool::new(false);
+        let writer = Writer {
+            venue: &venue,
+            cfg: &cfg,
+            markets: &markets,
+            ledger: &ledger,
+            attested: &attested,
+            now: 1_700_000_000,
+        };
+        let place = writer.place(PlaceRequest {
+            market_id: MARKET.into(),
+            side: Side::Buy,
+            qty: "1".into(),
+            pricing: Pricing::Limit("2.5".into()),
+            post_only: false,
+            settle_base: None,
+            settle_quote: None,
+        });
+        // Drive the handler until the send is in flight, then drop it.
+        tokio::select! {
+            _ = place => panic!("the send was supposed to block"),
+            r = entered_rx => r.unwrap(),
+        }
+        release_tx.send(()).unwrap();
+
+        // The task still holds the ledger until it records the outcome.
+        let ledger = tokio::time::timeout(std::time::Duration::from_secs(5), ledger.lock())
+            .await
+            .expect("the send task never finished");
+        assert_eq!(
+            ledger.usage(&utc_day(1_700_000_000), MARKET),
+            (1_000_000, 2_500_000)
+        );
+        let sent = ledger.sent();
+        assert_eq!(sent.len(), 1);
+        assert!(matches!(sent[0].outcome, SentOutcome::Accepted { .. }));
     }
 }

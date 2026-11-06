@@ -26,6 +26,8 @@ use serde_json::{Value, json};
 const MARKET: &str = "base::0xaaa::base::0xbbb";
 const AGENT: &str = "0xagent";
 const PAIR_DECIMALS: u32 = 6;
+/// The test venue config's session: the identity a write records.
+const SESSION: u64 = 41;
 /// Token addresses as the venue spells them: mixed case, so a case-sensitive
 /// comparison is caught.
 const AAA_ADDR: &str = "0xAaAa00000000000000000000000000000000Aa01";
@@ -96,7 +98,7 @@ fn venue_config() -> GetConfigResponse {
                 quote_chain_token_decimals: 8,
                 pair_decimals: PAIR_DECIMALS as i32,
             }],
-            session: 1,
+            session: SESSION,
         }),
     }
 }
@@ -933,6 +935,7 @@ fn limit_buy(qty: &str, price: &str) -> Value {
 
 fn send_call(qty: &str, price: &str, side: Side) -> Call {
     Call::SendLimit {
+        config_session: SESSION,
         market_id: MARKET.into(),
         side,
         qty: qty.into(),
@@ -1636,6 +1639,7 @@ async fn deposit_reaches_venue_in_token_units() {
     assert_eq!(
         probe.calls(),
         vec![Call::Deposit {
+            config_session: SESSION,
             network: "base".into(),
             token_symbol: "BBB".into(),
             amount: 1_250_000_000,
@@ -1658,7 +1662,13 @@ async fn deposit_over_max_per_call_refused() {
     )
     .await;
     let over = json!({"network": "base", "token": "BBB", "amount": "100.00000001"});
-    assert_refused(&h.call("deposit", over).await, "max_per_call");
+    let r = h.call("deposit", over).await;
+    assert_refused(&r, "max_per_call");
+    // Human units, the raw value in parentheses.
+    assert_refused(
+        &r,
+        "amount 100.00000001 (10000000001) > limit 100.00000000 (10000000000)",
+    );
     // BBB has 8 decimals: a 9th is refused, never truncated.
     let precise = json!({"network": "base", "token": "BBB", "amount": "1.000000001"});
     assert_refused(&h.call("deposit", precise).await, "too many decimal places");
@@ -1709,6 +1719,7 @@ async fn withdraw_reaches_venue_in_token_units() {
     assert_eq!(
         probe.calls(),
         vec![Call::Withdraw {
+            config_session: SESSION,
             network: "base".into(),
             token_symbol: "AAA".into(),
             amount: 5 * 10u128.pow(17),
@@ -1834,4 +1845,135 @@ async fn reads_wait_for_an_inflight_send() {
     assert_ne!(placed.is_error, Some(true), "{}", text(&placed));
     // The read waited for the outcome record: it sees the order, not nothing.
     assert_eq!(by_id(&orders, &id_hex(0xf1))["state"], "open", "{orders}");
+}
+
+#[tokio::test]
+async fn pair_decimals_change_refuses_signs_nothing() {
+    let v = market_venue();
+    v.push_send(accepted_send(0xf2));
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    // The venue restarts with the market in 8 pair decimals; limits were
+    // resolved at 6. A marketable sell would price at 1/100 of the bid.
+    let mut changed = venue_config();
+    changed.config.as_mut().unwrap().markets[0].pair_decimals = 8;
+    probe.set_config(changed);
+    let sell = json!({"market_id": MARKET, "side": "sell", "qty": "0.5"});
+    let r = h.call("place_marketable_order", sell).await;
+    assert_refused(
+        &r,
+        "venue changed this market's pair decimals (6 \u{2192} 8); restart aspens-mcp to re-resolve limits",
+    );
+    assert_refused(
+        &h.call("place_limit_order", limit_buy("1", "2.5")).await,
+        "pair decimals",
+    );
+    assert_nothing_signed(&probe);
+    assert_eq!(count_kind(h.dir(), "usage"), 0);
+}
+
+/// A venue config in `session` whose trade contract on base is `contract`.
+fn config_in(session: u64, contract: &str) -> GetConfigResponse {
+    let mut c = venue_config();
+    let inner = c.config.as_mut().unwrap();
+    inner.session = session;
+    inner.chains[0].trade_contract = Some(TradeContract {
+        address: contract.into(),
+    });
+    c
+}
+
+#[tokio::test]
+async fn write_uses_the_checked_config_snapshot() {
+    const OTHER: &str = "0x00000000000000000000000000000000000BAD02";
+    let transfer = json!({"network": "base", "token": "BBB", "amount": "1"});
+    for (tool, args) in [
+        ("place_limit_order", limit_buy("1", "2.5")),
+        ("deposit", transfer.clone()),
+        ("withdraw", transfer.clone()),
+    ] {
+        let v = market_venue();
+        v.push_send(accepted_send(0xf3));
+        v.set_attestation(AttestationView {
+            report: Value::Null,
+            verified: Some(true),
+            note: None,
+        });
+        // The venue restarts onto another contract after the pin is checked.
+        let flip = v.clone();
+        v.set_on_attestation(std::sync::Arc::new(move || {
+            flip.set_config(config_in(SESSION + 1, OTHER));
+        }));
+        let probe = v.clone();
+        let h = start_with(v, pinned(TRADE_CONTRACT, Some("ab12")), |_| {}).await;
+        h.ok(tool, args).await;
+        let writes: Vec<u64> = probe
+            .calls()
+            .into_iter()
+            .filter_map(|c| match c {
+                Call::SendLimit { config_session, .. }
+                | Call::Deposit { config_session, .. }
+                | Call::Withdraw { config_session, .. } => Some(config_session),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            writes,
+            vec![SESSION],
+            "{tool}: signed against another config"
+        );
+
+        // The next write snapshots the new config, whose contract the pin refuses.
+        assert_refused(&h.call("deposit", transfer.clone()).await, "venue pin");
+        assert_eq!(
+            probe
+                .calls()
+                .iter()
+                .filter(|c| matches!(c, Call::Deposit { .. }))
+                .count(),
+            usize::from(tool == "deposit"),
+            "{tool}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn halted_transfer_says_halted_when_venue_is_down() {
+    let v = fake();
+    v.set_config_error(Some("connect to https://venue.example/KEY refused"));
+    let probe = v.clone();
+    let h = start_with(v, |c| c.allow_withdraw = true, |_| {}).await;
+    let transfer = json!({"network": "base", "token": "BBB", "amount": "1"});
+    // Not halted: the venue error comes through (redacted).
+    let r = h.call("deposit", transfer.clone()).await;
+    assert_refused(&r, "<url>");
+    assert!(!text(&r).contains("KEY"));
+    h.ok("halt", json!({"reason": "ops"})).await;
+    for tool in ["deposit", "withdraw"] {
+        assert_refused(&h.call(tool, transfer.clone()).await, "halted: ops");
+    }
+    assert_nothing_signed(&probe);
+}
+
+#[tokio::test]
+async fn unknown_guidance_agrees_everywhere() {
+    let h = start(fake(), |_| {}).await;
+    let guidance = "check it later with `my_orders` (which works without an id), or with \
+                    `get_order` once an id is known";
+    let ins = h.client.peer_info().unwrap().instructions.clone().unwrap();
+    assert!(ins.contains(guidance), "{ins}");
+    let tools = h.client.list_all_tools().await.unwrap();
+    let desc = |name: &str| {
+        let t = tools.iter().find(|t| t.name == name).unwrap();
+        t.description.as_deref().unwrap_or_default().to_string()
+    };
+    for name in ["place_limit_order", "place_marketable_order"] {
+        assert!(desc(name).contains(guidance), "{name}: {}", desc(name));
+    }
+    let cancel = desc("cancel_order");
+    assert!(
+        cancel.contains("whose id this server's ledger does not hold"),
+        "{cancel}"
+    );
+    assert!(cancel.contains("pass market_id and side"), "{cancel}");
 }

@@ -101,13 +101,15 @@ pub trait Venue: Send + Sync + 'static {
         trader: String,
     ) -> impl Future<Output = Result<Vec<TradeFill>>> + Send;
 
-    /// Send a limit order. `qty` and `price` are HUMAN decimal strings (the SDK
-    /// scales them by pair decimals): the caller formats them from pair units with
-    /// `aspens::decimals::format_decimal_amount`. Never hidden, never a market
-    /// order, never a discretionary fill.
+    /// Send a limit order, signed against `cfg`: the config snapshot the caller
+    /// checked, never one fetched here. `qty` and `price` are HUMAN decimal
+    /// strings (the SDK scales them by `cfg`'s pair decimals): the caller formats
+    /// them from pair units with `aspens::decimals::format_decimal_amount`.
+    /// Never hidden, never a market order, never a discretionary fill.
     #[allow(clippy::too_many_arguments)]
     fn send_limit(
         &self,
+        cfg: &GetConfigResponse,
         market_id: String,
         side: Side,
         qty: String,
@@ -124,17 +126,21 @@ pub trait Venue: Send + Sync + 'static {
         order_id: [u8; 32],
     ) -> impl Future<Output = Result<CancelResult>> + Send;
 
-    /// `amount` is in the token's own decimals on `network`.
+    /// `amount` is in the token's own decimals on `network`. Signed against
+    /// `cfg`, the snapshot the caller checked.
     fn deposit(
         &self,
+        cfg: &GetConfigResponse,
         network: String,
         token_symbol: String,
         amount: u128,
     ) -> impl Future<Output = Result<()>> + Send;
 
-    /// `amount` is in the token's own decimals on `network`.
+    /// `amount` is in the token's own decimals on `network`. Signed against
+    /// `cfg`, the snapshot the caller checked.
     fn withdraw(
         &self,
+        cfg: &GetConfigResponse,
         network: String,
         token_symbol: String,
         amount: u128,
@@ -469,6 +475,7 @@ impl Venue for SdkVenue {
 
     async fn send_limit(
         &self,
+        cfg: &GetConfigResponse,
         market_id: String,
         side: Side,
         qty: String,
@@ -477,16 +484,6 @@ impl Venue for SdkVenue {
         settle_base: Option<String>,
         settle_quote: Option<String>,
     ) -> SendResult {
-        let config = match self.config().await {
-            Ok(c) => c,
-            // Nothing was signed or sent.
-            Err(e) => {
-                return SendResult::Failed {
-                    code: "config_unavailable".to_string(),
-                    message: format!("{e:#}"),
-                };
-            }
-        };
         let wire = wire_side(side) as i32;
         let result = send_order_with_wallets(
             self.url.clone(),
@@ -495,7 +492,7 @@ impl Venue for SdkVenue {
             qty,
             Some(price),
             &self.wallets(),
-            config,
+            cfg.clone(),
             post_only,
             false,
             None,
@@ -509,7 +506,7 @@ impl Venue for SdkVenue {
             Err(e) => {
                 tracing::warn!(error = %format!("{e:#}"), "send_order failed");
                 // The SDK turns a "session changed" refusal into a plain error;
-                // the venue restarted, so the next send needs a fresh config.
+                // the venue restarted, so the next `config()` must refetch.
                 if format!("{e:#}").contains("session changed") {
                     self.invalidate_config();
                 }
@@ -544,22 +541,33 @@ impl Venue for SdkVenue {
         )
     }
 
-    async fn deposit(&self, network: String, token_symbol: String, amount: u128) -> Result<()> {
-        let config = self.config().await?;
-        let wallet = self.wallet_for_network(&config, &network)?;
-        call_deposit_from_config_with_wallet(network, token_symbol, amount, wallet, config).await
+    async fn deposit(
+        &self,
+        cfg: &GetConfigResponse,
+        network: String,
+        token_symbol: String,
+        amount: u128,
+    ) -> Result<()> {
+        let wallet = self.wallet_for_network(cfg, &network)?;
+        call_deposit_from_config_with_wallet(network, token_symbol, amount, wallet, cfg.clone())
+            .await
     }
 
-    async fn withdraw(&self, network: String, token_symbol: String, amount: u128) -> Result<()> {
-        let config = self.config().await?;
-        let wallet = self.wallet_for_network(&config, &network)?;
+    async fn withdraw(
+        &self,
+        cfg: &GetConfigResponse,
+        network: String,
+        token_symbol: String,
+        amount: u128,
+    ) -> Result<()> {
+        let wallet = self.wallet_for_network(cfg, &network)?;
         call_withdraw_from_config_with_wallet_opts(
             self.url.clone(),
             network,
             token_symbol,
             amount,
             wallet,
-            config,
+            cfg.clone(),
             WithdrawOpts::default(),
         )
         .await

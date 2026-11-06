@@ -264,6 +264,34 @@ pub fn resolve_markets(
     Ok(out)
 }
 
+/// Check every `deposits.max_per_call` entry against the venue: its key must
+/// name a `<network>:<token-address>` the venue lists (0x hex compared
+/// case-insensitively), and its value must parse in that token's units. A cap
+/// that names no token would silently cap nothing, so it refuses to start.
+pub fn validate_deposit_caps(cfg: &Config, venue: &GetConfigResponse) -> Result<()> {
+    for (key, value) in &cfg.deposits.max_per_call {
+        let (network, address) = key.split_once(':').ok_or_else(|| {
+            eyre!("deposits.max_per_call.\"{key}\": the key must be \"<network>:<token-address>\"")
+        })?;
+        let chain = venue.get_chain(network).ok_or_else(|| {
+            eyre!("deposits.max_per_call.\"{key}\": no network {network} in the venue config")
+        })?;
+        let token = chain
+            .tokens
+            .values()
+            .find(|t| crate::limits::addr_matches(address, &t.address))
+            .ok_or_else(|| {
+                eyre!(
+                    "deposits.max_per_call.\"{key}\": no token with address {address} on \
+                     {network} in the venue config"
+                )
+            })?;
+        parse_amount(value, token.decimals)
+            .wrap_err_with(|| format!("deposits.max_per_call.\"{key}\" = {value:?}"))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,5 +533,51 @@ mod tests {
             PathBuf::from(home).join("x/y")
         );
         assert_eq!(expand_tilde(Path::new("/a/~/b")), PathBuf::from("/a/~/b"));
+    }
+
+    #[test]
+    fn deposit_cap_keys_must_name_a_venue_token() {
+        use aspens::commands::config::config_pb::{Chain, Token};
+        const ADDR: &str = "0xAbCd00000000000000000000000000000000Ab01";
+        let venue = GetConfigResponse {
+            config: Some(Configuration {
+                chains: vec![Chain {
+                    network: "base".into(),
+                    tokens: HashMap::from([(
+                        "USDC".to_string(),
+                        Token {
+                            symbol: "USDC".into(),
+                            address: ADDR.into(),
+                            decimals: 6,
+                            ..Default::default()
+                        },
+                    )]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        };
+        let with = |key: &str, value: &str| {
+            let mut c = cfg_with("");
+            c.deposits.max_per_call = BTreeMap::from([(key.to_string(), value.to_string())]);
+            validate_deposit_caps(&c, &venue)
+        };
+        // The address matches in any case.
+        with(&format!("base:{}", ADDR.to_lowercase()), "100").unwrap();
+        with(&format!("base:{ADDR}"), "100.5").unwrap();
+        for (key, value, needle) in [
+            ("base:0xdead", "1", "no token with address 0xdead"),
+            (&format!("eth:{ADDR}") as &str, "1", "no network eth"),
+            ("base", "1", "<network>:<token-address>"),
+            (
+                &format!("base:{ADDR}") as &str,
+                "1.0000001",
+                "too many decimal places",
+            ),
+        ] {
+            let e = format!("{:#}", with(key, value).unwrap_err());
+            assert!(e.contains(needle), "{key}: {e}");
+            assert!(e.contains("deposits.max_per_call"), "{key}: {e}");
+        }
     }
 }
