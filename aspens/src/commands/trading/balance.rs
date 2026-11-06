@@ -58,6 +58,17 @@ fn u256_balance(v: Uint<256, 4>) -> BalanceValue {
     }
 }
 
+/// A read's outcome as a reading: the value, or the SDK's own error text as
+/// the reason (also logged by the caller; not redacted here).
+fn read_value(r: Result<u128>) -> BalanceValue {
+    r.map_or_else(|e| BalanceValue::Error(e.to_string()), BalanceValue::Raw)
+}
+
+/// [`read_value`] for a 256-bit read, via [`u256_balance`].
+fn read_value_u256(r: Result<Uint<256, 4>>) -> BalanceValue {
+    r.map_or_else(|e| BalanceValue::Error(e.to_string()), u256_balance)
+}
+
 impl BalanceValue {
     /// Classify a reading the read helpers produce as text: a decimal integer
     /// is a balance, anything else ("error", "not deployed", ...) is the reason.
@@ -376,13 +387,10 @@ async fn query_token_balance_via_client(
     } else {
         client.token_balance(token, owner_address).await
     };
-    let wallet_balance = wallet_result.map_or_else(
-        |e| {
-            warn!("Failed to get wallet balance on {}: {}", chain_network, e);
-            BalanceValue::Error(e.to_string())
-        },
-        BalanceValue::Raw,
-    );
+    if let Err(e) = &wallet_result {
+        warn!("Failed to get wallet balance on {}: {}", chain_network, e);
+    }
+    let wallet_balance = read_value(wallet_result);
 
     // Locked/deposited balances come from the trade contract: the Midrib
     // program's UserBalance PDA on Solana, MidribV3 on EVM and on Tron (read
@@ -453,27 +461,21 @@ async fn query_token_balance_via_client(
                 &contract_address,
                 owner,
             )
-            .await
-            .map_or_else(
-                |e| {
-                    warn!(
-                        "Failed to get available balance on {}: {}",
-                        chain_network, e
-                    );
-                    BalanceValue::Error(e.to_string())
-                },
-                u256_balance,
-            );
+            .await;
+            if let Err(e) = &available {
+                warn!(
+                    "Failed to get available balance on {}: {}",
+                    chain_network, e
+                );
+            }
+            let available = read_value_u256(available);
             let locked =
                 call_get_locked_balance_for_address(&rpc, &token.address, &contract_address, owner)
-                    .await
-                    .map_or_else(
-                        |e| {
-                            warn!("Failed to get locked balance on {}: {}", chain_network, e);
-                            BalanceValue::Error(e.to_string())
-                        },
-                        u256_balance,
-                    );
+                    .await;
+            if let Err(e) = &locked {
+                warn!("Failed to get locked balance on {}: {}", chain_network, e);
+            }
+            let locked = read_value_u256(locked);
             (available, locked)
         }
     };
@@ -594,13 +596,11 @@ pub async fn fetch_balances(config: GetConfigResponse, wallets: &[&Wallet]) -> R
                 continue;
             }
         };
-        let balance = client.native_balance(&owner_address).await.map_or_else(
-            |e| {
-                warn!("Failed to get native balance on {}: {}", chain.network, e);
-                BalanceValue::Error(e.to_string())
-            },
-            BalanceValue::Raw,
-        );
+        let native = client.native_balance(&owner_address).await;
+        if let Err(e) = &native {
+            warn!("Failed to get native balance on {}: {}", chain.network, e);
+        }
+        let balance = read_value(native);
         native_balances.push(NativeBalanceView {
             network: chain.network.clone(),
             balance,
@@ -1023,10 +1023,27 @@ mod tests {
 
     #[test]
     fn read_failure_reason_is_data_but_displays_as_error() {
-        let reason = "error sending request for url (https://rpc.example/key)";
-        let failed = BalanceValue::Error(reason.to_string());
-        assert_eq!(failed, BalanceValue::Error(reason.to_string()));
+        let failed = read_value(Err(eyre::eyre!("rpc down: https://x")));
+        match &failed {
+            BalanceValue::Error(reason) => assert!(reason.contains("rpc down"), "{reason}"),
+            other => panic!("expected Error, got {other:?}"),
+        }
         assert_eq!(failed.display(6), "error");
+
+        let failed256 = read_value_u256(Err(eyre::eyre!("rpc down: https://x")));
+        assert!(
+            matches!(&failed256, BalanceValue::Error(r) if r.contains("rpc down")),
+            "{failed256:?}"
+        );
+        assert_eq!(failed256.display(6), "error");
+
+        // A success is a Raw reading either way.
+        assert_eq!(read_value(Ok(5)), BalanceValue::Raw(5));
+        assert_eq!(
+            read_value_u256(Ok(Uint::<256, 4>::from(9u8))),
+            BalanceValue::Raw(9)
+        );
+
         // Fixed not-available texts still show as they are.
         assert_eq!(
             BalanceValue::Error("not deployed".into()).display(6),
