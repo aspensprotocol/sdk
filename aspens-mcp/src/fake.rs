@@ -67,6 +67,7 @@ struct State {
     balances: Balances,
     addresses: Addresses,
     healthy: bool,
+    health_error: Option<String>,
     attestation: AttestationView,
     on_send: Option<SendHook>,
     read_error: Option<String>,
@@ -101,6 +102,7 @@ impl FakeVenue {
             },
             addresses: Addresses::default(),
             healthy: true,
+            health_error: None,
             attestation: AttestationView {
                 report: serde_json::Value::Null,
                 verified: None,
@@ -153,6 +155,13 @@ impl FakeVenue {
 
     pub fn set_healthy(&self, healthy: bool) {
         self.lock().healthy = healthy;
+    }
+
+    /// Make `health` fail with `msg` as its error text.
+    pub fn set_health_error(&self, msg: &str) {
+        let mut s = self.lock();
+        s.healthy = false;
+        s.health_error = Some(msg.to_string());
     }
 
     pub fn set_attestation(&self, view: AttestationView) {
@@ -292,12 +301,15 @@ impl Venue for FakeVenue {
 
     async fn health(&self) -> PingResult {
         self.record(Call::Health);
-        let healthy = self.lock().healthy;
+        let (healthy, error) = {
+            let s = self.lock();
+            (s.healthy, s.health_error.clone())
+        };
         PingResult {
             success: healthy,
             url: "fake://venue".to_string(),
             latency_ms: healthy.then_some(1),
-            error: (!healthy).then(|| "FakeVenue: unhealthy".to_string()),
+            error: (!healthy).then(|| error.unwrap_or_else(|| "FakeVenue: unhealthy".to_string())),
         }
     }
 

@@ -168,7 +168,7 @@ fn find_status(e: &eyre::Report) -> Option<&tonic::Status> {
 }
 
 /// Map a send error. Only a server status that definitively refuses the order is
-/// `Failed`: a code in [`DEFINITIVE_REJECTIONS`] on a status with no `source()`.
+/// `Failed`: a code in `DEFINITIVE_REJECTIONS` on a status with no `source()`.
 /// A status with a source was built by tonic on the client from a transport
 /// error (an h2 reset, an io error), possibly after the request was written.
 /// Anything else (a timeout, a dropped connection, an error that is not a

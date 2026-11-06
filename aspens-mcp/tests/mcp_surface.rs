@@ -353,15 +353,11 @@ async fn balance_error_text_is_redacted() {
 async fn my_orders_derives_states() {
     let v = fake();
     // A rests in the agent's book; B was filled as maker; C is gone with no fills.
+    // Remaining differs from the order's qty, so echoing qty is caught.
     v.set_book(
         MARKET,
         Some(AGENT),
-        book(&[book_entry(
-            0xaa,
-            arborter_pb::Side::Bid,
-            2_500_000,
-            1_200_000,
-        )]),
+        book(&[book_entry(0xaa, arborter_pb::Side::Bid, 2_500_000, 900_000)]),
     );
     v.set_fills(
         MARKET,
@@ -396,8 +392,9 @@ async fn my_orders_derives_states() {
     let all = h.ok("my_orders", json!({"status": "all"})).await;
     let a = by_id(&all, &id_hex(0xaa));
     assert_eq!(a["state"], "open");
-    assert_eq!(a["remainingRaw"], "1200000");
-    assert_eq!(a["remaining"], "1.200000");
+    assert_eq!(a["remainingRaw"], "900000");
+    assert_eq!(a["remaining"], "0.900000");
+    assert_eq!(a["qtyRaw"], "1200000");
     assert_eq!(a["price"], "2.500000");
     assert_eq!(a["side"], "buy");
     let b = by_id(&all, &id_hex(0xbb));
@@ -674,4 +671,125 @@ async fn two_unknowns_never_share_one_order() {
         assert_eq!(o["state"], "unknown", "{o}");
         assert_eq!(o["orderId"], Value::Null);
     }
+}
+
+#[tokio::test]
+async fn order_read_errors_are_redacted() {
+    let v = fake();
+    v.set_read_error(Some("transport error: https://rpc.example/KEY failed"));
+    let h = start(v, |l| {
+        l.append(sent(Side::Buy, 1_200_000, 2_500_000, accepted(0xaa)))
+            .unwrap();
+    })
+    .await;
+    for (tool, args) in [
+        ("my_orders", json!({"status": "all"})),
+        ("get_order", json!({"order_id": id_hex(0xaa)})),
+    ] {
+        let r = h.call(tool, args).await;
+        let t = text(&r);
+        assert_eq!(r.is_error, Some(true), "{tool}: {t}");
+        assert!(t.contains("<url>"), "{tool}: {t}");
+        assert!(!t.contains("KEY"), "{tool}: {t}");
+    }
+}
+
+#[tokio::test]
+async fn health_error_is_redacted() {
+    let v = fake();
+    v.set_health_error("connect to https://venue.example/KEY refused");
+    let h = start(v, |_| {}).await;
+    let s = h.ok("account_status", json!({})).await;
+    assert_eq!(s["venue"]["reachable"], false);
+    assert_eq!(s["venue"]["error"], "connect to <url> refused");
+}
+
+#[tokio::test]
+async fn stale_market_does_not_break_order_reads() {
+    const GONE: &str = "gone::0xccc::gone::0xddd";
+    let v = fake();
+    v.set_book(
+        MARKET,
+        Some(AGENT),
+        book(&[book_entry(0xaa, arborter_pb::Side::Bid, 2_500_000, 900_000)]),
+    );
+    let h = start(v, |l| {
+        l.append(sent(Side::Buy, 1_200_000, 2_500_000, accepted(0xaa)))
+            .unwrap();
+        let on_gone = |outcome| {
+            Record::Sent(SentRecord {
+                ts: 2_000,
+                market_id: GONE.into(),
+                side: Side::Sell,
+                qty: 3_300_000,
+                price: 4_400_000,
+                outcome,
+            })
+        };
+        l.append(on_gone(accepted(0xc1))).unwrap();
+        l.append(on_gone(SentOutcome::Unknown)).unwrap();
+        l.append(on_gone(SentOutcome::Failed {
+            code: "InvalidArgument".into(),
+            message: "bad".into(),
+        }))
+        .unwrap();
+    })
+    .await;
+
+    let all = h.ok("my_orders", json!({"status": "all"})).await;
+    let orders = all["orders"].as_array().unwrap();
+    assert_eq!(orders.len(), 4, "{all}");
+    let a = by_id(&all, &id_hex(0xaa));
+    assert_eq!(a["state"], "open");
+    assert_eq!(a["remainingRaw"], "900000");
+
+    let stale = by_id(&all, &id_hex(0xc1));
+    assert_eq!(stale["state"], "unknown");
+    assert_eq!(stale["qtyRaw"], "3300000");
+    assert_eq!(stale["priceRaw"], "4400000");
+    // No decimals to scale by: no market-unit strings, never a guess.
+    assert_eq!(stale["qty"], Value::Null);
+    assert_eq!(stale["price"], Value::Null);
+    assert_eq!(stale["filledRaw"], Value::Null);
+    let note = |o: &Value| o["note"].as_str().unwrap_or_default().to_string();
+    assert!(
+        note(stale).contains("market no longer in venue config"),
+        "{stale}"
+    );
+    let unknown = &orders[2];
+    assert_eq!(unknown["state"], "unknown");
+    assert_eq!(unknown["orderId"], Value::Null);
+    assert!(note(unknown).contains("market no longer in venue config"));
+    let failed = &orders[3];
+    assert_eq!(failed["state"], "rejected");
+    assert_eq!(failed["qtyRaw"], "3300000");
+    assert!(note(failed).contains("market no longer in venue config"));
+
+    let one = h.ok("get_order", json!({"order_id": id_hex(0xc1)})).await;
+    assert_eq!(one["state"], "unknown");
+    assert_eq!(one["marketId"], GONE);
+    let one = h.ok("get_order", json!({"order_id": id_hex(0xaa)})).await;
+    assert_eq!(one["state"], "open");
+}
+
+#[tokio::test]
+async fn keyless_base_leg_does_not_break_order_reads() {
+    // The agent's EVM key was removed: the market resolves, its base leg has no trader.
+    let v = fake();
+    v.set_addresses(Addresses {
+        evm: None,
+        solana: Some("SoLagent".into()),
+    });
+    let h = start(v, |l| {
+        l.append(sent(Side::Buy, 1_200_000, 2_500_000, accepted(0xaa)))
+            .unwrap();
+    })
+    .await;
+    let one = h.ok("get_order", json!({"order_id": id_hex(0xaa)})).await;
+    assert_eq!(one["state"], "unknown");
+    assert_eq!(one["qtyRaw"], "1200000");
+    assert!(
+        one["note"].as_str().unwrap().contains("no trader key"),
+        "{one}"
+    );
 }
