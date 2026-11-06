@@ -19,6 +19,7 @@ use crate::config::{Config, MarketLimits, parse_amount};
 use crate::ledger::{Ledger, Record, SentOutcome, SentRecord, Side};
 use crate::limits::{BookTop, OrderRequest, Refusal, addr_matches, check_order, utc_day};
 use crate::orders::{VenueView, derive};
+use crate::server::InFlight;
 use crate::venue::{CancelResult, SendResult, Venue};
 use crate::views::{self, put_amount};
 
@@ -49,6 +50,8 @@ pub(crate) struct Writer<'a, V: Venue> {
     pub ledger: &'a Arc<Mutex<Ledger>>,
     /// Set once the venue's attestation has verified; a failure is never kept.
     pub attested: &'a AtomicBool,
+    /// Every send task holds a guard from here until its outcome is recorded.
+    pub in_flight: &'a InFlight,
     pub now: u64,
 }
 
@@ -250,7 +253,9 @@ impl<V: Venue> Writer<'_, V> {
         // this future cannot stop it between the usage and the outcome.
         let venue = self.venue.clone();
         let now = self.now;
+        let in_flight = self.in_flight.enter();
         let task = tokio::spawn(async move {
+            let _in_flight = in_flight;
             // 5. Usage, durable before anything is signed.
             ledger
                 .append(Record::Usage {
@@ -260,6 +265,7 @@ impl<V: Venue> Writer<'_, V> {
                     side: req.side,
                     qty: commit.qty,
                     quote: commit.quote,
+                    price,
                 })
                 .map_err(|e| eyre!("recording usage failed, nothing was signed: {e:#}"))?;
 
@@ -640,12 +646,14 @@ mod tests {
         )]);
         let ledger = Arc::new(Mutex::new(Ledger::open(dir.path()).unwrap()));
         let attested = AtomicBool::new(false);
+        let in_flight = InFlight::default();
         let writer = Writer {
             venue: &venue,
             cfg: &cfg,
             markets: &markets,
             ledger: &ledger,
             attested: &attested,
+            in_flight: &in_flight,
             now: 1_700_000_000,
         };
         let place = writer.place(PlaceRequest {
@@ -662,7 +670,10 @@ mod tests {
             _ = place => panic!("the send was supposed to block"),
             r = entered_rx => r.unwrap(),
         }
+        // The send task, not the dropped handler, holds the in-flight guard.
+        assert_eq!(in_flight.count(), 1);
         release_tx.send(()).unwrap();
+        assert!(in_flight.wait_idle(std::time::Duration::from_secs(5)).await);
 
         // The task still holds the ledger until it records the outcome.
         let ledger = tokio::time::timeout(std::time::Duration::from_secs(5), ledger.lock())

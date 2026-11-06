@@ -3,6 +3,13 @@
 //! One JSON object per line in `<dir>/ledger.jsonl`. A usage record is written and
 //! synced to disk before the order it covers is sent, so a crash can never lose a
 //! record whose order went out. Replay rebuilds the in-memory indices on open.
+//!
+//! A usage record is always followed by the sent record of its order: the
+//! order path holds the ledger from one to the other, so nothing else can
+//! append in between. A usage record with no sent record right after it means
+//! the process stopped mid-send. The order may be live, so replay counts it as
+//! sent with an `Unknown` outcome (in memory only; the file is never
+//! rewritten).
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -85,6 +92,9 @@ pub enum Record {
         qty: u128,
         #[serde(with = "u128_str")]
         quote: u128,
+        /// The limit price the order is sent at, in pair-decimal units.
+        #[serde(with = "u128_str")]
+        price: u128,
     },
     Sent(SentRecord),
     Cancelled {
@@ -167,10 +177,39 @@ impl Ledger {
         };
         let mut lines: Vec<&[u8]> = bytes[..complete_len].split(|b| *b == b'\n').collect();
         lines.pop(); // empty item after the final newline
+        // The send a usage record covers, until the next record shows
+        // whether its outcome was recorded.
+        let mut unanswered: Option<SentRecord> = None;
         for (i, line) in lines.into_iter().enumerate() {
             let record: Record = serde_json::from_slice(line)
                 .map_err(|e| eyre!("{}: line {} is corrupt: {e}", path.display(), i + 1))?;
+            if let Some(s) = unanswered.take()
+                && !matches!(record, Record::Sent(_))
+            {
+                ledger.sent.push(s);
+            }
+            if let Record::Usage {
+                ts,
+                market_id,
+                side,
+                qty,
+                price,
+                ..
+            } = &record
+            {
+                unanswered = Some(SentRecord {
+                    ts: *ts,
+                    market_id: market_id.clone(),
+                    side: *side,
+                    qty: *qty,
+                    price: *price,
+                    outcome: SentOutcome::Unknown,
+                });
+            }
             ledger.apply(record);
+        }
+        if let Some(s) = unanswered {
+            ledger.sent.push(s);
         }
         ledger._lock = Some(file.try_clone()?);
         if complete_len < bytes.len() {
@@ -268,6 +307,7 @@ mod tests {
             side: Side::Buy,
             qty,
             quote,
+            price: 19,
         }
     }
 
@@ -295,6 +335,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut l = Ledger::open(dir.path()).unwrap();
         l.append(usage_rec("2026-11-06", "m1", 5, 50)).unwrap();
+        l.append(Record::Sent(sent_rec())).unwrap();
         l.append(usage_rec("2026-11-06", "m1", 2, 20)).unwrap();
         l.append(Record::Sent(sent_rec())).unwrap();
         l.append(Record::Cancelled {
@@ -313,9 +354,91 @@ mod tests {
         assert_eq!(l.usage("2026-11-05", "m1"), (0, 0));
         assert_eq!(l.usage("2026-11-06", "m2"), (0, 0));
         assert_eq!(l.halted(), Some(Some("breaker".to_string())));
-        assert_eq!(l.sent(), vec![&sent_rec()]);
+        assert_eq!(l.sent(), vec![&sent_rec(), &sent_rec()]);
         assert!(l.cancelled("0xaa"));
         assert!(!l.cancelled("0xAA"));
+    }
+
+    /// A usage record whose outcome was never recorded, as replay sees it.
+    fn orphan(ts: u64, market: &str, side: Side, qty: u128, price: u128) -> SentRecord {
+        SentRecord {
+            ts,
+            market_id: market.into(),
+            side,
+            qty,
+            price,
+            outcome: SentOutcome::Unknown,
+        }
+    }
+
+    #[test]
+    fn usage_without_sent_replays_as_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger::open(dir.path()).unwrap();
+        l.append(Record::Usage {
+            ts: 41,
+            day: "2026-11-06".into(),
+            market_id: "m1".into(),
+            side: Side::Sell,
+            qty: 23,
+            quote: 0,
+            price: 29,
+        })
+        .unwrap();
+        // Live, the send is still in flight: nothing is synthesized.
+        assert!(l.sent().is_empty());
+        drop(l);
+        let before = std::fs::read(dir.path().join(LEDGER_FILE)).unwrap();
+        let l = Ledger::open(dir.path()).unwrap();
+        assert_eq!(l.sent(), vec![&orphan(41, "m1", Side::Sell, 23, 29)]);
+        assert_eq!(l.usage("2026-11-06", "m1"), (23, 0));
+        drop(l);
+        // Replay never rewrites the file.
+        assert_eq!(std::fs::read(dir.path().join(LEDGER_FILE)).unwrap(), before);
+    }
+
+    #[test]
+    fn usage_followed_by_sent_is_not_duplicated() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger::open(dir.path()).unwrap();
+        l.append(usage_rec("2026-11-06", "m1", 11, 31)).unwrap();
+        l.append(Record::Sent(sent_rec())).unwrap();
+        drop(l);
+        let l = Ledger::open(dir.path()).unwrap();
+        assert_eq!(l.sent(), vec![&sent_rec()]);
+        assert_eq!(l.usage("2026-11-06", "m1"), (11, 31));
+    }
+
+    #[test]
+    fn orphan_usage_mid_file_replays_as_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger::open(dir.path()).unwrap();
+        l.append(Record::Usage {
+            ts: 5,
+            day: "2026-11-06".into(),
+            market_id: "m2".into(),
+            side: Side::Buy,
+            qty: 3,
+            quote: 37,
+            price: 43,
+        })
+        .unwrap();
+        l.append(Record::Halt {
+            ts: 6,
+            reason: None,
+        })
+        .unwrap();
+        l.append(usage_rec("2026-11-06", "m1", 11, 31)).unwrap();
+        l.append(Record::Sent(sent_rec())).unwrap();
+        drop(l);
+        let l = Ledger::open(dir.path()).unwrap();
+        assert_eq!(
+            l.sent(),
+            vec![&orphan(5, "m2", Side::Buy, 3, 43), &sent_rec()]
+        );
+        assert_eq!(l.usage("2026-11-06", "m2"), (3, 37));
+        assert_eq!(l.usage("2026-11-06", "m1"), (11, 31));
+        assert_eq!(l.halted(), Some(None));
     }
 
     #[test]

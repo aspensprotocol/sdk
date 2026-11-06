@@ -44,7 +44,7 @@ rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 tempfile.workspace = true
 # The rig e2e mines blocks on the anvil forks over JSON-RPC.
 reqwest.workspace = true
-tokio = { workspace = true, features = ["io-util"] }
+tokio = { workspace = true, features = ["io-util", "test-util"] }
 
 # Drives the server over an in-process MCP client against `fake::FakeVenue`.
 [[test]]

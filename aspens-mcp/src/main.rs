@@ -10,6 +10,10 @@ use rmcp::ServiceExt;
 
 const DEFAULT_CONFIG: &str = "~/.aspens-mcp/aspens-mcp.toml";
 
+/// How long `serve` waits, once the client has gone, for sends still in
+/// flight to record their outcomes. Above the SDK's 60 s gRPC timeout.
+const SEND_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(70);
+
 #[derive(Parser)]
 #[command(name = "aspens-mcp", about = "MCP server over the Aspens SDK")]
 struct Cli {
@@ -38,11 +42,26 @@ async fn serve(path: &std::path::Path) -> eyre::Result<()> {
     config::validate_deposit_caps(&cfg, &venue_cfg)?;
     let ledger = Ledger::open(&cfg.state_dir)?;
     let server = Server::new(venue, cfg, markets, ledger);
-    server
+    let in_flight = server.in_flight();
+    let served = server
         .serve(rmcp::transport::stdio())
         .await?
         .waiting()
-        .await?;
+        .await;
+    // The client is gone (stdin closed, or the session ended). A send still
+    // running owns the ledger between its usage and outcome records: let it
+    // finish rather than exit under it.
+    if in_flight.count() > 0 {
+        tracing::info!(sends = in_flight.count(), "waiting for in-flight sends");
+    }
+    if !in_flight.wait_idle(SEND_DRAIN_TIMEOUT).await {
+        tracing::error!(
+            sends = in_flight.count(),
+            "exiting with sends still in flight after {SEND_DRAIN_TIMEOUT:?}; their usage is \
+             recorded, and on restart they show as unknown"
+        );
+    }
+    served?;
     Ok(())
 }
 

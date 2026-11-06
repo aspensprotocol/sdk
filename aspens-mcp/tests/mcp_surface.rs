@@ -337,6 +337,7 @@ async fn limits_reports_usage_from_ledger() {
             side: Side::Buy,
             qty,
             quote,
+            price: 2_500_000,
         };
         l.append(usage(&today, 2_000_000, 30_000_000)).unwrap();
         l.append(usage(&today, 250_000, 1_000_000)).unwrap();
@@ -1608,6 +1609,7 @@ async fn concurrent_orders_cannot_double_spend_daily_cap() {
             side: Side::Sell,
             qty: 5_500_000,
             quote: 0,
+            price: 2_400_000,
         })
         .unwrap();
     })
@@ -1976,4 +1978,109 @@ async fn unknown_guidance_agrees_everywhere() {
         "{cancel}"
     );
     assert!(cancel.contains("pass market_id and side"), "{cancel}");
+}
+
+/// The client goes away (stdin closes) while a send is in flight: the server's
+/// session ends, the send task still runs, and waiting on `in_flight` (as
+/// `serve` does before exiting) sees its outcome recorded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn closing_the_client_mid_send_still_records_the_outcome() {
+    let dir = tempfile::tempdir().unwrap();
+    let v = market_venue();
+    v.push_send(accepted_send(0xc8));
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+    let entered_tx = std::sync::Mutex::new(Some(entered_tx));
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    v.set_on_send(std::sync::Arc::new(move || {
+        if let Some(tx) = entered_tx.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
+        // The hook is synchronous: hand this worker's other tasks (the
+        // session loop among them) to the rest of the runtime while it blocks.
+        tokio::task::block_in_place(|| {
+            let _ = release_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(30));
+        });
+    }));
+
+    let server = Server::new(
+        v,
+        config(dir.path()),
+        limits(),
+        Ledger::open(dir.path()).unwrap(),
+    );
+    let in_flight = server.in_flight();
+    let (server_io, client_io) = tokio::io::duplex(1 << 16);
+    let served = tokio::spawn(async move {
+        let running = server.serve(server_io).await.unwrap();
+        let _ = running.waiting().await;
+    });
+    let client = ().serve(client_io).await.unwrap();
+    let peer = client.peer().clone();
+    let call = tokio::spawn(async move {
+        let mut p = CallToolRequestParams::new("place_limit_order");
+        if let Value::Object(m) = limit_buy("1", "2.5") {
+            p = p.with_arguments(m);
+        }
+        let _ = peer.call_tool(p).await;
+    });
+    entered_rx.await.unwrap();
+    // Closing the client closes the transport, as a closed stdin does.
+    client.cancel().await.unwrap();
+    call.abort();
+    // rmcp gives in-flight handlers 5 s to answer after the transport
+    // closes, then ends the session with them still running.
+    tokio::time::timeout(std::time::Duration::from_secs(20), served)
+        .await
+        .expect("the session did not end when the client went away")
+        .unwrap();
+    assert_eq!(in_flight.count(), 1);
+    assert_eq!(count_kind(dir.path(), "usage"), 1);
+    assert_eq!(count_kind(dir.path(), "sent"), 0);
+
+    release_tx.send(()).unwrap();
+    assert!(in_flight.wait_idle(std::time::Duration::from_secs(5)).await);
+    assert_eq!(in_flight.count(), 0);
+    let lines = ledger_lines(dir.path());
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[1]["kind"], "sent");
+    // The usage has its outcome right after it, so replay adds nothing.
+    assert_eq!(lines[1]["outcome"]["status"], "accepted");
+}
+
+/// A usage record left without its outcome (the process died mid-send) shows
+/// in `my_orders` as an unknown order after a restart, and still counts.
+#[tokio::test]
+async fn orphan_usage_shows_as_unknown_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let today = utc_day(now());
+    {
+        let mut l = Ledger::open(dir.path()).unwrap();
+        l.append(Record::Usage {
+            ts: now(),
+            day: today.clone(),
+            market_id: MARKET.into(),
+            side: Side::Buy,
+            qty: 1_250_000,
+            quote: 3_125_000,
+            price: 2_500_000,
+        })
+        .unwrap();
+    }
+    let h = start_in(dir, fake(), |_| {}, |_| {}).await;
+    let open = h.ok("my_orders", json!({})).await;
+    let orders = open["orders"].as_array().unwrap();
+    assert_eq!(orders.len(), 1, "{open}");
+    assert_eq!(orders[0]["state"], "unknown");
+    assert_eq!(orders[0]["orderId"], Value::Null);
+    assert_eq!(orders[0]["qtyRaw"], "1250000");
+    assert_eq!(orders[0]["priceRaw"], "2500000");
+    let l = h.ok("limits", json!({})).await;
+    assert_eq!(l["markets"][0]["usedToday"]["qtyRaw"], "1250000");
+    assert_eq!(l["markets"][0]["usedToday"]["quoteRaw"], "3125000");
+    // The file still holds the one usage line.
+    assert_eq!(ledger_lines(h.dir()).len(), 1);
 }
