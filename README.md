@@ -12,6 +12,13 @@ The `aspens-cli`, `aspens-repl`, and `aspens-admin` binaries live in this
 workspace; `aspens-cli` and `aspens-repl` ship as prebuilt release binaries
 (see below), and all three can be built from source.
 
+For AI agents, [`aspens-mcp`](aspens-mcp/README.md) is a stdio
+[MCP](https://modelcontextprotocol.io) server over this SDK: an autonomous agent
+reads books and balances, places and cancels orders, and deposits (withdrawals
+only when enabled), within per-market limits set in a config file that the
+agent cannot change. Read its custody warning before giving it a key: the
+limits bound the agent's tool calls, not whoever can read the key file.
+
 ## Install
 
 Install the latest `aspens-cli` and `aspens-repl` (Linux x86_64 / aarch64, macOS Apple Silicon):
@@ -87,12 +94,13 @@ Most commands below require a JWT (set via `--jwt`, `ASPENS_JWT` in `.env`, or t
 
 ## Project Structure
 
-This is a Cargo workspace with four main components:
+This is a Cargo workspace with these main components:
 
 - **`aspens/`** - Core Rust library crate with trading logic and gRPC client
 - **`aspens-cli/`** - Command-line interface binary for scripted operations
 - **`aspens-repl/`** - Interactive REPL binary for manual trading
 - **`aspens-admin/`** - Administrative CLI for stack configuration (chains, tokens, markets)
+- **`aspens-mcp/`** - MCP server so an AI agent can trade within configured limits
 
 ## Prerequisites
 

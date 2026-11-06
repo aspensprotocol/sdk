@@ -39,8 +39,35 @@ bump (see **Versioning** in `README.md`).
   withdraw flows read it from `ASPENS_TRON_API_KEY_<NETWORK>`, beside the
   endpoint's `ASPENS_RPC_URL_<NETWORK>`.
 
+- `commands::trading::book_snapshot::fetch_book_snapshot`: a strict orderbook
+  reader. It collects the stream for a window and returns a `BookState` built
+  by applying every entry, removals included, so an order added and then
+  cancelled or filled inside the window is not the best price.
+  `BookState::best_bid` / `best_ask` / `bids` / `asks` read it.
+- `book_snapshot::marketable_price` and `marketable_price_from_top`: the
+  slippage-capped limit price of a marketable order, from a snapshot or from a
+  best bid / best ask pair (moved here from `aspens-cli`). An error when the
+  side being taken is empty.
+- `commands::trading::balance::fetch_balances` returns the balances as data
+  (`Balances`: per token, per chain `ChainBalanceView`s with wallet, available
+  and locked readings, plus native gas) instead of printing them. Each
+  `ChainBalanceView` carries that chain's token `decimals`, since one symbol can
+  have different decimals on different chains, and a failed reading keeps its
+  reason (`BalanceValue::Error`). `balance_from_config_with_wallets` now prints
+  from it.
+- **`aspens-mcp`**, a new workspace binary: a stdio MCP server over the SDK so
+  an autonomous agent can trade within per-market limits set in config (order
+  and daily qty and quote caps, a price guard against the venue's own book, a
+  settle-address allowlist, optional venue pinning), with a persistent `halt`
+  that only `aspens-mcp resume` lifts. Withdrawals are off unless enabled. See
+  `aspens-mcp/README.md`, including its custody warning.
+
 ### Changed
 
+- `aspens-cli buy-marketable` / `sell-marketable` resolve their price from
+  the strict snapshot (`fetch_book_snapshot` + `marketable_price_from_top`)
+  instead of `fetch_top_of_book`, which keeps the best price of any entry seen
+  in its window even after that entry was cancelled or filled.
 - **BREAKING: `wallet::chain_curve` returns `Result<CurveType>`** (it returned
   `CurveType`). An unknown architecture is an error instead of secp256k1.
 - **BREAKING: `chain_client::ChainClient` has a new `Tron` variant.** The enum

@@ -40,11 +40,18 @@ rmcp.workspace = true
 schemars.workspace = true
 
 [dev-dependencies]
-rmcp = { workspace = true, features = ["client"] }
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 tempfile.workspace = true
+# The rig e2e mines blocks on the anvil forks over JSON-RPC.
+reqwest.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 
 # Drives the server over an in-process MCP client against `fake::FakeVenue`.
 [[test]]
 name = "mcp_surface"
 required-features = ["test-fake"]
+
+# Drives the built binary over stdio against the local rig; every test is
+# #[ignore] and needs RIG=1 (see the file's header).
+[[test]]
+name = "rig_e2e"
