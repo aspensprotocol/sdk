@@ -30,6 +30,10 @@ build-cli:
 build-repl:
     cargo build -p aspens-repl
 
+# Build only the MCP server
+build-mcp:
+    cargo build -p aspens-mcp
+
 # Build only the Admin 
 build-admin:
     cargo build -p aspens-admin
@@ -41,6 +45,10 @@ test:
 # Run tests for core library only
 test-lib:
     cargo test -p aspens
+
+# Run tests for the MCP server only
+test-mcp:
+    cargo test -p aspens-mcp
 
 # Clean build artifacts
 clean:

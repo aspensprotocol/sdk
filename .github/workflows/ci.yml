@@ -60,6 +60,9 @@ jobs:
       - name: Run clippy (REPL)
         run: cargo clippy -p aspens-repl --all-targets --all-features -- -D warnings
 
+      - name: Run clippy (MCP)
+        run: cargo clippy -p aspens-mcp --all-targets --all-features -- -D warnings
+
       - name: Run clippy (admin)
         run: cargo clippy -p aspens-admin --all-targets --all-features -- -D warnings
 
@@ -102,6 +105,9 @@ jobs:
 
       - name: Build REPL
         run: cargo build -p aspens-repl --verbose
+
+      - name: Build MCP server
+        run: cargo build -p aspens-mcp --verbose
 
       - name: Build library with all features
         run: cargo build -p aspens --all-features --verbose
@@ -166,6 +172,9 @@ jobs:
 
       - name: Run library tests with all features
         run: cargo test -p aspens --all-features --verbose
+
+      - name: Run MCP server tests
+        run: cargo test -p aspens-mcp --verbose
 
   doc:
     name: Documentation

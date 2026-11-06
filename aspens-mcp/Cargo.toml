@@ -1,0 +1,34 @@
+[package]
+name = "aspens-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP server over the Aspens SDK: an agent trades within per-market limits set in config"
+publish = false
+
+[lib]
+name = "aspens_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aspens-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# Features declared explicitly so changes to the aspens crate's defaults
+# don't silently affect this binary.
+aspens = { path = "../aspens", default-features = false, features = ["client", "trader", "evm", "solana", "tron"] }
+
+eyre.workspace = true
+clap.workspace = true
+serde.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# Not used until the tools land; declared now so `cargo deny` sees the tree.
+rmcp.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
