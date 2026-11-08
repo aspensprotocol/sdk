@@ -581,6 +581,7 @@ mod tests {
                     ..Default::default()
                 }],
                 session: 3,
+                venue_id: String::new(),
             }),
         });
         let mut book = BookState::default();

@@ -45,7 +45,8 @@ pub struct DeployContractRequest {
     pub chain_network: ::prost::alloc::string::String,
     /// The signed transaction hash of the createInstance function call.
     /// Required for EVM (admin signs+broadcasts the tx locally, then asks
-    /// arborter to confirm + register the result). Empty / omitted for Solana,
+    /// arborter to confirm + register the result). A Tron chain uses the same
+    /// path, and its value is the 64-hex txID. Empty / omitted for Solana,
     /// where arborter signs and submits server-side using its own signer
     /// (the only key that can satisfy the factory's `has_one = owner` check).
     #[prost(string, tag = "2")]
@@ -66,7 +67,7 @@ pub struct DeployContractRequest {
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeployContractResponse {
     /// The address that the instance is deployed to on the specified chain.
-    /// Hex (0x-prefixed) for EVM, base58 for Solana.
+    /// Hex (0x-prefixed) for EVM and Tron, base58 for Solana.
     #[prost(string, tag = "1")]
     pub contract_address: ::prost::alloc::string::String,
     /// Receipt for the on-chain operation. Populated for the Solana
@@ -161,7 +162,8 @@ pub struct SetOperatorFeeRequest {
     /// The chain network whose instance to update. e.g. base-sepolia
     #[prost(string, tag = "1")]
     pub chain_network: ::prost::alloc::string::String,
-    /// Operator-fee recipient address (0x-hex for EVM, base58 for Solana).
+    /// Operator-fee recipient address (0x-hex for EVM and Tron, base58 for
+    /// Solana).
     #[prost(string, tag = "2")]
     pub recipient: ::prost::alloc::string::String,
     /// Operator fee in basis points. Combined with maintenance bps the contract
@@ -172,7 +174,10 @@ pub struct SetOperatorFeeRequest {
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SetOperatorFeeResponse {
     /// On-chain tx hash / signature for the setOperatorFee call (0x-hex EVM,
-    /// base58 Solana).
+    /// base58 Solana). A Tron chain is refused: the call fails with an error
+    /// ("not implemented for this chain yet") and no response is returned, so
+    /// the operator fee on a Tron instance is set out-of-band by its
+    /// operator admin.
     #[prost(string, tag = "1")]
     pub tx_signature: ::prost::alloc::string::String,
 }
@@ -181,7 +186,7 @@ pub struct SetOperatorAdminRequest {
     /// The chain network whose instance to update.
     #[prost(string, tag = "1")]
     pub chain_network: ::prost::alloc::string::String,
-    /// The new operator_admin key (0x-hex for EVM, base58 for Solana).
+    /// The new operator_admin key (0x-hex for EVM and Tron, base58 for Solana).
     #[prost(string, tag = "2")]
     pub new_admin: ::prost::alloc::string::String,
 }
@@ -223,13 +228,18 @@ pub struct Configuration {
     /// when an order is refused with "session changed".
     #[prost(uint64, tag = "3")]
     pub session: u64,
+    /// A stable id for this deployment: 32 lowercase hex characters. It is
+    /// part of the signed delegation text for read-only order-status access, so
+    /// a delegation made for one venue cannot be replayed on another.
+    #[prost(string, tag = "4")]
+    pub venue_id: ::prost::alloc::string::String,
 }
 /// Represents the trading instance details
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TradeContract {
-    /// The chain address of the trading instance: 0x-hex for EVM, the
+    /// The chain address of the trading instance: 0x-hex for EVM and Tron, the
     /// program/instance address in base58 for Solana.
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
@@ -245,7 +255,8 @@ pub struct RpcEndpoint {
     pub label: ::prost::alloc::string::String,
     /// Full URL. MASKED on read paths: query values, userinfo, and every
     /// non-empty path segment are replaced with "\*\*\*" (scheme + host stay
-    /// visible; the endpoint's identity survives via label + host).
+    /// visible; the endpoint's identity survives via label + host). For a
+    /// "tron" chain this is the HTTP base URL, not a JSON-RPC path.
     #[prost(string, tag = "2")]
     pub url: ::prost::alloc::string::String,
     #[prost(enumeration = "RpcAuthScheme", tag = "3")]
@@ -268,10 +279,13 @@ pub struct RpcEndpoint {
 #[serde(rename_all = "camelCase")]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Chain {
-    /// The chain's architecture: exactly "evm" or "solana", lowercase (the
-    /// server lowercases on write). Any other string is accepted by SetChain
-    /// and only fails later, at deploy or listener start; an empty string is
-    /// treated as "evm" on the deploy paths.
+    /// The chain's architecture: exactly "evm", "solana" or "tron", lowercase
+    /// (the server lowercases on write). An empty string is treated as "evm".
+    /// Any other value is refused by SetChain. A "tron" chain uses the EVM
+    /// address and contract formats, but its transport is Tron's HTTP API: the
+    /// endpoint url (see RpcEndpoint.url) is the HTTP base URL, for example
+    /// <https://api.trongrid.io,> with JSON-RPC at <base>/jsonrpc and the native
+    /// API at <base>/wallet and <base>/walletsolidity.
     #[prost(string, tag = "1")]
     pub architecture: ::prost::alloc::string::String,
     /// The canonical name of the chain (e.g., 'Ethereum Mainnet' | 'Solana Devnet')

@@ -17,8 +17,14 @@ pub struct WithdrawRequest {
     pub amount: ::prost::alloc::string::String,
     /// Signature by `account`'s key over the canonical request bytes
     /// `"<network>|<token>|<account>|<amount>"`
-    /// — EIP-191 personal-sign (secp256k1, 65 bytes) on EVM, raw Ed25519 (64
-    /// bytes) on Solana; the curve follows `network`'s architecture. The server
+    /// — EIP-191 personal-sign (secp256k1, 65 bytes) on EVM, and raw Ed25519
+    /// (64 bytes) on Solana; the curve and prefix follow `network`'s
+    /// architecture. On Tron the message is already text and is signed as is:
+    /// digest = keccak256("\x19TRON Signed Message:\n" || decimal byte length of
+    /// the message || message), signature 65 bytes r||s||v. An EIP-191
+    /// signature is rejected on a Tron network, and a TRON-prefixed one on an
+    /// EVM network. On Tron, `account` is the 20-byte 0x-hex address, never the
+    /// base58 `T…` display form. The server
     /// rebuilds those bytes from the request it receives: each string field is
     /// TRIMMED of surrounding whitespace and `amount` is re-serialized from the
     /// parsed u128, so a signature over "0x64", "00100" or " 100" never
@@ -67,7 +73,13 @@ pub struct CancelOrderRequest {
     /// come from the resting order's `quote_account_address`; an ASK committed
     /// base, so it is checked on the base chain's curve and must come from its
     /// `base_account_address`. EVM chains verify EIP-191 personal-sign (the
-    /// full 65-byte r||s||v); Solana verifies raw Ed25519 (64 bytes). Any other
+    /// full 65-byte r||s||v) over those bytes; Solana verifies raw Ed25519 (64
+    /// bytes) over them. Tron signs TEXT: the lowercase hex, without `0x`, of
+    /// those same bytes, with digest = keccak256("\x19TRON Signed Message:\n" ||
+    /// decimal length of the hex text || hex text) and a 65-byte r||s||v
+    /// signature; a signature over the raw binary bytes is rejected on Tron, an
+    /// EIP-191 signature is rejected on a Tron leg, and a TRON-prefixed one on an
+    /// EVM leg. Tron accounts are 20-byte lowercase 0x-hex, as on EVM. Any other
     /// signer, or any signed field that differs from the resting order's, is
     /// rejected as an invalid signature — it never cancels a different order.
     #[prost(bytes = "vec", tag = "2")]
@@ -116,9 +128,17 @@ pub struct SendOrderRequest {
     pub order: ::core::option::Option<Order>,
     /// Valid signature over the encoded `Order` — its protobuf serialization,
     /// byte for byte as sent — (EIP-191 personal-sign on EVM, full 65 bytes;
-    /// raw Ed25519 on Solana). This is the ONLY thing that authenticates order
-    /// entry, and it now covers every input the arborter needs — which is what
-    /// let the sibling `OrderAuthorization` message go away entirely.
+    /// raw Ed25519 on Solana). On Tron the signed text is the lowercase hex,
+    /// without `0x`, of those same bytes, and the digest is
+    /// keccak256("\x19TRON Signed Message:\n" || decimal length of the hex text ||
+    /// hex text), a 65-byte r||s||v signature; a signature over the raw binary
+    /// bytes is rejected on Tron. The prefix follows the architecture of the
+    /// chain the signature is checked on: an EIP-191 signature is rejected on a
+    /// Tron leg, and a TRON-prefixed one on an EVM leg. Tron accounts are 20-byte
+    /// lowercase 0x-hex, as on EVM; the base58 `T…` form is display-only.
+    /// This is the ONLY thing that authenticates order entry, and it now covers
+    /// every input the arborter needs — which is what let the sibling
+    /// `OrderAuthorization` message go away entirely.
     ///
     /// NOTE: `authorization` (field 3) and its `OrderAuthorization` message were
     /// removed. It ended up holding exactly two things, and both were wrong to
@@ -153,7 +173,8 @@ pub struct Order {
     /// Identity the market: concat(base_chain_id "::" token_address "::" quote_chain_id "::" token_address)
     #[prost(string, tag = "4")]
     pub market_id: ::prost::alloc::string::String,
-    /// User's pubkey (address) on the Base chain.
+    /// User's pubkey (address) on the Base chain. On a Tron chain this is the
+    /// 0x-hex form, never the base58 `T…` form.
     ///
     /// Casing contract: this field is part of the SIGNED order, so when the
     /// server echoes this message back (`SendOrderResponse.order`) it carries the
@@ -292,8 +313,8 @@ pub struct Trade {
     /// The maker's base chain wallet address.
     ///
     /// All four wallet addresses on this message are CANONICALIZED by the server:
-    /// EVM addresses arrive as lowercase hex regardless of how the trader
-    /// submitted them (an EIP-55 checksummed submission is lowercased), and
+    /// EVM and Tron addresses arrive as lowercase 0x-hex regardless of how the
+    /// trader submitted them (an EIP-55 checksummed submission is lowercased), and
     /// base58 (Solana) addresses pass through byte-exact, case significant. The
     /// same rule covers `OrderbookEntry`'s maker addresses. The ONE exception on
     /// the wire is `Order.base_account_address` / `Order.quote_account_address`
@@ -401,7 +422,8 @@ pub struct OrderbookEntry {
     #[prost(enumeration = "Side", tag = "5")]
     pub side: i32,
     /// The maker's base chain wallet address. Canonicalized by the server —
-    /// EVM lowercased hex, base58 byte-exact — same rule as `Trade`'s address
+    /// EVM and Tron lowercased 0x-hex, base58 byte-exact — same rule as
+    /// `Trade`'s address
     /// fields; see `Trade.maker_base_address` for the full contract, including
     /// the one byte-verbatim exception (`Order`'s echoed addresses).
     #[prost(string, tag = "6")]
@@ -420,6 +442,149 @@ pub struct OrderbookEntry {
     /// published: it is visible only to the order's creator.
     #[prost(enumeration = "OrderState", tag = "9")]
     pub state: i32,
+}
+/// A read-only delegation: the owner authorizes `delegate_pubkey` to read
+/// their order status for a bounded time, by signing the delegation text.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReadDelegation {
+    /// A configured network name; selects the signature scheme.
+    #[prost(string, tag = "1")]
+    pub owner_network: ::prost::alloc::string::String,
+    /// EVM/Tron 0x-hex, Solana base58.
+    #[prost(string, tag = "2")]
+    pub owner: ::prost::alloc::string::String,
+    /// 32-byte Ed25519 public key of the delegate.
+    #[prost(bytes = "vec", tag = "3")]
+    pub delegate_pubkey: ::prost::alloc::vec::Vec<u8>,
+    /// Unix seconds.
+    #[prost(uint64, tag = "4")]
+    pub issued: u64,
+    /// Unix seconds.
+    #[prost(uint64, tag = "5")]
+    pub expires: u64,
+    /// The owner's signature over the delegation text.
+    #[prost(bytes = "vec", tag = "6")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
+}
+/// The query the delegate signs. The signature covers exactly the prost
+/// encoding of this message.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MyOrdersQuery {
+    /// Unix milliseconds; must be fresh (see the server's timestamp window).
+    #[prost(uint64, tag = "1")]
+    pub timestamp_ms: u64,
+    /// Exactly 16 bytes, unique per query.
+    #[prost(bytes = "vec", tag = "2")]
+    pub nonce: ::prost::alloc::vec::Vec<u8>,
+    /// Order ids to fetch (`GetMyOrders`, 1 to 100 ids).
+    #[prost(bytes = "vec", repeated, tag = "3")]
+    pub order_ids: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+    /// Restrict the listing to one market; empty means all markets.
+    #[prost(string, tag = "4")]
+    pub market_id: ::prost::alloc::string::String,
+    /// Include orders that have closed (`ListMyOrders`).
+    #[prost(bool, tag = "5")]
+    pub include_closed: bool,
+    /// Opaque page cursor from a previous `next_cursor`; empty for the first page.
+    #[prost(bytes = "vec", tag = "6")]
+    pub cursor: ::prost::alloc::vec::Vec<u8>,
+    /// Page size for `ListMyOrders`; 0 means the default of 100, maximum 500.
+    #[prost(uint32, tag = "7")]
+    pub limit: u32,
+}
+/// Request for `GetMyOrders` and `ListMyOrders`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MyOrdersRequest {
+    /// 1 to 4 delegations, all naming the same delegate key.
+    #[prost(message, repeated, tag = "1")]
+    pub delegations: ::prost::alloc::vec::Vec<ReadDelegation>,
+    /// The query being authorized.
+    #[prost(message, optional, tag = "2")]
+    pub query: ::core::option::Option<MyOrdersQuery>,
+    /// 64-byte Ed25519 signature by the delegate over the prost encoding of `query`.
+    #[prost(bytes = "vec", tag = "3")]
+    pub query_signature: ::prost::alloc::vec::Vec<u8>,
+}
+/// One fill against one of the caller's orders.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MyFill {
+    /// 32-byte fill identifier.
+    #[prost(bytes = "vec", tag = "1")]
+    pub fill_id: ::prost::alloc::vec::Vec<u8>,
+    /// Pair-decimal units, as a decimal integer string.
+    #[prost(string, tag = "2")]
+    pub price: ::prost::alloc::string::String,
+    /// Pair units.
+    #[prost(string, tag = "3")]
+    pub qty: ::prost::alloc::string::String,
+    /// Unix milliseconds of the match.
+    #[prost(uint64, tag = "4")]
+    pub match_ts_ms: u64,
+    /// The caller's role in this fill.
+    #[prost(enumeration = "FillRole", tag = "5")]
+    pub role: i32,
+}
+/// One of the caller's orders, as the venue reports it.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MyOrder {
+    /// The 32-byte order id this entry answers for.
+    #[prost(bytes = "vec", tag = "1")]
+    pub order_id: ::prost::alloc::vec::Vec<u8>,
+    /// False when the venue has no record of the id for this caller; every
+    /// other field is then its default.
+    #[prost(bool, tag = "2")]
+    pub found: bool,
+    #[prost(string, tag = "3")]
+    pub market_id: ::prost::alloc::string::String,
+    #[prost(enumeration = "Side", tag = "4")]
+    pub side: i32,
+    #[prost(enumeration = "MyOrderKind", tag = "5")]
+    pub kind: i32,
+    #[prost(bool, tag = "6")]
+    pub is_hidden: bool,
+    #[prost(bool, tag = "7")]
+    pub is_post_only: bool,
+    /// Pair-decimal units; empty for a market order.
+    #[prost(string, tag = "8")]
+    pub price: ::prost::alloc::string::String,
+    /// False when the initial quantity cannot be recovered.
+    #[prost(bool, tag = "9")]
+    pub initial_qty_known: bool,
+    /// Pair units; meaningful when `initial_qty_known`.
+    #[prost(string, tag = "10")]
+    pub initial_qty: ::prost::alloc::string::String,
+    /// Pair units.
+    #[prost(string, tag = "11")]
+    pub filled_qty: ::prost::alloc::string::String,
+    /// Pair units; empty when `initial_qty_known` is false.
+    #[prost(string, tag = "12")]
+    pub remaining_qty: ::prost::alloc::string::String,
+    #[prost(enumeration = "MyOrderState", tag = "13")]
+    pub state: i32,
+    /// Unix milliseconds.
+    #[prost(uint64, tag = "14")]
+    pub created_at_ms: u64,
+    /// Unix milliseconds; 0 while the order is open.
+    #[prost(uint64, tag = "15")]
+    pub closed_at_ms: u64,
+    /// The caller's own base-leg address, in canonical form.
+    #[prost(string, tag = "16")]
+    pub base_address: ::prost::alloc::string::String,
+    /// The caller's own quote-leg address, in canonical form.
+    #[prost(string, tag = "17")]
+    pub quote_address: ::prost::alloc::string::String,
+    /// Fills against this order, ascending by `match_ts_ms`, then `fill_id`.
+    #[prost(message, repeated, tag = "18")]
+    pub fills: ::prost::alloc::vec::Vec<MyFill>,
+}
+/// Response for `GetMyOrders` and `ListMyOrders`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MyOrdersResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub orders: ::prost::alloc::vec::Vec<MyOrder>,
+    /// Empty means the last page. Set only by `ListMyOrders`.
+    #[prost(bytes = "vec", tag = "2")]
+    pub next_cursor: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -556,6 +721,121 @@ impl TradeRole {
             "TRADE_ROLE_UNSPECIFIED" => Some(Self::Unspecified),
             "MAKER" => Some(Self::Maker),
             "TAKER" => Some(Self::Taker),
+            _ => None,
+        }
+    }
+}
+/// The lifecycle state of one of the caller's orders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum MyOrderState {
+    Unspecified = 0,
+    /// Resting, nothing filled yet.
+    Open = 1,
+    /// Resting, partially filled.
+    PartiallyFilled = 2,
+    /// Completely filled.
+    Filled = 3,
+    /// Cancelled by its owner before completing.
+    Cancelled = 4,
+    /// Expired before completing.
+    Expired = 5,
+    /// Dropped when the arborter restarted while the order was resting.
+    DroppedByRestart = 6,
+    /// Closed by matching against other orders.
+    Traded = 7,
+}
+impl MyOrderState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "MY_ORDER_STATE_UNSPECIFIED",
+            Self::Open => "MY_ORDER_STATE_OPEN",
+            Self::PartiallyFilled => "MY_ORDER_STATE_PARTIALLY_FILLED",
+            Self::Filled => "MY_ORDER_STATE_FILLED",
+            Self::Cancelled => "MY_ORDER_STATE_CANCELLED",
+            Self::Expired => "MY_ORDER_STATE_EXPIRED",
+            Self::DroppedByRestart => "MY_ORDER_STATE_DROPPED_BY_RESTART",
+            Self::Traded => "MY_ORDER_STATE_TRADED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "MY_ORDER_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "MY_ORDER_STATE_OPEN" => Some(Self::Open),
+            "MY_ORDER_STATE_PARTIALLY_FILLED" => Some(Self::PartiallyFilled),
+            "MY_ORDER_STATE_FILLED" => Some(Self::Filled),
+            "MY_ORDER_STATE_CANCELLED" => Some(Self::Cancelled),
+            "MY_ORDER_STATE_EXPIRED" => Some(Self::Expired),
+            "MY_ORDER_STATE_DROPPED_BY_RESTART" => Some(Self::DroppedByRestart),
+            "MY_ORDER_STATE_TRADED" => Some(Self::Traded),
+            _ => None,
+        }
+    }
+}
+/// How the order was placed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum MyOrderKind {
+    Unspecified = 0,
+    Limit = 1,
+    Market = 2,
+    Discretionary = 3,
+}
+impl MyOrderKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "MY_ORDER_KIND_UNSPECIFIED",
+            Self::Limit => "MY_ORDER_KIND_LIMIT",
+            Self::Market => "MY_ORDER_KIND_MARKET",
+            Self::Discretionary => "MY_ORDER_KIND_DISCRETIONARY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "MY_ORDER_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "MY_ORDER_KIND_LIMIT" => Some(Self::Limit),
+            "MY_ORDER_KIND_MARKET" => Some(Self::Market),
+            "MY_ORDER_KIND_DISCRETIONARY" => Some(Self::Discretionary),
+            _ => None,
+        }
+    }
+}
+/// The caller's role in one fill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum FillRole {
+    Unspecified = 0,
+    Maker = 1,
+    Taker = 2,
+}
+impl FillRole {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "FILL_ROLE_UNSPECIFIED",
+            Self::Maker => "FILL_ROLE_MAKER",
+            Self::Taker => "FILL_ROLE_TAKER",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "FILL_ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+            "FILL_ROLE_MAKER" => Some(Self::Maker),
+            "FILL_ROLE_TAKER" => Some(Self::Taker),
             _ => None,
         }
     }
@@ -791,6 +1071,70 @@ pub mod arborter_service_client {
             req.extensions_mut()
                 .insert(
                     GrpcMethod::new("xyz.aspens.arborter.v1.ArborterService", "Withdraw"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Owner-signed read of the caller's own orders, by order id. The caller
+        /// proves delegated read access with `MyOrdersRequest.delegations` and a
+        /// query signature; every auth failure is UNAUTHENTICATED.
+        pub async fn get_my_orders(
+            &mut self,
+            request: impl tonic::IntoRequest<super::MyOrdersRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MyOrdersResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter.v1.ArborterService/GetMyOrders",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter.v1.ArborterService",
+                        "GetMyOrders",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Owner-signed, paginated listing of the caller's own orders, same auth as
+        /// `GetMyOrders`. Pass `MyOrdersQuery.cursor` from the previous page's
+        /// `next_cursor` to continue.
+        pub async fn list_my_orders(
+            &mut self,
+            request: impl tonic::IntoRequest<super::MyOrdersRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::MyOrdersResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/xyz.aspens.arborter.v1.ArborterService/ListMyOrders",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "xyz.aspens.arborter.v1.ArborterService",
+                        "ListMyOrders",
+                    ),
                 );
             self.inner.unary(req, path, codec).await
         }

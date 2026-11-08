@@ -31,6 +31,9 @@ pub mod deposit;
 /// copy of the id the arborter derives from the signed order. Nothing here
 /// goes on the wire. (Despite the name, nothing here signs or locks.)
 pub mod gasless;
+/// Owner-signed reads of the caller's own orders: a read delegation, the
+/// delegate key, and `get_my_orders_with_wallet` / `list_my_orders_with_wallet`.
+pub mod my_orders;
 /// Build, sign, and submit a buy/sell order envelope.
 pub mod send_order;
 /// Subscribe to the orderbook stream for a given market.

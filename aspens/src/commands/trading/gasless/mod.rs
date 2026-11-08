@@ -801,6 +801,7 @@ pub(crate) mod tests {
                 // Distinct from 0, the unset value, so a builder that dropped
                 // it cannot pass by coincidence.
                 session: 4_242,
+                venue_id: String::new(),
             }),
         };
         (config, market)

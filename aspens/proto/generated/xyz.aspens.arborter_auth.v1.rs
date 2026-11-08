@@ -75,6 +75,10 @@ pub mod auth_service_client {
     /// * 0x-prefixed hex  → EVM, signature verified as EIP-712
     /// * base58           → Solana, signature verified as raw Ed25519
     ///
+    /// There is no Tron scheme here: a TRON-prefixed signature is never accepted.
+    /// An admin key authenticates by its address format above, whichever chains
+    /// it also trades on.
+    ///
     /// Consumers should not need to know which curve was used — the same
     /// JWT is minted either way and carries the address as an opaque string.
     ///

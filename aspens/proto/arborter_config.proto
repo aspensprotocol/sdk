@@ -250,6 +250,10 @@ message Configuration {
   // order signed before a restart is refused after it. Clients re-read it
   // when an order is refused with "session changed".
   uint64 session = 3;
+  // A stable id for this deployment: 32 lowercase hex characters. It is
+  // part of the signed delegation text for read-only order-status access, so
+  // a delegation made for one venue cannot be replayed on another.
+  string venue_id = 4;
 }
 
 // Represents the trading instance details

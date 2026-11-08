@@ -99,6 +99,7 @@ fn venue_config() -> GetConfigResponse {
                 pair_decimals: PAIR_DECIMALS as i32,
             }],
             session: SESSION,
+            venue_id: String::new(),
         }),
     }
 }
