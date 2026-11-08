@@ -14,6 +14,20 @@ service ArborterService {
   // arborter freezes the settled funds and returns an owner-signed voucher the
   // holder submits to MidribV3.withdraw(voucher, signature).
   rpc Withdraw(WithdrawRequest) returns (WithdrawResponse) {}
+  // Owner-signed read of the caller's own orders, by order id. The caller
+  // proves delegated read access with `MyOrdersRequest.delegations` and a
+  // query signature; every auth failure is UNAUTHENTICATED.
+  rpc GetMyOrders(MyOrdersRequest) returns (MyOrdersResponse);
+  // Owner-signed, paginated listing of the caller's own orders, same auth as
+  // `GetMyOrders`. Pass `MyOrdersQuery.cursor` from the previous page's
+  // `next_cursor` to continue.
+  //
+  // `MY_ORDER_STATE_TRADED` entries (orders the venue knows from their fills
+  // alone, with no order record) are listed whatever `include_closed` is, and
+  // only on the first page (empty `cursor`). They come after that page's
+  // `limit` orders and do not count towards it: at most 500 of them, from
+  // fills matched in the last 7 days, filtered by `market_id` when set.
+  rpc ListMyOrders(MyOrdersRequest) returns (MyOrdersResponse);
 }
 
 /* rpc: Withdraw */
@@ -441,4 +455,143 @@ message OrderbookEntry {
   OrderState state = 9;
   // How the maker chose to place it (`Order.post_only`) is deliberately not
   // published: it is visible only to the order's creator.
+}
+
+// A read-only delegation: the owner authorizes `delegate_pubkey` to read
+// their order status for a bounded time, by signing the delegation text.
+message ReadDelegation {
+  // A configured network name; selects the signature scheme.
+  string owner_network = 1;
+  // EVM/Tron 0x-hex, Solana base58.
+  string owner = 2;
+  // 32-byte Ed25519 public key of the delegate.
+  bytes delegate_pubkey = 3;
+  // Unix seconds.
+  uint64 issued = 4;
+  // Unix seconds.
+  uint64 expires = 5;
+  // The owner's signature over the delegation text.
+  bytes signature = 6;
+}
+
+// The query the delegate signs. The signature covers exactly the prost
+// encoding of this message.
+message MyOrdersQuery {
+  // Unix milliseconds; must be fresh (see the server's timestamp window).
+  uint64 timestamp_ms = 1;
+  // Exactly 16 bytes, unique per query.
+  bytes nonce = 2;
+  // Order ids to fetch (`GetMyOrders`, 1 to 100 ids).
+  repeated bytes order_ids = 3;
+  // Restrict the listing to one market; empty means all markets.
+  string market_id = 4;
+  // Include orders that have closed (`ListMyOrders`).
+  bool include_closed = 5;
+  // Opaque page cursor from a previous `next_cursor`; empty for the first page.
+  bytes cursor = 6;
+  // Page size for `ListMyOrders`; 0 means the default of 100, maximum 500.
+  uint32 limit = 7;
+}
+
+// Request for `GetMyOrders` and `ListMyOrders`.
+message MyOrdersRequest {
+  // 1 to 4 delegations, all naming the same delegate key.
+  repeated ReadDelegation delegations = 1;
+  // The query being authorized.
+  MyOrdersQuery query = 2;
+  // 64-byte Ed25519 signature by the delegate over the prost encoding of `query`.
+  bytes query_signature = 3;
+}
+
+// The lifecycle state of one of the caller's orders.
+enum MyOrderState {
+  MY_ORDER_STATE_UNSPECIFIED = 0;
+  // Resting, nothing filled yet.
+  MY_ORDER_STATE_OPEN = 1;
+  // Resting, partially filled.
+  MY_ORDER_STATE_PARTIALLY_FILLED = 2;
+  // Completely filled.
+  MY_ORDER_STATE_FILLED = 3;
+  // Cancelled by its owner before completing.
+  MY_ORDER_STATE_CANCELLED = 4;
+  // Expired before completing.
+  MY_ORDER_STATE_EXPIRED = 5;
+  // Dropped when the arborter restarted while the order was resting.
+  MY_ORDER_STATE_DROPPED_BY_RESTART = 6;
+  // Closed by matching against other orders.
+  MY_ORDER_STATE_TRADED = 7;
+}
+
+// How the order was placed.
+enum MyOrderKind {
+  MY_ORDER_KIND_UNSPECIFIED = 0;
+  MY_ORDER_KIND_LIMIT = 1;
+  MY_ORDER_KIND_MARKET = 2;
+  MY_ORDER_KIND_DISCRETIONARY = 3;
+}
+
+// The caller's role in one fill.
+enum FillRole {
+  FILL_ROLE_UNSPECIFIED = 0;
+  FILL_ROLE_MAKER = 1;
+  FILL_ROLE_TAKER = 2;
+}
+
+// One fill against one of the caller's orders.
+message MyFill {
+  // 32-byte fill identifier.
+  bytes fill_id = 1;
+  // Pair-decimal units, as a decimal integer string.
+  string price = 2;
+  // Pair units.
+  string qty = 3;
+  // Unix milliseconds of the match.
+  uint64 match_ts_ms = 4;
+  // The caller's role in this fill.
+  FillRole role = 5;
+}
+
+// One of the caller's orders, as the venue reports it.
+message MyOrder {
+  // The 32-byte order id this entry answers for.
+  bytes order_id = 1;
+  // False when the venue has no record of the id for this caller; every
+  // other field is then its default.
+  bool found = 2;
+  string market_id = 3;
+  Side side = 4;
+  MyOrderKind kind = 5;
+  bool is_hidden = 6;
+  bool is_post_only = 7;
+  // Pair-decimal units; empty for a market order.
+  string price = 8;
+  // False when the order has no initial quantity to report: a
+  // `MY_ORDER_STATE_TRADED` order (known from its fills alone), or a market
+  // bid, whose signed quantity bounds nothing (its quote budget does). A
+  // closed market bid is FILLED if anything filled, else EXPIRED.
+  bool initial_qty_known = 9;
+  // Pair units; meaningful when `initial_qty_known`.
+  string initial_qty = 10;
+  // Pair units.
+  string filled_qty = 11;
+  // Pair units; empty when `initial_qty_known` is false.
+  string remaining_qty = 12;
+  MyOrderState state = 13;
+  // Unix milliseconds.
+  uint64 created_at_ms = 14;
+  // Unix milliseconds; 0 while the order is open.
+  uint64 closed_at_ms = 15;
+  // The caller's own base-leg address, in canonical form.
+  string base_address = 16;
+  // The caller's own quote-leg address, in canonical form.
+  string quote_address = 17;
+  // Fills against this order, ascending by `match_ts_ms`, then `fill_id`.
+  repeated MyFill fills = 18;
+}
+
+// Response for `GetMyOrders` and `ListMyOrders`.
+message MyOrdersResponse {
+  repeated MyOrder orders = 1;
+  // Empty means the last page. Set only by `ListMyOrders`.
+  bytes next_cursor = 2;
 }
