@@ -45,6 +45,9 @@ tempfile.workspace = true
 # The rig e2e mines blocks on the anvil forks over JSON-RPC.
 reqwest.workspace = true
 tokio = { workspace = true, features = ["io-util", "test-util"] }
+# The order-status rig e2e reads GetMyOrders' raw bytes to check the wire.
+bytes.workspace = true
+prost.workspace = true
 
 # Drives the server over an in-process MCP client against `fake::FakeVenue`.
 [[test]]
@@ -55,3 +58,8 @@ required-features = ["test-fake"]
 # #[ignore] and needs RIG=1 (see the file's header).
 [[test]]
 name = "rig_e2e"
+
+# Order status on the local rig; every test is #[ignore] and needs RIG=1 (see
+# the file's header).
+[[test]]
+name = "order_status_rig_e2e"
