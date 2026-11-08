@@ -275,8 +275,9 @@ pub fn stale_order(
     Value::Object(m)
 }
 
-/// One of the agent's fills, on its order `order_id`.
-pub fn fill(market_id: &str, order_id: &str, side: Side, f: &OrderFill, d: u32) -> Value {
+/// One fill of the agent's order `order_id`. `side` is `None` for a
+/// fills-only (`traded`) order, whose side the venue cannot say.
+pub fn fill(market_id: &str, order_id: &str, side: Option<Side>, f: &OrderFill, d: u32) -> Value {
     let mut m = object(json!({
         "marketId": market_id,
         "orderId": order_id,

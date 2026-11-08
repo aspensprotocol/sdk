@@ -96,7 +96,9 @@ Read:
   remaining quantity, fills); filter `open`, `closed` or `all`.
 - `get_order`: one of those orders by id, with its fills.
 - `my_fills`: your fills on a market, maker and taker, each with its order and fill id, newest
-  last. It covers open orders and orders closed in the last 7 days.
+  last. It covers open orders and orders closed in the last 7 days. A fill of a `traded` order
+  (one the venue knows from its fills alone) has `side: null`: the venue cannot say which side it
+  was.
 - `account_status`: your addresses per curve, which keys are loaded, venue reachability, halt
   state and reason, whether the venue is pinned, and `venueTrust`: with no `[venue]` pin it says
   the `stack_url` endpoint is trusted.

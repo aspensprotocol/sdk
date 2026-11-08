@@ -280,6 +280,22 @@ fn unknown() -> SentOutcome {
 
 /// One of the agent's orders as the venue's order-status RPCs report it.
 /// `remaining` is `initial - filled`; amounts are pair units.
+/// A fills-only (`TRADED`) entry exactly as the venue sends one: side 0, no
+/// market, kind, price or size, `initial_qty_known = false`; only its fills
+/// and their sum.
+fn fills_only(b: u8, fills: Vec<MyFill>) -> MyOrder {
+    let filled: u128 = fills.iter().map(|f| f.qty.parse::<u128>().unwrap()).sum();
+    MyOrder {
+        order_id: id(b).to_vec(),
+        found: true,
+        state: MyOrderState::Traded as i32,
+        initial_qty_known: false,
+        filled_qty: filled.to_string(),
+        fills,
+        ..Default::default()
+    }
+}
+
 fn my_order(
     b: u8,
     side: arborter_pb::Side,
@@ -510,20 +526,15 @@ async fn my_orders_derives_states() {
         200_000,
         vec![my_fill(0x04, 200_000, 2_400_000, 6_000, FillRole::Maker)],
     ));
-    // The venue lost this one's accepted event: it knows the fills only.
-    let mut traded = my_order(
-        0xdd,
-        arborter_pb::Side::Ask,
-        MyOrderState::Traded,
-        2_700_000,
-        900_000,
-        500_000,
-        vec![my_fill(0x05, 500_000, 2_700_000, 5_000, FillRole::Maker)],
+    // The venue lost this one's accepted event: it knows the fills only, and
+    // sends it exactly as `fills_only` builds it (no side, market or size).
+    v.set_fills_only_order(
+        fills_only(
+            0xdd,
+            vec![my_fill(0x05, 500_000, 2_700_000, 5_000, FillRole::Maker)],
+        ),
+        MARKET,
     );
-    traded.initial_qty_known = false;
-    traded.initial_qty = String::new();
-    traded.remaining_qty = String::new();
-    v.set_order(traded);
     let probe = v.clone();
     let h = start(v, |l| {
         l.append(sent(Side::Buy, 1_200_000, 2_500_000, accepted(0xaa)))
@@ -901,6 +912,67 @@ async fn my_fills_come_from_the_venue() {
         probe.calls()
     );
 }
+/// A fills-only (`TRADED`) order, as the venue really sends it, never fails
+/// a read: `my_orders`, `get_order` and `my_fills` all still answer, and its
+/// fill is in `my_fills` (the venue already filtered it by market) with no
+/// side, since the venue cannot say which side it was.
+#[tokio::test]
+async fn a_fills_only_order_never_fails_a_read() {
+    let v = fake();
+    v.set_order(my_order(
+        0xaa,
+        arborter_pb::Side::Bid,
+        MyOrderState::PartiallyFilled,
+        2_500_000,
+        1_200_000,
+        300_000,
+        vec![my_fill(0x71, 300_000, 2_500_000, 7_000, FillRole::Maker)],
+    ));
+    // Placed by other software: not in this server's ledger at all.
+    v.set_fills_only_order(
+        fills_only(
+            0xee,
+            vec![
+                my_fill(0x72, 40_000, 2_560_000, 8_000, FillRole::Taker),
+                my_fill(0x73, 90_000, 2_550_000, 9_000, FillRole::Maker),
+            ],
+        ),
+        MARKET,
+    );
+    // Another market's fills-only order: the venue filters it out by market.
+    v.set_fills_only_order(
+        fills_only(
+            0xef,
+            vec![my_fill(0x74, 60_000, 2_540_000, 6_000, FillRole::Maker)],
+        ),
+        "another-market",
+    );
+    let h = start(v, |l| {
+        l.append(sent(Side::Buy, 1_200_000, 2_500_000, accepted(0xaa)))
+            .unwrap();
+    })
+    .await;
+
+    let all = h.ok("my_orders", json!({"status": "all"})).await;
+    assert_eq!(by_id(&all, &id_hex(0xaa))["state"], "partially_filled");
+    let one = h.ok("get_order", json!({"order_id": id_hex(0xaa)})).await;
+    assert_eq!(one["filledRaw"], "300000");
+
+    let f = h.ok("my_fills", json!({"market_id": MARKET})).await;
+    let fills = f["fills"].as_array().unwrap();
+    let ids: Vec<&str> = fills
+        .iter()
+        .map(|x| x["fillId"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec![id_hex(0x71), id_hex(0x72), id_hex(0x73)], "{f}");
+    assert_eq!(fills[0]["side"], "buy");
+    assert_eq!(fills[1]["orderId"], id_hex(0xee));
+    assert_eq!(fills[1]["side"], Value::Null);
+    assert_eq!(fills[1]["role"], "taker");
+    assert_eq!(fills[1]["qtyRaw"], "40000");
+    assert_eq!(fills[2]["priceRaw"], "2550000");
+}
+
 #[tokio::test]
 async fn top_of_book_and_orderbook() {
     let v = fake();

@@ -499,7 +499,9 @@ impl<V: Venue> Server<V> {
             .list_orders(Some(market_id.clone()), true)
             .await?;
         let mut out: Vec<(u64, Option<String>, Value)> = Vec::new();
-        for o in orders.iter().filter(|o| o.market_id == market_id) {
+        // The venue already filtered by market, fills-only (`traded`) orders
+        // included, which it reports with no market of their own.
+        for o in &orders {
             for f in &o.fills {
                 let v = views::fill(&market_id, &o.order_id, o.side, f, d);
                 out.push((f.ts, f.fill_id.clone(), v));
@@ -645,7 +647,7 @@ impl<V: Venue> Server<V> {
     #[tool(
         description = "Your fills on a market, hidden orders' included, newest last: order, \
         side, maker or taker, qty and price. Covers open orders and orders closed in the last 7 \
-        days.",
+        days. side is null on a fill of a traded order (known to the venue by its fills alone).",
         annotations(read_only_hint = true)
     )]
     async fn my_fills(

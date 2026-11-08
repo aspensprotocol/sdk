@@ -87,8 +87,12 @@ pub struct OrderFill {
 pub struct VenueOrder {
     /// `0x` + 64 hex.
     pub order_id: String,
-    pub market_id: String,
-    pub side: Side,
+    /// `None` only for a fills-only (`Traded`) order, which the venue reports
+    /// without a market.
+    pub market_id: Option<String>,
+    /// `None` only for a fills-only (`Traded`) order, which the venue reports
+    /// without a side.
+    pub side: Option<Side>,
     pub hidden: bool,
     pub state: OrderState,
     pub filled: u128,
@@ -296,8 +300,8 @@ mod tests {
     fn venue(id: &str, state: OrderState, filled: u128, remaining: Option<u128>) -> VenueOrder {
         VenueOrder {
             order_id: id.into(),
-            market_id: "m1".into(),
-            side: Side::Buy,
+            market_id: Some("m1".into()),
+            side: Some(Side::Buy),
             hidden: true,
             state,
             filled,

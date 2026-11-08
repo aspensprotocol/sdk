@@ -278,9 +278,14 @@ pub fn venue_order(o: &MyOrder) -> Result<Option<VenueOrder>> {
         return Ok(None);
     }
     let order_id = order_id_hex(&id);
+    let state = OrderState::from_venue(o.state);
+    // A fills-only (`TRADED`) order is known from its fills alone: the venue
+    // sends it with side 0 and no market, because it cannot recover them.
+    // Every other state names a side, and an unknown one is refused.
     let side = match arborter_pb::Side::try_from(o.side) {
-        Ok(arborter_pb::Side::Bid) => Side::Buy,
-        Ok(arborter_pb::Side::Ask) => Side::Sell,
+        Ok(arborter_pb::Side::Bid) => Some(Side::Buy),
+        Ok(arborter_pb::Side::Ask) => Some(Side::Sell),
+        Ok(arborter_pb::Side::Unspecified) if state == OrderState::Traded => None,
         _ => return Err(eyre!("venue order {order_id}: unknown side {}", o.side)),
     };
     let remaining = if o.initial_qty_known {
@@ -315,10 +320,10 @@ pub fn venue_order(o: &MyOrder) -> Result<Option<VenueOrder>> {
         });
     }
     Ok(Some(VenueOrder {
-        market_id: o.market_id.clone(),
+        market_id: (!o.market_id.is_empty()).then(|| o.market_id.clone()),
         side,
         hidden: o.is_hidden,
-        state: OrderState::from_venue(o.state),
+        state,
         filled: amount("filled qty", &order_id, &o.filled_qty)?,
         remaining,
         fills,
@@ -945,8 +950,8 @@ mod tests {
     fn venue_order_maps_every_field() {
         let v = venue_order(&my_order(true)).unwrap().unwrap();
         assert_eq!(v.order_id, format!("0x{}", "ab".repeat(32)));
-        assert_eq!(v.market_id, "m-1");
-        assert_eq!(v.side, Side::Sell);
+        assert_eq!(v.market_id.as_deref(), Some("m-1"));
+        assert_eq!(v.side, Some(Side::Sell));
         assert!(v.hidden);
         assert_eq!(v.state, OrderState::Cancelled);
         assert_eq!(v.filled, 450);
@@ -975,13 +980,80 @@ mod tests {
     #[test]
     fn venue_order_not_found_is_none_and_unknown_size_has_no_remaining() {
         assert_eq!(venue_order(&my_order(false)).unwrap(), None);
-        let mut traded = my_order(true);
-        traded.initial_qty_known = false;
-        traded.remaining_qty = String::new();
-        assert_eq!(venue_order(&traded).unwrap().unwrap().remaining, None);
         // `venue_orders` keeps only what the venue found.
         let got = venue_orders(&[my_order(false), my_order(true)]).unwrap();
         assert_eq!(got.len(), 1);
+    }
+
+    /// A fills-only order exactly as arborter sends it (`build_found` with no
+    /// row): `TRADED`, side 0, no market, kind or price, no initial or
+    /// remaining quantity, only its fills and their sum.
+    fn wire_traded() -> MyOrder {
+        use aspens::commands::trading::arborter_pb::{MyFill, MyOrderState};
+        MyOrder {
+            order_id: vec![0xdd; 32],
+            found: true,
+            filled_qty: "320".into(),
+            state: MyOrderState::Traded as i32,
+            initial_qty_known: false,
+            fills: vec![MyFill {
+                fill_id: vec![0xd1; 32],
+                price: "2575".into(),
+                qty: "320".into(),
+                match_ts_ms: 1_900,
+                role: FillRole::Maker as i32,
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_wire_traded_entry_reads_and_does_not_fail_the_batch() {
+        let t = wire_traded();
+        assert_eq!(
+            (t.side, t.market_id.as_str(), t.initial_qty.as_str()),
+            (0, "", "")
+        );
+        let v = venue_order(&t).expect("a TRADED entry must read").unwrap();
+        assert_eq!(v.state, OrderState::Traded);
+        assert_eq!((v.side, v.market_id.as_deref()), (None, None));
+        assert_eq!((v.filled, v.remaining), (320, None));
+        assert_eq!(
+            v.fills,
+            vec![OrderFill {
+                fill_id: Some(format!("0x{}", "d1".repeat(32))),
+                role: Role::Maker,
+                qty: 320,
+                price: 2575,
+                ts: 1_900,
+            }]
+        );
+        // Side 0 is excused for TRADED only: every other state, including one
+        // this server does not know, must name a side.
+        use aspens::commands::trading::arborter_pb::MyOrderState;
+        for st in [
+            MyOrderState::Unspecified,
+            MyOrderState::Open,
+            MyOrderState::PartiallyFilled,
+            MyOrderState::Filled,
+            MyOrderState::Cancelled,
+            MyOrderState::Expired,
+            MyOrderState::DroppedByRestart,
+        ] {
+            let mut bad = wire_traded();
+            bad.state = st as i32;
+            assert!(venue_order(&bad).is_err(), "{st:?} with side 0");
+        }
+        let mut unknown_state = wire_traded();
+        unknown_state.state = 42;
+        assert!(venue_order(&unknown_state).is_err());
+        // A TRADED entry naming a side that is not Bid/Ask is still refused.
+        let mut bad_side = wire_traded();
+        bad_side.side = 7;
+        assert!(venue_order(&bad_side).is_err());
+        // One fills-only order must not fail the read of every other order.
+        let got = venue_orders(&[my_order(true), t, my_order(false)]).unwrap();
+        assert_eq!(got.len(), 2);
     }
 
     #[test]

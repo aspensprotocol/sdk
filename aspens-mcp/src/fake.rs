@@ -88,6 +88,10 @@ struct State {
     books: HashMap<String, BookState>,
     /// The venue's order-status records, by id.
     orders: BTreeMap<[u8; 32], MyOrder>,
+    /// The market of each fills-only (`TRADED`) record. The venue sends such
+    /// an entry with an empty `market_id` but still filters it by its fills'
+    /// market, so the fake keeps that market beside the wire record.
+    traded_markets: HashMap<[u8; 32], String>,
     /// Ids the next preparations derive, in order.
     derived_ids: VecDeque<[u8; 32]>,
     prepared: u8,
@@ -125,6 +129,7 @@ impl FakeVenue {
             config,
             books: HashMap::new(),
             orders: BTreeMap::new(),
+            traded_markets: HashMap::new(),
             derived_ids: VecDeque::new(),
             prepared: 0,
             sends: VecDeque::new(),
@@ -170,6 +175,18 @@ impl FakeVenue {
         let id = <[u8; 32]>::try_from(order.order_id.as_slice())
             .expect("FakeVenue::set_order needs a 32-byte order id");
         self.lock().orders.insert(id, order);
+    }
+
+    /// Store a fills-only record exactly as the venue sends one (`TRADED`,
+    /// side 0, empty market and initial quantity, `initial_qty_known = false`),
+    /// whose fills were on `market_id`. Listed whatever `include_closed` is,
+    /// and filtered by that market, as the venue does.
+    pub fn set_fills_only_order(&self, order: MyOrder, market_id: &str) {
+        let id = <[u8; 32]>::try_from(order.order_id.as_slice())
+            .expect("FakeVenue::set_fills_only_order needs a 32-byte order id");
+        let mut s = self.lock();
+        s.traded_markets.insert(id, market_id.to_string());
+        s.orders.insert(id, order);
     }
 
     /// The id the next `prepare_limit` derives. Unqueued, it is the id of the
@@ -378,14 +395,21 @@ impl Venue for FakeVenue {
             MyOrderState::Open as i32,
             MyOrderState::PartiallyFilled as i32,
         ];
-        let entries: Vec<MyOrder> = self
-            .lock()
+        let s = self.lock();
+        let entries: Vec<MyOrder> = s
             .orders
-            .values()
-            .filter(|o| market_id.as_ref().is_none_or(|m| &o.market_id == m))
-            .filter(|o| include_closed || open.contains(&o.state))
-            .cloned()
+            .iter()
+            .filter(|(id, o)| {
+                let market = s.traded_markets.get(*id).unwrap_or(&o.market_id);
+                market_id.as_ref().is_none_or(|m| market == m)
+            })
+            // The venue lists a fills-only order whatever `include_closed` is.
+            .filter(|(_, o)| {
+                include_closed || open.contains(&o.state) || o.state == MyOrderState::Traded as i32
+            })
+            .map(|(_, o)| o.clone())
             .collect();
+        drop(s);
         venue_orders(&entries)
     }
 
