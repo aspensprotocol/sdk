@@ -27,6 +27,17 @@ fn format_error(err: &eyre::Report, context: &str) -> String {
     aspens_cliutil::format_error(err, context, &BinaryContext::TRADER_CLI)
 }
 
+/// Parse the `my-orders --id` values into 32-byte order ids.
+fn parse_my_order_ids(ids: &[String]) -> Result<Vec<[u8; 32]>> {
+    ids.iter()
+        .map(|s| aspens_cliutil::parse_order_id("--id", s))
+        .collect()
+}
+
+/// How long the `my-orders` delegation lasts: the command runs once, so the
+/// delegate key it signs for is useless soon after.
+const MY_ORDERS_DELEGATION_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// Decode a hex string (with or without `0x`) for `--{label}`.
 fn parse_hex(label: &str, s: &str) -> Result<Vec<u8>> {
     let s = s.strip_prefix("0x").unwrap_or(s);
@@ -657,6 +668,23 @@ enum Commands {
         /// bytes), exactly as returned in `SendOrderResponse.order_id`.
         order_id: String,
     },
+    /// Your own orders as the venue records them, hidden ones included,
+    /// printed as JSON. With `--id`, those orders (an id the venue has no
+    /// record of for you shows `found: false`); otherwise every open order,
+    /// optionally on one market, and with `--closed` also those closed in the
+    /// last 7 days. Signs a short read-only delegation with each trader
+    /// wallet; the delegate key lives only for this command.
+    MyOrders {
+        /// An order id to look up: `0x` + 64 hex characters. Repeatable.
+        #[arg(long, conflicts_with_all = ["market", "closed"])]
+        id: Vec<String>,
+        /// List only this market's orders.
+        #[arg(long)]
+        market: Option<String>,
+        /// Also list orders closed in the last 7 days.
+        #[arg(long)]
+        closed: bool,
+    },
     /// Fetch the current balances for all supported tokens across all chains
     Balance,
     /// Show current configuration and connection status
@@ -1254,6 +1282,67 @@ async fn run() -> Result<()> {
                     order_id_hex
                 );
             }
+        }
+        Commands::MyOrders { id, market, closed } => {
+            let ids = parse_my_order_ids(&id)?;
+            #[cfg(feature = "fce")]
+            if client.uses_fce() {
+                return Err(eyre::eyre!(
+                    "my-orders needs the venue's gRPC endpoint; it is not offered over FCE"
+                ));
+            }
+            let config = client
+                .get_config()
+                .await
+                .map_err(|e| eyre::eyre!(format_error(&e, "fetch configuration")))?;
+            let evm = load_trader_wallet(CurveType::Secp256k1).ok();
+            let solana = load_trader_wallet(CurveType::Ed25519).ok();
+            let wallets: Vec<&Wallet> = [evm.as_ref(), solana.as_ref()]
+                .into_iter()
+                .flatten()
+                .collect();
+            if wallets.is_empty() {
+                return Err(eyre::eyre!(
+                    "No trader wallet configured. Set TRADER_PRIVKEY (EVM) and/or \
+                     TRADER_PRIVKEY_SOLANA (Solana) in your .env file."
+                ));
+            }
+            let context = "read my orders";
+            let mut session = aspens::open_read_session_with_wallets(
+                &config,
+                &wallets,
+                aspens::DelegateKey::generate()?,
+                MY_ORDERS_DELEGATION_TTL,
+            )
+            .await
+            .map_err(|e| eyre::eyre!(format_error(&e, context)))?;
+            let url = client.stack_url().to_string();
+            let orders = if ids.is_empty() {
+                aspens::list_my_orders_from_config_with_wallet(
+                    &url,
+                    &config,
+                    &mut session,
+                    &wallets,
+                    market.as_deref(),
+                    closed,
+                )
+                .await
+            } else {
+                aspens::get_my_orders_from_config_with_wallet(
+                    &url,
+                    &config,
+                    &mut session,
+                    &wallets,
+                    &ids,
+                )
+                .await
+            }
+            .map_err(|e| eyre::eyre!(format_error(&e, context)))?;
+            let orders: Vec<serde_json::Value> = orders.iter().map(aspens::my_order_json).collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "orders": orders }))?
+            );
         }
         Commands::Balance => {
             info!("Fetching balances for all tokens across all chains");
@@ -2064,5 +2153,59 @@ mod tron_input_tests {
     fn expected_pubkey_accepts_a_tron_tag() {
         let (tag, _) = parse_expected_pubkey("tron:04ab").unwrap();
         assert!(matches!(tag, CurveTag::Secp256k1));
+    }
+}
+
+#[cfg(test)]
+mod my_orders_cli_tests {
+    use super::*;
+
+    const A: &str = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn parse(args: &[&str]) -> Result<Commands, clap::Error> {
+        let mut argv = vec!["aspens-cli"];
+        argv.extend_from_slice(args);
+        Cli::try_parse_from(argv).map(|c| c.command)
+    }
+
+    #[test]
+    fn ids_repeat_and_parse_to_bytes() {
+        let Commands::MyOrders { id, market, closed } =
+            parse(&["my-orders", "--id", A, "--id", B]).unwrap()
+        else {
+            panic!("not my-orders");
+        };
+        assert_eq!((market, closed), (None, false));
+        assert_eq!(
+            parse_my_order_ids(&id).unwrap(),
+            vec![[0xaa; 32], [0xbb; 32]]
+        );
+    }
+
+    #[test]
+    fn listing_takes_market_and_closed() {
+        let Commands::MyOrders { id, market, closed } =
+            parse(&["my-orders", "--market", "m-7", "--closed"]).unwrap()
+        else {
+            panic!("not my-orders");
+        };
+        assert!(id.is_empty());
+        assert_eq!(market.as_deref(), Some("m-7"));
+        assert!(closed);
+    }
+
+    /// A by-id lookup ignores the listing filters, so naming both is refused
+    /// rather than silently dropping one.
+    #[test]
+    fn ids_conflict_with_listing_filters() {
+        assert!(parse(&["my-orders", "--id", A, "--market", "m-7"]).is_err());
+        assert!(parse(&["my-orders", "--id", A, "--closed"]).is_err());
+    }
+
+    #[test]
+    fn bad_id_is_refused() {
+        let e = parse_my_order_ids(&["0x1234".to_string()]).unwrap_err();
+        assert!(e.to_string().contains("32 bytes"), "{e}");
     }
 }

@@ -185,6 +185,7 @@ mod order_id_composition_parity {
                 ],
                 markets: vec![market.clone()],
                 session: 0,
+                venue_id: String::new(),
             }),
         };
         (config, market)

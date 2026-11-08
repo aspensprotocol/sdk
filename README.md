@@ -54,6 +54,7 @@ cargo install --locked --git https://github.com/aspensprotocol/sdk aspens-cli as
 | `buy-marketable <market> <amount> [--slippage-bps <bps>]` | **CLI only.** Snapshot the resting book, cap slippage above best ask (default 50 bps = 0.5%), submit as a buy-limit. Turns "take the top of book with a slippage cap" into the equivalent priced order — useful when you want an explicit price ceiling rather than a quote budget. |
 | `sell-marketable <market> <amount> [--slippage-bps <bps>]` | **CLI only.** Same as `buy-marketable`, but capping slippage below best bid. |
 | `cancel-order <market> <side> <order_id>` | Cancel an existing order by its ID |
+| `my-orders [--id <hex>]... [--market <id>] [--closed]` | **CLI only.** Your own orders as the venue records them, hidden ones included, printed as JSON. `--id` (repeatable) looks orders up by id; otherwise it lists your open orders, optionally on one market, and with `--closed` also those closed in the last 7 days. Each trader wallet signs a 10-minute read-only delegation for a delegate key that lives only for the command. |
 | `stream-orderbook <market> [--historical] [--trader <addr>]` | Stream orderbook entries in real-time |
 | `stream-trades <market> [--historical] [--trader <addr>]` | Stream executed trades in real-time |
 | `balance` | Fetch the current balances for all supported tokens across all chains |
@@ -62,7 +63,7 @@ cargo install --locked --git https://github.com/aspensprotocol/sdk aspens-cli as
 | `signer-public-key [--chain-network <network>]` | Get the signer public key(s) for the trading instance (filtered to a chain network if provided) |
 | `get-attestation [--nonce <hex>] [--save-quote <file>] [-o text\|json]` | Fetch the signer's TD Quote; the caller-chosen nonce is bound into the quote's REPORTDATA (challenge-response); `--save-quote` writes the raw quote for offline `verify-attestation --quote` |
 
-All commands above are available in both `aspens-cli` and `aspens-repl`, except `buy-marketable` / `sell-marketable` which are CLI-only. The REPL also adds a `quit` command to exit the session.
+All commands above are available in both `aspens-cli` and `aspens-repl`, except `buy-marketable` / `sell-marketable` / `my-orders` which are CLI-only. The REPL also adds a `quit` command to exit the session.
 
 ### Admin commands (`aspens-admin`)
 

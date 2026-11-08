@@ -68,6 +68,10 @@ tokio = { workspace = true, optional = true, features = ["time"] }
 futures = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+# Owner-signed order-status reads: the delegate key is an in-memory Ed25519 key
+# and every query carries a fresh 16-byte OS-random nonce.
+ed25519-dalek = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
 
 # Table formatting for the `trader` command output (only meaningful
 # alongside `client`).
@@ -135,6 +139,8 @@ client = [
     "dep:futures",
     "dep:toml",
     "dep:url",
+    "dep:ed25519-dalek",
+    "dep:getrandom",
     "dep:solana-client",
     # The Tron node's HTTP API (`tron::client`). The same reqwest 0.12 the
     # Solana RPC client already pulls, so no new crate.

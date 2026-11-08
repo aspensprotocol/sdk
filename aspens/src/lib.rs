@@ -113,6 +113,15 @@ pub use wallet::{
     chain_architecture, chain_curve, load_trader_wallet_for_chain, load_trader_wallet_for_network,
 };
 
+// Owner-signed order-status reads (read delegation + get/list).
+#[cfg(all(feature = "client", any(feature = "trader", feature = "admin")))]
+pub use commands::trading::my_orders::{
+    DelegateKey, ReadSession, build_my_orders_request, create_read_delegation_with_wallet,
+    get_my_orders_from_config_with_wallet, get_my_orders_with_wallet,
+    list_my_orders_from_config_with_wallet, list_my_orders_with_wallet, my_order_json,
+    my_order_state_name, open_read_session_with_wallets, refresh_read_session_with_wallets,
+};
+
 // Operator-authority direct-signing flows (Solana). Deliberately not behind
 // `admin`: `commands::admin` is the gRPC surface where the ARBORTER signs, and
 // these exist precisely because that shape can't secure a control aimed at the

@@ -4,13 +4,12 @@
 //! Every result is JSON text, shaped in [`crate::views`]. Every error is an
 //! `isError` result whose text has passed through [`redact`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aspens::commands::config::config_pb::GetConfigResponse;
-use aspens::commands::trading::book_snapshot::BookState;
 use eyre::{Result, eyre};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -22,11 +21,11 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify};
 
 use crate::config::{Config, MarketLimits};
-use crate::ledger::{Fill, Ledger, SentOutcome, SentRecord, Side};
+use crate::ledger::{Ledger, SentOutcome, SentRecord, Side};
 use crate::limits::utc_day;
-use crate::orders::{OrderState, VenueView, derive, order_id_hex, resolve_unknown};
+use crate::orders::{OrderState, VenueOrder, derive, order_id_hex, tracked_id};
 pub use crate::redact::redact;
-use crate::venue::{TradeFill, Venue, base_leg_address};
+use crate::venue::{Venue, collateral_key_missing};
 use crate::views;
 use crate::write::{PlaceRequest, Pricing, Writer};
 
@@ -157,10 +156,13 @@ pub struct OrderbookArgs {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum StatusFilter {
-    /// Open, partially filled, or unknown (not yet resolved).
+    /// Orders that can still fill: open or partially filled, plus unknown
+    /// ones the venue may yet report.
     #[default]
     Open,
-    /// Filled, cancelled, rejected, or closed without attribution.
+    /// Orders that can no longer fill: filled, cancelled, expired, dropped by
+    /// a venue restart, traded or rejected, and accepted orders past the
+    /// venue's 7-day retention.
     Closed,
     All,
 }
@@ -212,6 +214,11 @@ pub struct PlaceLimitArgs {
     /// Rest only: the venue refuses the order rather than let it take liquidity.
     #[serde(default)]
     pub post_only: bool,
+    /// Keep the order out of the public book; its fills print with your side
+    /// redacted. It is checked against the same limits as any other order,
+    /// and `get_order` / `my_orders` / `my_fills` still show it to you.
+    #[serde(default)]
+    pub hidden: bool,
     /// Settle the base leg to this address instead of your own; it must be in
     /// the operator's settle address allowlist.
     #[serde(default)]
@@ -311,52 +318,47 @@ pub(crate) fn parse_order_id(s: &str) -> Result<String> {
     Ok(order_id_hex(&id))
 }
 
-fn matches_status(state: OrderState, filter: StatusFilter) -> bool {
-    use OrderState::*;
+fn matches_status(closed: bool, filter: StatusFilter) -> bool {
     match filter {
         StatusFilter::All => true,
-        StatusFilter::Open => matches!(state, Open | PartiallyFilled | Unknown),
-        StatusFilter::Closed => {
-            matches!(state, Filled | Cancelled | Rejected | ClosedUnattributed)
-        }
+        StatusFilter::Open => !closed,
+        StatusFilter::Closed => closed,
     }
 }
 
-/// The venue's view of one market for the agent: its filtered book and fills.
-struct MarketSnapshot {
-    book: BookState,
-    view: VenueView,
+/// How the venue is asked about the ledger's orders.
+#[derive(Clone, Copy)]
+enum Lookup {
+    /// One `ListMyOrders` over every market, closed orders included.
+    List,
+    /// `GetMyOrders` on exactly the ids needed.
+    ById,
 }
 
-/// What can be said about a market that ledger orders are on.
-enum MarketCtx {
-    /// Known pair decimals; a snapshot when the market has non-rejected sends.
-    Live {
-        decimals: u32,
-        snap: Option<MarketSnapshot>,
-    },
-    /// The venue can no longer describe it (or the agent can no longer read
-    /// it): its orders are reported raw, with this note, and never guessed.
-    Stale(String),
+/// Why an order's status cannot be read on the venue, if it cannot.
+fn stale_reason(
+    cfg: &GetConfigResponse,
+    s: &SentRecord,
+    addrs: &crate::venue::Addresses,
+) -> Option<String> {
+    if cfg.get_market_by_id(&s.market_id).is_none() {
+        return Some(MARKET_GONE.to_string());
+    }
+    if let Err(e) = pair_decimals(cfg, &s.market_id) {
+        return Some(format!("{e:#}"));
+    }
+    match collateral_key_missing(cfg, &s.market_id, s.side, addrs) {
+        Ok(None) => None,
+        Ok(Some(why)) => Some(why),
+        Err(e) => Some(format!("{e:#}")),
+    }
 }
 
-fn venue_view(book: &BookState, fills: Vec<TradeFill>) -> VenueView {
-    let mut view = VenueView::default();
-    for o in book.bids().into_iter().chain(book.asks()) {
-        view.in_book.insert(order_id_hex(&o.order_id), o.quantity);
-    }
-    // A maker fill's `order_hit` is the agent's own resting order. A taker
-    // fill's names the counterparty's; the agent's taker fills are in the ledger.
-    for f in fills {
-        if let (true, Some(hit)) = (f.maker, f.order_hit) {
-            view.fills.entry(hit).or_default().push(Fill {
-                qty: f.qty,
-                price: f.price,
-                ts: f.ts,
-            });
-        }
-    }
-    view
+fn parse_id(id: &str) -> Result<[u8; 32]> {
+    let bytes = hex::decode(id.trim_start_matches("0x"))
+        .map_err(|e| eyre!("internal: order id {id}: {e}"))?;
+    <[u8; 32]>::try_from(bytes.as_slice())
+        .map_err(|_| eyre!("internal: order id {id} is not 32 bytes"))
 }
 
 // ---- tool bodies ----
@@ -386,14 +388,14 @@ impl<V: Venue> Server<V> {
     async fn top_of_book_json(&self, market_id: String) -> Result<Value> {
         let cfg = self.venue.config().await?;
         let d = pair_decimals(&cfg, &market_id)?;
-        let book = self.venue.book(market_id.clone(), None).await?;
+        let book = self.venue.book(market_id.clone()).await?;
         Ok(views::top_of_book(&market_id, &book, d))
     }
 
     async fn orderbook_json(&self, market_id: String, levels: Option<u32>) -> Result<Value> {
         let cfg = self.venue.config().await?;
         let d = pair_decimals(&cfg, &market_id)?;
-        let book = self.venue.book(market_id.clone(), None).await?;
+        let book = self.venue.book(market_id.clone()).await?;
         let levels = usize::try_from(levels.unwrap_or(DEFAULT_LEVELS)).unwrap_or(usize::MAX);
         Ok(views::orderbook(&market_id, &book, levels, d))
     }
@@ -402,141 +404,68 @@ impl<V: Venue> Server<V> {
         Ok(views::balances(&self.venue.balances().await?))
     }
 
-    /// Classify each market in `markets` and fetch the trader-filtered book and
-    /// fills of the live ones in `live`. A venue read that fails is an error
-    /// (transient); a market the config or keys cannot resolve is `Stale`.
-    async fn market_ctxs(
-        &self,
-        cfg: &GetConfigResponse,
-        markets: &BTreeSet<String>,
-        live: &BTreeSet<String>,
-    ) -> Result<BTreeMap<String, MarketCtx>> {
-        let addrs = self.venue.addresses();
-        let mut out = BTreeMap::new();
-        for m in markets {
-            let ctx = if cfg.get_market_by_id(m).is_none() {
-                MarketCtx::Stale(MARKET_GONE.to_string())
-            } else {
-                match pair_decimals(cfg, m) {
-                    Err(e) => MarketCtx::Stale(format!("{e:#}")),
-                    Ok(decimals) if !live.contains(m) => MarketCtx::Live {
-                        decimals,
-                        snap: None,
-                    },
-                    Ok(decimals) => match base_leg_address(cfg, m, &addrs) {
-                        Err(e) => MarketCtx::Stale(format!("{e:#}")),
-                        Ok(trader) => {
-                            let book = self.venue.book(m.clone(), Some(trader.clone())).await?;
-                            let fills = self.venue.my_fills(m.clone(), trader).await?;
-                            let view = venue_view(&book, fills);
-                            MarketCtx::Live {
-                                decimals,
-                                snap: Some(MarketSnapshot { book, view }),
-                            }
-                        }
-                    },
-                }
-            };
-            out.insert(m.clone(), ctx);
-        }
-        Ok(out)
-    }
-
-    /// Derive every ledger order on a market in `only` (all markets for
-    /// `None`), in send order: its state and its JSON. Reads only.
-    async fn orders(&self, only: Option<&BTreeSet<String>>) -> Result<Vec<(OrderState, Value)>> {
+    /// Every send in `sent`, in order, with its JSON and whether it is closed.
+    /// The venue is asked once, by `lookup`, about every send it can say
+    /// anything about. Reads only.
+    async fn order_views(&self, sent: &[SentRecord], lookup: Lookup) -> Result<Vec<(bool, Value)>> {
         let cfg = self.venue.config().await?;
-        let sent: Vec<SentRecord> = {
-            let ledger = self.ledger.lock().await;
-            ledger
-                .sent()
-                .into_iter()
-                .filter(|s| only.is_none_or(|o| o.contains(&s.market_id)))
-                .cloned()
-                .collect()
-        };
-        let markets: BTreeSet<String> = sent.iter().map(|s| s.market_id.clone()).collect();
-        let live: BTreeSet<String> = sent
-            .iter()
-            .filter(|s| !matches!(s.outcome, SentOutcome::Failed { .. }))
-            .map(|s| s.market_id.clone())
-            .collect();
-        let ctxs = self.market_ctxs(&cfg, &markets, &live).await?;
-        let snap = |m: &str| match ctxs.get(m) {
-            Some(MarketCtx::Live {
-                snap: Some(snap), ..
-            }) => Some(snap),
-            _ => None,
-        };
-
-        let ledger = self.ledger.lock().await;
-        let known: BTreeSet<String> = ledger
-            .sent()
-            .into_iter()
-            .filter_map(|s| match &s.outcome {
-                SentOutcome::Accepted { order_id, .. } => Some(order_id.clone()),
-                _ => None,
-            })
-            .collect();
-
-        // Resolve each unknown send; an id claimed by two of them is left
-        // unresolved for both rather than given to either.
-        let resolved: Vec<Option<String>> = sent
-            .iter()
-            .map(|s| {
-                let snap = snap(&s.market_id)?;
-                if s.outcome != SentOutcome::Unknown {
-                    return None;
+        let addrs = self.venue.addresses();
+        let stale: Vec<Option<String>> =
+            sent.iter().map(|s| stale_reason(&cfg, s, &addrs)).collect();
+        let mut wanted: Vec<[u8; 32]> = Vec::new();
+        for (s, why) in sent.iter().zip(&stale) {
+            if let (None, Some(id)) = (why, tracked_id(s)) {
+                let id = parse_id(id)?;
+                if !wanted.contains(&id) {
+                    wanted.push(id);
                 }
-                let candidates = match s.side {
-                    Side::Buy => snap.book.bids(),
-                    Side::Sell => snap.book.asks(),
-                };
-                resolve_unknown(s, &candidates, &known)
-            })
-            .collect();
-        let mut claims: BTreeMap<&str, usize> = BTreeMap::new();
-        for id in resolved.iter().flatten() {
-            *claims.entry(id).or_default() += 1;
+            }
         }
+        let reported: Vec<VenueOrder> = match (wanted.is_empty(), lookup) {
+            (true, _) => Vec::new(),
+            (false, Lookup::List) => self.venue.list_orders(None, true).await?,
+            (false, Lookup::ById) => self.venue.orders_by_id(wanted).await?,
+        };
+        let reported: BTreeMap<&str, &VenueOrder> =
+            reported.iter().map(|o| (o.order_id.as_str(), o)).collect();
 
-        let empty = VenueView::default();
+        let now = now_secs();
         let mut out = Vec::with_capacity(sent.len());
-        for (s, r) in sent.iter().zip(&resolved) {
-            let accepted_id = match &s.outcome {
-                SentOutcome::Accepted { order_id, .. } => Some(order_id.as_str()),
-                _ => None,
-            };
-            let decimals = match ctxs.get(&s.market_id) {
-                Some(MarketCtx::Live { decimals, .. }) => *decimals,
-                Some(MarketCtx::Stale(note)) => {
-                    let (state, note) = match &s.outcome {
-                        SentOutcome::Failed { code, message } => {
-                            (OrderState::Rejected, format!("{code}: {message}; {note}"))
-                        }
-                        _ => (OrderState::Unknown, note.clone()),
-                    };
-                    out.push((state, views::stale_order(s, accepted_id, state, &note)));
-                    continue;
-                }
-                None => return Err(eyre!("internal: market {} was not classified", s.market_id)),
-            };
-            let r = r.as_deref().filter(|id| claims.get(id) == Some(&1));
-            let view = snap(&s.market_id).map_or(&empty, |snap| &snap.view);
-            let id = accepted_id.or(r);
-            let cancelled = id.is_some_and(|id| ledger.cancelled(id));
-            let v = derive(s, r, cancelled, view);
-            out.push((v.state, views::order(s, &v, decimals)));
+        for (s, why) in sent.iter().zip(&stale) {
+            if let Some(note) = why {
+                let (state, closed, note) = match &s.outcome {
+                    SentOutcome::Failed { code, message } => (
+                        OrderState::Rejected,
+                        true,
+                        format!("{code}: {message}; {note}"),
+                    ),
+                    _ => (OrderState::Unknown, false, note.clone()),
+                };
+                out.push((closed, views::stale_order(s, tracked_id(s), state, &note)));
+                continue;
+            }
+            let decimals = pair_decimals(&cfg, &s.market_id)?;
+            let venue = tracked_id(s).and_then(|id| reported.get(id).copied());
+            let v = derive(s, venue, now);
+            out.push((v.closed, views::order(s, &v, decimals)));
         }
         Ok(out)
     }
 
     async fn my_orders_json(&self, status: StatusFilter) -> Result<Value> {
+        let sent: Vec<SentRecord> = self
+            .ledger
+            .lock()
+            .await
+            .sent()
+            .into_iter()
+            .cloned()
+            .collect();
         let orders: Vec<Value> = self
-            .orders(None)
+            .order_views(&sent, Lookup::List)
             .await?
             .into_iter()
-            .filter(|(s, _)| matches_status(*s, status))
+            .filter(|(closed, _)| matches_status(*closed, status))
             .map(|(_, o)| o)
             .collect();
         Ok(json!({ "orders": orders }))
@@ -544,92 +473,42 @@ impl<V: Venue> Server<V> {
 
     async fn get_order_json(&self, order_id: &str) -> Result<Value> {
         let id = parse_order_id(order_id)?;
-        // An accepted order lives on one market; an unresolved send could be
-        // the order on any market that has one.
-        let markets: BTreeSet<String> = {
-            let ledger = self.ledger.lock().await;
-            let sent = ledger.sent();
-            let accepted = sent.iter().find(
-                |s| matches!(&s.outcome, SentOutcome::Accepted { order_id, .. } if *order_id == id),
-            );
-            match accepted {
-                Some(s) => BTreeSet::from([s.market_id.clone()]),
-                None => sent
-                    .iter()
-                    .filter(|s| s.outcome == SentOutcome::Unknown)
-                    .map(|s| s.market_id.clone())
-                    .collect(),
-            }
-        };
-        if markets.is_empty() {
-            return Err(eyre!("order {id} is not in this server's ledger"));
-        }
-        self.orders(Some(&markets))
-            .await?
+        let sent: Option<SentRecord> = self
+            .ledger
+            .lock()
+            .await
+            .sent()
             .into_iter()
+            .find(|s| tracked_id(s) == Some(id.as_str()))
+            .cloned();
+        let Some(sent) = sent else {
+            return Err(eyre!("order {id} is not in this server's ledger"));
+        };
+        self.order_views(std::slice::from_ref(&sent), Lookup::ById)
+            .await?
+            .pop()
             .map(|(_, o)| o)
-            .find(|o| o["orderId"] == id.as_str())
-            .ok_or_else(|| eyre!("order {id} is not in this server's ledger"))
+            .ok_or_else(|| eyre!("internal: order {id} was not derived"))
     }
 
     async fn my_fills_json(&self, market_id: String) -> Result<Value> {
         let cfg = self.venue.config().await?;
         let d = pair_decimals(&cfg, &market_id)?;
-        let trader = base_leg_address(&cfg, &market_id, &self.venue.addresses())?;
-        let venue_fills = self.venue.my_fills(market_id.clone(), trader).await?;
-
-        // The ledger's orders on this market: id -> side, and their taker fills.
-        let mut sides: BTreeMap<String, Side> = BTreeMap::new();
-        let mut taker: Vec<(String, Side, Fill)> = Vec::new();
-        {
-            let ledger = self.ledger.lock().await;
-            for s in ledger.sent() {
-                if s.market_id != market_id {
-                    continue;
-                }
-                if let SentOutcome::Accepted {
-                    order_id,
-                    taker_fills,
-                    ..
-                } = &s.outcome
-                {
-                    sides.insert(order_id.clone(), s.side);
-                    for f in taker_fills {
-                        taker.push((order_id.clone(), s.side, f.clone()));
-                    }
-                }
+        let orders = self
+            .venue
+            .list_orders(Some(market_id.clone()), true)
+            .await?;
+        let mut out: Vec<(u64, Option<String>, Value)> = Vec::new();
+        // The venue already filtered by market, fills-only (`traded`) orders
+        // included, which it reports with no market of their own.
+        for o in &orders {
+            for f in &o.fills {
+                let v = views::fill(&market_id, &o.order_id, o.side, f, d);
+                out.push((f.ts, f.fill_id.clone(), v));
             }
         }
-        let taker_keys: BTreeSet<(u64, u128, u128)> = taker
-            .iter()
-            .map(|(_, _, f)| (f.ts, f.qty, f.price))
-            .collect();
-
-        let mut out: Vec<(u64, Value)> = taker
-            .iter()
-            .map(|(id, side, f)| {
-                let v = views::fill(&market_id, Some(id), Some(*side), "taker", f, d);
-                (f.ts, v)
-            })
-            .collect();
-        for t in venue_fills {
-            let f = Fill {
-                qty: t.qty,
-                price: t.price,
-                ts: t.ts,
-            };
-            if t.maker {
-                let side = t.order_hit.as_ref().and_then(|h| sides.get(h).copied());
-                let id = t.order_hit.as_deref();
-                out.push((f.ts, views::fill(&market_id, id, side, "maker", &f, d)));
-            } else if !taker_keys.contains(&(f.ts, f.qty, f.price)) {
-                // A taker fill the ledger lacks (its send got no answer):
-                // `order_hit` names the counterparty's order, not the agent's.
-                out.push((f.ts, views::fill(&market_id, None, None, "taker", &f, d)));
-            }
-        }
-        out.sort_by_key(|(ts, _)| *ts);
-        let fills: Vec<Value> = out.into_iter().map(|(_, v)| v).collect();
+        out.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        let fills: Vec<Value> = out.into_iter().map(|(_, _, v)| v).collect();
         Ok(json!({ "marketId": market_id, "fills": fills }))
     }
 
@@ -739,10 +618,11 @@ impl<V: Venue> Server<V> {
     }
 
     #[tool(
-        description = "Orders this server sent, with their state: open, partially_filled, \
-        filled, cancelled, rejected, unknown (no answer from the venue; check later, never \
-        resubmit) or closed_unattributed (filled or cancelled; the venue cannot say which). \
-        `status` filters: open (default; includes unknown), closed, all.",
+        description = "Orders this server sent, hidden ones included, with the venue's state: \
+        open, partially_filled, filled, cancelled, expired, dropped_by_restart (the venue \
+        restarted while it rested), traded (closed by fills; its initial size is unknown) or \
+        unspecified; or rejected (the venue refused it) or unknown (the venue has no record of \
+        it; never resubmit). `status` filters: open (default; includes unknown), closed, all.",
         annotations(read_only_hint = true)
     )]
     async fn my_orders(
@@ -753,7 +633,8 @@ impl<V: Venue> Server<V> {
     }
 
     #[tool(
-        description = "One order this server sent, by id, with its fills and state.",
+        description = "One order this server sent, by id, with its fills and state as the venue \
+        records them.",
         annotations(read_only_hint = true)
     )]
     async fn get_order(
@@ -764,7 +645,9 @@ impl<V: Venue> Server<V> {
     }
 
     #[tool(
-        description = "Your fills on a market, newest last: side, maker or taker, qty and price.",
+        description = "Your fills on a market, hidden orders' included, newest last: order, \
+        side, maker or taker, qty and price. Covers open orders and orders closed in the last 7 \
+        days. side is null on a fill of a traded order (known to the venue by its fills alone).",
         annotations(read_only_hint = true)
     )]
     async fn my_fills(
@@ -803,7 +686,7 @@ impl<V: Venue> Server<V> {
 
     #[tool(
         description = "Place a limit order. qty and price are decimal strings in market units. \
-        Refused, with nothing signed, when it breaks a limit (see `limits`), prices more than \
+        `hidden` keeps it out of the public book. Refused, with nothing signed, when it breaks a limit (see `limits`), prices more than \
         max_deviation_bps through the best opposite price, or trading is halted. Its qty and \
         quote count against today's budget once sent, even if it is later cancelled. A result in \
         state `unknown` got no answer: do not resubmit it; check it later with `my_orders` \
@@ -824,6 +707,7 @@ impl<V: Venue> Server<V> {
             qty: a.qty,
             pricing: Pricing::Limit(a.price),
             post_only: a.post_only,
+            hidden: a.hidden,
             settle_base: a.settle_base_address,
             settle_quote: a.settle_quote_address,
         };
@@ -855,6 +739,7 @@ impl<V: Venue> Server<V> {
                 slippage_bps: a.slippage_bps.unwrap_or(DEFAULT_SLIPPAGE_BPS),
             },
             post_only: false,
+            hidden: false,
             settle_base: None,
             settle_quote: None,
         };
@@ -865,8 +750,7 @@ impl<V: Venue> Server<V> {
         description = "Cancel an order by id. For an order this server sent, the market and \
         side come from its records; for any other, give market_id and side. `already_gone` \
         means it was not live (filled, cancelled earlier, or never placed). Allowed while halted. \
-        For an order whose id this server's ledger does not hold (for example one resolved from \
-        the book), pass market_id and side.",
+        For an order whose id this server's ledger does not hold, pass market_id and side.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,

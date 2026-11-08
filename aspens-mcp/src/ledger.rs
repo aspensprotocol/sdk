@@ -10,6 +10,12 @@
 //! the process stopped mid-send. The order may be live, so replay counts it as
 //! sent with an `Unknown` outcome (in memory only; the file is never
 //! rewritten).
+//!
+//! A usage record carries the order id derived from the exact order about to
+//! be signed, and an `Unknown` outcome carries it too, so a send that got no
+//! answer can be looked up on the venue by that id. Lines written before the
+//! id was recorded have no `order_id` field; they parse as `None` and replay
+//! exactly as they always did.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -64,7 +70,13 @@ pub enum SentOutcome {
         code: String,
         message: String,
     },
-    Unknown,
+    /// No answer came back; the order may be live. Never re-sent.
+    Unknown {
+        /// The id derived before the send (`0x` + 64 hex). `None` on a line
+        /// written before ids were recorded.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        order_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +107,10 @@ pub enum Record {
         /// The limit price the order is sent at, in pair-decimal units.
         #[serde(with = "u128_str")]
         price: u128,
+        /// The id derived from the exact order about to be signed (`0x` + 64
+        /// hex). `None` on a line written before ids were recorded.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        order_id: Option<String>,
     },
     Sent(SentRecord),
     Cancelled {
@@ -194,6 +210,7 @@ impl Ledger {
                 side,
                 qty,
                 price,
+                order_id,
                 ..
             } = &record
             {
@@ -203,7 +220,9 @@ impl Ledger {
                     side: *side,
                     qty: *qty,
                     price: *price,
-                    outcome: SentOutcome::Unknown,
+                    outcome: SentOutcome::Unknown {
+                        order_id: order_id.clone(),
+                    },
                 });
             }
             ledger.apply(record);
@@ -308,6 +327,7 @@ mod tests {
             qty,
             quote,
             price: 19,
+            order_id: None,
         }
     }
 
@@ -367,7 +387,7 @@ mod tests {
             side,
             qty,
             price,
-            outcome: SentOutcome::Unknown,
+            outcome: SentOutcome::Unknown { order_id: None },
         }
     }
 
@@ -383,6 +403,7 @@ mod tests {
             qty: 23,
             quote: 0,
             price: 29,
+            order_id: None,
         })
         .unwrap();
         // Live, the send is still in flight: nothing is synthesized.
@@ -421,6 +442,7 @@ mod tests {
             qty: 3,
             quote: 37,
             price: 43,
+            order_id: None,
         })
         .unwrap();
         l.append(Record::Halt {
@@ -439,6 +461,87 @@ mod tests {
         assert_eq!(l.usage("2026-11-06", "m2"), (3, 37));
         assert_eq!(l.usage("2026-11-06", "m1"), (11, 31));
         assert_eq!(l.halted(), Some(None));
+    }
+
+    const DERIVED: &str = "0xd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1";
+
+    /// Lines exactly as a build before order ids were recorded wrote them:
+    /// a usage with no `order_id`, and a unit `unknown` outcome. They parse,
+    /// and replay as before: an unknown with no id.
+    #[test]
+    fn old_lines_without_order_id_still_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = concat!(
+            r#"{"kind":"usage","ts":5,"day":"2026-11-06","market_id":"m1","side":"buy","qty":"3","quote":"37","price":"43"}"#,
+            "\n",
+            r#"{"kind":"sent","ts":5,"market_id":"m1","side":"buy","qty":"3","price":"43","outcome":{"status":"unknown"}}"#,
+            "\n",
+            r#"{"kind":"usage","ts":6,"day":"2026-11-06","market_id":"m2","side":"sell","qty":"7","quote":"0","price":"47"}"#,
+            "\n",
+        );
+        std::fs::write(dir.path().join(LEDGER_FILE), old).unwrap();
+        let l = Ledger::open(dir.path()).unwrap();
+        let sent: Vec<SentRecord> = l.sent().into_iter().cloned().collect();
+        assert_eq!(
+            sent,
+            vec![
+                orphan(5, "m1", Side::Buy, 3, 43),
+                orphan(6, "m2", Side::Sell, 7, 47),
+            ]
+        );
+        assert_eq!(l.usage("2026-11-06", "m1"), (3, 37));
+        assert_eq!(l.usage("2026-11-06", "m2"), (7, 0));
+    }
+
+    /// The id derived before sending is written on the usage line and, for a
+    /// send with no recorded outcome, carried into the replayed unknown.
+    #[test]
+    fn usage_order_id_reaches_the_replayed_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger::open(dir.path()).unwrap();
+        l.append(Record::Usage {
+            ts: 41,
+            day: "2026-11-06".into(),
+            market_id: "m1".into(),
+            side: Side::Sell,
+            qty: 23,
+            quote: 0,
+            price: 29,
+            order_id: Some(DERIVED.into()),
+        })
+        .unwrap();
+        drop(l);
+        let text = std::fs::read_to_string(dir.path().join(LEDGER_FILE)).unwrap();
+        assert!(
+            text.contains(&format!("\"order_id\":\"{DERIVED}\"")),
+            "{text}"
+        );
+        let l = Ledger::open(dir.path()).unwrap();
+        let mut want = orphan(41, "m1", Side::Sell, 23, 29);
+        want.outcome = SentOutcome::Unknown {
+            order_id: Some(DERIVED.into()),
+        };
+        assert_eq!(l.sent(), vec![&want]);
+    }
+
+    /// An unknown outcome recorded with its derived id round-trips; one
+    /// without an id is written exactly as before.
+    #[test]
+    fn unknown_outcome_id_round_trips() {
+        let with = SentOutcome::Unknown {
+            order_id: Some(DERIVED.into()),
+        };
+        let j = serde_json::to_string(&with).unwrap();
+        assert_eq!(
+            j,
+            format!(r#"{{"status":"unknown","order_id":"{DERIVED}"}}"#)
+        );
+        assert_eq!(serde_json::from_str::<SentOutcome>(&j).unwrap(), with);
+        let without = SentOutcome::Unknown { order_id: None };
+        assert_eq!(
+            serde_json::to_string(&without).unwrap(),
+            r#"{"status":"unknown"}"#
+        );
     }
 
     #[test]

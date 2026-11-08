@@ -7,17 +7,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aspens::commands::config::config_pb::{
     Chain, Configuration, GetConfigResponse, Market, Token, TradeContract,
 };
-use aspens::commands::trading::arborter_pb::{self, OrderbookEntry};
+use aspens::commands::trading::arborter_pb::{
+    self, FillRole, MyFill, MyOrder, MyOrderKind, MyOrderState, OrderbookEntry,
+};
 use aspens::commands::trading::balance::{
     BalanceValue, Balances, ChainBalanceView, NativeBalanceView, TokenBalances,
 };
 use aspens::commands::trading::book_snapshot::BookState;
 use aspens_mcp::config::{Config, DepositsConfig, MarketLimits, VenuePin};
 use aspens_mcp::fake::{Call, FakeVenue};
-use aspens_mcp::ledger::{Fill, Ledger, Record, SentOutcome, SentRecord, Side};
+use aspens_mcp::ledger::{Ledger, Record, SentOutcome, SentRecord, Side};
 use aspens_mcp::limits::utc_day;
 use aspens_mcp::server::Server;
-use aspens_mcp::venue::{Addresses, AttestationView, CancelResult, SendResult, TradeFill};
+use aspens_mcp::venue::{Addresses, AttestationView, CancelResult, SendResult};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
@@ -99,6 +101,7 @@ fn venue_config() -> GetConfigResponse {
                 pair_decimals: PAIR_DECIMALS as i32,
             }],
             session: SESSION,
+            venue_id: String::new(),
         }),
     }
 }
@@ -270,6 +273,70 @@ fn book(entries: &[OrderbookEntry]) -> BookState {
     b
 }
 
+/// An unknown outcome as a build before derived ids recorded it: no id.
+fn unknown() -> SentOutcome {
+    SentOutcome::Unknown { order_id: None }
+}
+
+/// One of the agent's orders as the venue's order-status RPCs report it.
+/// `remaining` is `initial - filled`; amounts are pair units.
+/// A fills-only (`TRADED`) entry exactly as the venue sends one: side 0, no
+/// market, kind, price or size, `initial_qty_known = false`; only its fills
+/// and their sum.
+fn fills_only(b: u8, fills: Vec<MyFill>) -> MyOrder {
+    let filled: u128 = fills.iter().map(|f| f.qty.parse::<u128>().unwrap()).sum();
+    MyOrder {
+        order_id: id(b).to_vec(),
+        found: true,
+        state: MyOrderState::Traded as i32,
+        initial_qty_known: false,
+        filled_qty: filled.to_string(),
+        fills,
+        ..Default::default()
+    }
+}
+
+fn my_order(
+    b: u8,
+    side: arborter_pb::Side,
+    state: MyOrderState,
+    price: u128,
+    initial: u128,
+    filled: u128,
+    fills: Vec<MyFill>,
+) -> MyOrder {
+    MyOrder {
+        order_id: id(b).to_vec(),
+        found: true,
+        market_id: MARKET.into(),
+        side: side as i32,
+        kind: MyOrderKind::Limit as i32,
+        is_hidden: false,
+        is_post_only: false,
+        price: price.to_string(),
+        initial_qty_known: true,
+        initial_qty: initial.to_string(),
+        filled_qty: filled.to_string(),
+        remaining_qty: (initial - filled).to_string(),
+        state: state as i32,
+        created_at_ms: 1_700_000_000_000,
+        closed_at_ms: 0,
+        base_address: AGENT.into(),
+        quote_address: AGENT.into(),
+        fills,
+    }
+}
+
+fn my_fill(f: u8, qty: u128, price: u128, ts_ms: u64, role: FillRole) -> MyFill {
+    MyFill {
+        fill_id: vec![f; 32],
+        price: price.to_string(),
+        qty: qty.to_string(),
+        match_ts_ms: ts_ms,
+        role: role as i32,
+    }
+}
+
 fn by_id<'a>(orders: &'a Value, id: &str) -> &'a Value {
     orders["orders"]
         .as_array()
@@ -338,6 +405,7 @@ async fn limits_reports_usage_from_ledger() {
             qty,
             quote,
             price: 2_500_000,
+            order_id: None,
         };
         l.append(usage(&today, 2_000_000, 30_000_000)).unwrap();
         l.append(usage(&today, 250_000, 1_000_000)).unwrap();
@@ -426,33 +494,48 @@ async fn balance_error_text_is_redacted() {
 #[tokio::test]
 async fn my_orders_derives_states() {
     let v = fake();
-    // A rests in the agent's book; B was filled as maker; C is gone with no fills.
-    // Remaining differs from the order's qty, so echoing qty is caught.
-    v.set_book(
-        MARKET,
-        Some(AGENT),
-        book(&[book_entry(0xaa, arborter_pb::Side::Bid, 2_500_000, 900_000)]),
-    );
-    v.set_fills(
-        MARKET,
-        AGENT,
+    // Remaining differs from the order's qty and from what filled, so echoing
+    // either is caught; maker prices differ from the order's own on B.
+    v.set_order(my_order(
+        0xaa,
+        arborter_pb::Side::Bid,
+        MyOrderState::PartiallyFilled,
+        2_500_000,
+        1_200_000,
+        300_000,
+        vec![my_fill(0x01, 300_000, 2_500_000, 7_000, FillRole::Maker)],
+    ));
+    v.set_order(my_order(
+        0xbb,
+        arborter_pb::Side::Ask,
+        MyOrderState::Filled,
+        2_600_000,
+        1_000_000,
+        1_000_000,
         vec![
-            TradeFill {
-                order_hit: Some(id_hex(0xbb)),
-                qty: 400_000,
-                price: 2_600_000,
-                ts: 7,
-                maker: true,
-            },
-            TradeFill {
-                order_hit: Some(id_hex(0xbb)),
-                qty: 600_000,
-                price: 2_600_000,
-                ts: 8,
-                maker: true,
-            },
+            my_fill(0x02, 400_000, 2_610_000, 8_000, FillRole::Taker),
+            my_fill(0x03, 600_000, 2_600_000, 9_000, FillRole::Maker),
         ],
+    ));
+    v.set_order(my_order(
+        0xcc,
+        arborter_pb::Side::Bid,
+        MyOrderState::DroppedByRestart,
+        2_400_000,
+        800_000,
+        200_000,
+        vec![my_fill(0x04, 200_000, 2_400_000, 6_000, FillRole::Maker)],
+    ));
+    // The venue lost this one's accepted event: it knows the fills only, and
+    // sends it exactly as `fills_only` builds it (no side, market or size).
+    v.set_fills_only_order(
+        fills_only(
+            0xdd,
+            vec![my_fill(0x05, 500_000, 2_700_000, 5_000, FillRole::Maker)],
+        ),
+        MARKET,
     );
+    let probe = v.clone();
     let h = start(v, |l| {
         l.append(sent(Side::Buy, 1_200_000, 2_500_000, accepted(0xaa)))
             .unwrap();
@@ -460,23 +543,43 @@ async fn my_orders_derives_states() {
             .unwrap();
         l.append(sent(Side::Buy, 800_000, 2_400_000, accepted(0xcc)))
             .unwrap();
+        l.append(sent(Side::Sell, 900_000, 2_700_000, accepted(0xdd)))
+            .unwrap();
     })
     .await;
 
     let all = h.ok("my_orders", json!({"status": "all"})).await;
     let a = by_id(&all, &id_hex(0xaa));
-    assert_eq!(a["state"], "open");
+    assert_eq!(a["state"], "partially_filled");
     assert_eq!(a["remainingRaw"], "900000");
     assert_eq!(a["remaining"], "0.900000");
+    assert_eq!(a["filledRaw"], "300000");
     assert_eq!(a["qtyRaw"], "1200000");
     assert_eq!(a["price"], "2.500000");
     assert_eq!(a["side"], "buy");
+    assert_eq!(a["hidden"], false);
     let b = by_id(&all, &id_hex(0xbb));
     assert_eq!(b["state"], "filled");
     assert_eq!(b["filledRaw"], "1000000");
-    assert_eq!(b["fills"].as_array().unwrap().len(), 2);
+    assert_eq!(b["remainingRaw"], "0");
+    let bf = b["fills"].as_array().unwrap();
+    assert_eq!(bf.len(), 2);
+    assert_eq!(bf[0]["role"], "taker");
+    assert_eq!(bf[0]["priceRaw"], "2610000");
+    assert_eq!(bf[0]["fillId"], id_hex(0x02));
+    assert_eq!(bf[0]["ts"], 8_000);
+    assert_eq!(bf[1]["role"], "maker");
+    assert_eq!(bf[1]["priceRaw"], "2600000");
     let c = by_id(&all, &id_hex(0xcc));
-    assert_eq!(c["state"], "closed_unattributed");
+    assert_eq!(c["state"], "dropped_by_restart");
+    assert_eq!(c["filledRaw"], "200000");
+    assert_eq!(c["remainingRaw"], "600000");
+    let d = by_id(&all, &id_hex(0xdd));
+    assert_eq!(d["state"], "traded");
+    assert_eq!(d["filledRaw"], "500000");
+    // The venue cannot say what is left: no figure, never the sent qty.
+    assert_eq!(d["remainingRaw"], Value::Null);
+    assert_eq!(d["qtyRaw"], "900000");
 
     // The default filter is open orders only.
     let open = h.ok("my_orders", json!({})).await;
@@ -489,7 +592,7 @@ async fn my_orders_derives_states() {
     assert_eq!(ids, vec![id_hex(0xaa)]);
 
     let closed = h.ok("my_orders", json!({"status": "closed"})).await;
-    assert_eq!(closed["orders"].as_array().unwrap().len(), 2);
+    assert_eq!(closed["orders"].as_array().unwrap().len(), 3);
 
     let one = h.ok("get_order", json!({"order_id": id_hex(0xbb)})).await;
     assert_eq!(one["state"], "filled");
@@ -497,39 +600,258 @@ async fn my_orders_derives_states() {
     let upper = format!("0x{}", "BB".repeat(32));
     let one = h.ok("get_order", json!({"order_id": upper})).await;
     assert_eq!(one["orderId"], id_hex(0xbb));
+
+    // `my_orders` lists once (closed orders included); `get_order` asks by id.
+    let calls = probe.calls();
+    assert!(
+        calls.contains(&Call::ListMyOrders {
+            market_id: None,
+            include_closed: true,
+        }),
+        "{calls:?}"
+    );
+    assert!(
+        calls.contains(&Call::GetMyOrders {
+            ids: vec![id(0xbb)]
+        }),
+        "{calls:?}"
+    );
 }
 
+/// A send that got no answer is recorded with the id derived from the exact
+/// order signed, before the send. `get_order` on that id asks the venue and
+/// takes its answer; nothing is ever re-sent.
 #[tokio::test]
-async fn unknown_send_resolves_from_book() {
-    let v = fake();
-    // 0xaa is already a known order; 0xee is the only fresh same-side match.
-    v.set_book(
-        MARKET,
-        Some(AGENT),
-        book(&[
-            book_entry(0xaa, arborter_pb::Side::Ask, 2_450_000, 700_000),
-            book_entry(0xee, arborter_pb::Side::Ask, 2_450_000, 700_000),
-            // Same price and size on the other side: not a candidate for a sell.
-            book_entry(0xdd, arborter_pb::Side::Bid, 2_450_000, 700_000),
-        ]),
+async fn unknown_resolves_by_derived_id() {
+    let v = market_venue();
+    v.push_derived_id(id(0xd1));
+    v.push_send(SendResult::Unknown);
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+    let o = h.ok("place_limit_order", limit_buy("1", "2.5")).await;
+    assert_eq!(o["state"], "unknown");
+    assert_eq!(o["orderId"], id_hex(0xd1));
+
+    let lines = ledger_lines(h.dir());
+    assert_eq!(lines[0]["kind"], "usage");
+    assert_eq!(lines[0]["order_id"], id_hex(0xd1));
+    assert_eq!(lines[1]["outcome"]["status"], "unknown");
+    assert_eq!(lines[1]["outcome"]["order_id"], id_hex(0xd1));
+
+    // The venue has no record of it (yet): still unknown, and says so.
+    let g = h.ok("get_order", json!({"order_id": id_hex(0xd1)})).await;
+    assert_eq!(g["state"], "unknown");
+    assert!(g["note"].as_str().unwrap().contains("no record"), "{g}");
+
+    // Now it does: the venue's state, quantities and fills.
+    probe.set_order(my_order(
+        0xd1,
+        arborter_pb::Side::Bid,
+        MyOrderState::PartiallyFilled,
+        2_500_000,
+        1_000_000,
+        350_000,
+        vec![my_fill(0x0d, 350_000, 2_500_000, 4_000, FillRole::Maker)],
+    ));
+    let g = h.ok("get_order", json!({"order_id": id_hex(0xd1)})).await;
+    assert_eq!(g["state"], "partially_filled");
+    assert_eq!(g["filledRaw"], "350000");
+    assert_eq!(g["remainingRaw"], "650000");
+    assert_eq!(g["note"], Value::Null);
+    let open = h.ok("my_orders", json!({})).await;
+    assert_eq!(by_id(&open, &id_hex(0xd1))["state"], "partially_filled");
+    assert_eq!(probe.sends().len(), 1, "{:?}", probe.calls());
+}
+
+/// A hidden order is placed under the same limits, and the venue's
+/// order-status reads track it, maker fills included, to filled.
+#[tokio::test]
+async fn hidden_order_tracked_to_filled() {
+    let v = market_venue();
+    v.push_send(accepted_send(0xe1));
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
+
+    // Over max_order_qty: refused like any order, hidden or not.
+    let mut big = limit_buy("1.6", "2.5");
+    big["hidden"] = json!(true);
+    assert_refused(&h.call("place_limit_order", big).await, "max_order_qty");
+    assert_nothing_signed(&probe);
+
+    let mut args = limit_buy("1", "2.5");
+    args["hidden"] = json!(true);
+    let o = h.ok("place_limit_order", args).await;
+    assert_eq!(o["orderId"], id_hex(0xe1));
+    assert_eq!(o["state"], "open");
+    let sends = probe.sends();
+    assert!(
+        matches!(
+            &sends[..],
+            [Call::SendLimit {
+                hidden: true,
+                post_only: false,
+                ..
+            }]
+        ),
+        "{sends:?}"
     );
+
+    let hidden = |state, filled, fills| {
+        let mut m = my_order(
+            0xe1,
+            arborter_pb::Side::Bid,
+            state,
+            2_500_000,
+            1_000_000,
+            filled,
+            fills,
+        );
+        m.is_hidden = true;
+        m
+    };
+    probe.set_order(hidden(MyOrderState::Open, 0, vec![]));
+    let g = h.ok("get_order", json!({"order_id": id_hex(0xe1)})).await;
+    assert_eq!(g["state"], "open");
+    assert_eq!(g["hidden"], true);
+
+    let first = my_fill(0x31, 400_000, 2_500_000, 11_000, FillRole::Maker);
+    probe.set_order(hidden(
+        MyOrderState::PartiallyFilled,
+        400_000,
+        vec![first.clone()],
+    ));
+    let g = h.ok("get_order", json!({"order_id": id_hex(0xe1)})).await;
+    assert_eq!(g["state"], "partially_filled");
+    assert_eq!(g["filledRaw"], "400000");
+    assert_eq!(g["remainingRaw"], "600000");
+
+    let second = my_fill(0x32, 600_000, 2_500_000, 12_000, FillRole::Maker);
+    let mut done = hidden(MyOrderState::Filled, 1_000_000, vec![first, second]);
+    done.closed_at_ms = 12_000;
+    probe.set_order(done);
+    let g = h.ok("get_order", json!({"order_id": id_hex(0xe1)})).await;
+    assert_eq!(g["state"], "filled");
+    assert_eq!(g["filledRaw"], "1000000");
+    assert_eq!(g["remainingRaw"], "0");
+    assert_eq!(g["fills"].as_array().unwrap().len(), 2);
+
+    // Both maker fills of the hidden order are attributed to it.
+    let f = h.ok("my_fills", json!({"market_id": MARKET})).await;
+    let fills = f["fills"].as_array().unwrap();
+    assert_eq!(fills.len(), 2, "{f}");
+    for (fill, (fid, qty)) in fills.iter().zip([(0x31, "400000"), (0x32, "600000")]) {
+        assert_eq!(fill["orderId"], id_hex(0xe1));
+        assert_eq!(fill["role"], "maker");
+        assert_eq!(fill["side"], "buy");
+        assert_eq!(fill["fillId"], id_hex(fid));
+        assert_eq!(fill["qtyRaw"], qty);
+    }
+    assert_eq!(probe.sends().len(), 1);
+}
+
+/// A cancelled order that had partly filled reports what filled, what was
+/// left, and each fill at its own price.
+#[tokio::test]
+async fn cancelled_partial_shows_filled_qty() {
+    let v = fake();
+    v.set_order(my_order(
+        0xc5,
+        arborter_pb::Side::Ask,
+        MyOrderState::Cancelled,
+        2_600_000,
+        1_200_000,
+        450_000,
+        vec![
+            my_fill(0x51, 150_000, 2_610_000, 21_000, FillRole::Taker),
+            my_fill(0x52, 300_000, 2_600_000, 22_000, FillRole::Maker),
+        ],
+    ));
     let h = start(v, |l| {
-        l.append(sent(Side::Sell, 700_000, 2_450_000, accepted(0xaa)))
-            .unwrap();
-        l.append(sent(Side::Sell, 700_000, 2_450_000, SentOutcome::Unknown))
+        l.append(sent(Side::Sell, 1_200_000, 2_600_000, accepted(0xc5)))
             .unwrap();
     })
     .await;
-    let all = h.ok("my_orders", json!({"status": "all"})).await;
-    let e = by_id(&all, &id_hex(0xee));
-    assert_eq!(e["state"], "open");
-    assert_eq!(all["orders"].as_array().unwrap().len(), 2);
+    let g = h.ok("get_order", json!({"order_id": id_hex(0xc5)})).await;
+    assert_eq!(g["state"], "cancelled");
+    assert_eq!(g["qtyRaw"], "1200000");
+    assert_eq!(g["filledRaw"], "450000");
+    assert_eq!(g["filled"], "0.450000");
+    assert_eq!(g["remainingRaw"], "750000");
+    let fills = g["fills"].as_array().unwrap();
+    assert_eq!(fills.len(), 2);
+    assert_eq!(fills[0]["role"], "taker");
+    assert_eq!(fills[0]["priceRaw"], "2610000");
+    assert_eq!(fills[0]["qtyRaw"], "150000");
+    assert_eq!(fills[1]["role"], "maker");
+    assert_eq!(fills[1]["priceRaw"], "2600000");
+    assert_eq!(fills[1]["qtyRaw"], "300000");
+    let closed = h.ok("my_orders", json!({"status": "closed"})).await;
+    assert_eq!(by_id(&closed, &id_hex(0xc5))["state"], "cancelled");
 }
 
+/// An order the venue accepted but does not report is never guessed at: it
+/// reads `unknown`. One sent within the 7-day window stays with the open
+/// orders; an older one is past the venue's retention and sorts as closed.
+#[tokio::test]
+async fn accepted_order_the_venue_does_not_report() {
+    let recent = now();
+    let h = start(fake(), |l| {
+        l.append(Record::Sent(SentRecord {
+            ts: recent,
+            market_id: MARKET.into(),
+            side: Side::Buy,
+            qty: 1_100_000,
+            price: 2_500_000,
+            outcome: accepted(0x91),
+        }))
+        .unwrap();
+        l.append(sent(Side::Buy, 1_300_000, 2_400_000, accepted(0x92)))
+            .unwrap();
+    })
+    .await;
+    let open = h.ok("my_orders", json!({})).await;
+    let o = by_id(&open, &id_hex(0x91));
+    assert_eq!(o["state"], "unknown");
+    assert!(o["note"].as_str().unwrap().contains("no record"), "{o}");
+    assert_eq!(open["orders"].as_array().unwrap().len(), 1, "{open}");
+    let closed = h.ok("my_orders", json!({"status": "closed"})).await;
+    let c = by_id(&closed, &id_hex(0x92));
+    assert_eq!(c["state"], "unknown");
+    assert!(c["note"].as_str().unwrap().contains("7 days"), "{c}");
+}
+/// A send recorded before derived ids (no id) is never matched to a venue
+/// order by price and size, even when exactly one would fit.
+#[tokio::test]
+async fn unknown_without_id_is_never_guessed() {
+    let v = fake();
+    v.set_order(my_order(
+        0xee,
+        arborter_pb::Side::Ask,
+        MyOrderState::Open,
+        2_450_000,
+        700_000,
+        0,
+        vec![],
+    ));
+    let h = start(v, |l| {
+        for _ in 0..2 {
+            l.append(sent(Side::Sell, 700_000, 2_450_000, unknown()))
+                .unwrap();
+        }
+    })
+    .await;
+    let all = h.ok("my_orders", json!({"status": "all"})).await;
+    let orders = all["orders"].as_array().unwrap();
+    assert_eq!(orders.len(), 2, "{all}");
+    for o in orders {
+        assert_eq!(o["state"], "unknown", "{o}");
+        assert_eq!(o["orderId"], Value::Null);
+    }
+}
 #[tokio::test]
 async fn unresolved_unknown_stays_unknown() {
     let h = start(fake(), |l| {
-        l.append(sent(Side::Buy, 700_000, 2_450_000, SentOutcome::Unknown))
+        l.append(sent(Side::Buy, 700_000, 2_450_000, unknown()))
             .unwrap();
     })
     .await;
@@ -538,62 +860,117 @@ async fn unresolved_unknown_stays_unknown() {
     assert_eq!(o["state"], "unknown");
     assert_eq!(o["orderId"], Value::Null);
 }
-
+/// `my_fills` is the venue's record of the agent's fills on one market,
+/// maker and taker, each attributed to its own order, oldest first.
 #[tokio::test]
-async fn my_fills_merges_ledger_taker_fills() {
+async fn my_fills_come_from_the_venue() {
     let v = fake();
-    v.set_fills(
-        MARKET,
-        AGENT,
+    v.set_order(my_order(
+        0xaa,
+        arborter_pb::Side::Bid,
+        MyOrderState::PartiallyFilled,
+        2_500_000,
+        1_200_000,
+        400_000,
         vec![
-            // The ledger's own taker fill, seen again on the venue: one fill.
-            TradeFill {
-                order_hit: Some(id_hex(0x11)),
-                qty: 300_000,
-                price: 2_490_000,
-                ts: 20,
-                maker: false,
-            },
-            TradeFill {
-                order_hit: Some(id_hex(0xaa)),
-                qty: 100_000,
-                price: 2_500_000,
-                ts: 10,
-                maker: true,
-            },
+            my_fill(0x61, 100_000, 2_500_000, 10_000, FillRole::Maker),
+            my_fill(0x62, 300_000, 2_490_000, 30_000, FillRole::Taker),
         ],
-    );
-    let h = start(v, |l| {
-        l.append(sent(
-            Side::Buy,
-            1_200_000,
-            2_500_000,
-            SentOutcome::Accepted {
-                order_id: id_hex(0xaa),
-                in_book: true,
-                taker_fills: vec![Fill {
-                    qty: 300_000,
-                    price: 2_490_000,
-                    ts: 20,
-                }],
-            },
-        ))
-        .unwrap();
-    })
-    .await;
+    ));
+    v.set_order(my_order(
+        0xab,
+        arborter_pb::Side::Ask,
+        MyOrderState::Filled,
+        2_700_000,
+        250_000,
+        250_000,
+        vec![my_fill(0x63, 250_000, 2_700_000, 20_000, FillRole::Maker)],
+    ));
+    let probe = v.clone();
+    let h = start(v, |_| {}).await;
     let f = h.ok("my_fills", json!({"market_id": MARKET})).await;
     let fills = f["fills"].as_array().unwrap();
-    assert_eq!(fills.len(), 2, "{f}");
-    // Newest last.
-    assert_eq!(fills[0]["ts"], 10);
+    assert_eq!(fills.len(), 3, "{f}");
+    let ts: Vec<u64> = fills.iter().map(|x| x["ts"].as_u64().unwrap()).collect();
+    assert_eq!(ts, vec![10_000, 20_000, 30_000]);
     assert_eq!(fills[0]["role"], "maker");
     assert_eq!(fills[0]["side"], "buy");
     assert_eq!(fills[0]["orderId"], id_hex(0xaa));
-    assert_eq!(fills[1]["ts"], 20);
+    assert_eq!(fills[1]["side"], "sell");
+    assert_eq!(fills[1]["orderId"], id_hex(0xab));
+    assert_eq!(fills[1]["priceRaw"], "2700000");
+    assert_eq!(fills[2]["role"], "taker");
+    assert_eq!(fills[2]["qty"], "0.300000");
+    assert_eq!(fills[2]["priceRaw"], "2490000");
+    assert_eq!(fills[2]["fillId"], id_hex(0x62));
+    assert!(
+        probe.calls().contains(&Call::ListMyOrders {
+            market_id: Some(MARKET.into()),
+            include_closed: true,
+        }),
+        "{:?}",
+        probe.calls()
+    );
+}
+/// A fills-only (`TRADED`) order, as the venue really sends it, never fails
+/// a read: `my_orders`, `get_order` and `my_fills` all still answer, and its
+/// fill is in `my_fills` (the venue already filtered it by market) with no
+/// side, since the venue cannot say which side it was.
+#[tokio::test]
+async fn a_fills_only_order_never_fails_a_read() {
+    let v = fake();
+    v.set_order(my_order(
+        0xaa,
+        arborter_pb::Side::Bid,
+        MyOrderState::PartiallyFilled,
+        2_500_000,
+        1_200_000,
+        300_000,
+        vec![my_fill(0x71, 300_000, 2_500_000, 7_000, FillRole::Maker)],
+    ));
+    // Placed by other software: not in this server's ledger at all.
+    v.set_fills_only_order(
+        fills_only(
+            0xee,
+            vec![
+                my_fill(0x72, 40_000, 2_560_000, 8_000, FillRole::Taker),
+                my_fill(0x73, 90_000, 2_550_000, 9_000, FillRole::Maker),
+            ],
+        ),
+        MARKET,
+    );
+    // Another market's fills-only order: the venue filters it out by market.
+    v.set_fills_only_order(
+        fills_only(
+            0xef,
+            vec![my_fill(0x74, 60_000, 2_540_000, 6_000, FillRole::Maker)],
+        ),
+        "another-market",
+    );
+    let h = start(v, |l| {
+        l.append(sent(Side::Buy, 1_200_000, 2_500_000, accepted(0xaa)))
+            .unwrap();
+    })
+    .await;
+
+    let all = h.ok("my_orders", json!({"status": "all"})).await;
+    assert_eq!(by_id(&all, &id_hex(0xaa))["state"], "partially_filled");
+    let one = h.ok("get_order", json!({"order_id": id_hex(0xaa)})).await;
+    assert_eq!(one["filledRaw"], "300000");
+
+    let f = h.ok("my_fills", json!({"market_id": MARKET})).await;
+    let fills = f["fills"].as_array().unwrap();
+    let ids: Vec<&str> = fills
+        .iter()
+        .map(|x| x["fillId"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec![id_hex(0x71), id_hex(0x72), id_hex(0x73)], "{f}");
+    assert_eq!(fills[0]["side"], "buy");
+    assert_eq!(fills[1]["orderId"], id_hex(0xee));
+    assert_eq!(fills[1]["side"], Value::Null);
     assert_eq!(fills[1]["role"], "taker");
-    assert_eq!(fills[1]["side"], "buy");
-    assert_eq!(fills[1]["qty"], "0.300000");
-    assert_eq!(fills[1]["priceRaw"], "2490000");
+    assert_eq!(fills[1]["qtyRaw"], "40000");
+    assert_eq!(fills[2]["priceRaw"], "2550000");
 }
 
 #[tokio::test]
@@ -601,7 +978,6 @@ async fn top_of_book_and_orderbook() {
     let v = fake();
     v.set_book(
         MARKET,
-        None,
         book(&[
             book_entry(0x01, arborter_pb::Side::Bid, 2_400_000, 100_000),
             book_entry(0x02, arborter_pb::Side::Bid, 2_400_000, 200_000),
@@ -671,7 +1047,7 @@ async fn reads_never_send_or_cancel() {
     let h = start(v, |l| {
         l.append(sent(Side::Buy, 1_200_000, 2_500_000, accepted(0xaa)))
             .unwrap();
-        l.append(sent(Side::Buy, 700_000, 2_450_000, SentOutcome::Unknown))
+        l.append(sent(Side::Buy, 700_000, 2_450_000, unknown()))
             .unwrap();
     })
     .await;
@@ -701,51 +1077,6 @@ async fn reads_never_send_or_cancel() {
         )),
         "{calls:?}"
     );
-}
-
-#[tokio::test]
-async fn unknown_buy_resolves_from_bids_only() {
-    let v = fake();
-    v.set_book(
-        MARKET,
-        Some(AGENT),
-        book(&[
-            book_entry(0xa1, arborter_pb::Side::Ask, 2_450_000, 700_000),
-            book_entry(0xb1, arborter_pb::Side::Bid, 2_450_000, 700_000),
-        ]),
-    );
-    let h = start(v, |l| {
-        l.append(sent(Side::Buy, 700_000, 2_450_000, SentOutcome::Unknown))
-            .unwrap();
-    })
-    .await;
-    let all = h.ok("my_orders", json!({"status": "all"})).await;
-    assert_eq!(all["orders"][0]["orderId"], id_hex(0xb1));
-    assert_eq!(all["orders"][0]["state"], "open");
-}
-
-#[tokio::test]
-async fn two_unknowns_never_share_one_order() {
-    let v = fake();
-    v.set_book(
-        MARKET,
-        Some(AGENT),
-        book(&[book_entry(0xb1, arborter_pb::Side::Bid, 2_450_000, 700_000)]),
-    );
-    let h = start(v, |l| {
-        for _ in 0..2 {
-            l.append(sent(Side::Buy, 700_000, 2_450_000, SentOutcome::Unknown))
-                .unwrap();
-        }
-    })
-    .await;
-    let all = h.ok("my_orders", json!({"status": "all"})).await;
-    let orders = all["orders"].as_array().unwrap();
-    assert_eq!(orders.len(), 2);
-    for o in orders {
-        assert_eq!(o["state"], "unknown", "{o}");
-        assert_eq!(o["orderId"], Value::Null);
-    }
 }
 
 #[tokio::test]
@@ -783,11 +1114,15 @@ async fn health_error_is_redacted() {
 async fn stale_market_does_not_break_order_reads() {
     const GONE: &str = "gone::0xccc::gone::0xddd";
     let v = fake();
-    v.set_book(
-        MARKET,
-        Some(AGENT),
-        book(&[book_entry(0xaa, arborter_pb::Side::Bid, 2_500_000, 900_000)]),
-    );
+    v.set_order(my_order(
+        0xaa,
+        arborter_pb::Side::Bid,
+        MyOrderState::PartiallyFilled,
+        2_500_000,
+        1_200_000,
+        300_000,
+        vec![my_fill(0x71, 300_000, 2_500_000, 3_000, FillRole::Maker)],
+    ));
     let h = start(v, |l| {
         l.append(sent(Side::Buy, 1_200_000, 2_500_000, accepted(0xaa)))
             .unwrap();
@@ -802,7 +1137,7 @@ async fn stale_market_does_not_break_order_reads() {
             })
         };
         l.append(on_gone(accepted(0xc1))).unwrap();
-        l.append(on_gone(SentOutcome::Unknown)).unwrap();
+        l.append(on_gone(unknown())).unwrap();
         l.append(on_gone(SentOutcome::Failed {
             code: "InvalidArgument".into(),
             message: "bad".into(),
@@ -815,7 +1150,7 @@ async fn stale_market_does_not_break_order_reads() {
     let orders = all["orders"].as_array().unwrap();
     assert_eq!(orders.len(), 4, "{all}");
     let a = by_id(&all, &id_hex(0xaa));
-    assert_eq!(a["state"], "open");
+    assert_eq!(a["state"], "partially_filled");
     assert_eq!(a["remainingRaw"], "900000");
 
     let stale = by_id(&all, &id_hex(0xc1));
@@ -844,12 +1179,13 @@ async fn stale_market_does_not_break_order_reads() {
     assert_eq!(one["state"], "unknown");
     assert_eq!(one["marketId"], GONE);
     let one = h.ok("get_order", json!({"order_id": id_hex(0xaa)})).await;
-    assert_eq!(one["state"], "open");
+    assert_eq!(one["state"], "partially_filled");
 }
 
 #[tokio::test]
-async fn keyless_base_leg_does_not_break_order_reads() {
-    // The agent's EVM key was removed: the market resolves, its base leg has no trader.
+async fn keyless_collateral_leg_does_not_break_order_reads() {
+    // The agent's EVM key was removed: the market resolves, but the leg this
+    // bid gives (quote, on an EVM chain) has no key to read its status with.
     let v = fake();
     v.set_addresses(Addresses {
         evm: None,
@@ -868,7 +1204,6 @@ async fn keyless_base_leg_does_not_break_order_reads() {
         "{one}"
     );
 }
-
 // ---- write tools ----
 
 const BID: u128 = 2_400_000;
@@ -879,7 +1214,6 @@ fn market_venue() -> FakeVenue {
     let v = fake();
     v.set_book(
         MARKET,
-        None,
         book(&[
             book_entry(0x01, arborter_pb::Side::Bid, BID, 500_000),
             book_entry(0x02, arborter_pb::Side::Ask, ASK, 400_000),
@@ -943,6 +1277,7 @@ fn send_call(qty: &str, price: &str, side: Side) -> Call {
         qty: qty.into(),
         price: price.into(),
         post_only: false,
+        hidden: false,
         settle_base: None,
         settle_quote: None,
     }
@@ -980,14 +1315,21 @@ async fn tool_list_with_withdraw() {
     assert!(names.contains("withdraw"));
 }
 
+/// v1 assertion flipped: v1 refused `hidden` everywhere because the venue
+/// could not show an owner its own hidden orders. The owner-signed
+/// order-status reads now can, so `place_limit_order` (and only it) takes
+/// `hidden`. Dealroom (named-id) fills and raw market orders stay absent.
 #[tokio::test]
-async fn no_schema_accepts_hidden_dealroom_or_market() {
+async fn hidden_only_on_limit_orders_and_no_dealroom_or_market() {
     let h = start_with(fake(), |c| c.allow_withdraw = true, |_| {}).await;
     let tools = h.client.list_all_tools().await.unwrap();
     for t in &tools {
         let schema = serde_json::to_string(&t.input_schema).unwrap();
-        for banned in ["hidden", "match_order_ids", "quote_budget"] {
+        for banned in ["match_order_ids", "quote_budget"] {
             assert!(!schema.contains(banned), "{}: {banned} in {schema}", t.name);
+        }
+        if t.name != "place_limit_order" {
+            assert!(!schema.contains("hidden"), "{}: hidden in {schema}", t.name);
         }
     }
     let schema = |name: &str| {
@@ -995,12 +1337,17 @@ async fn no_schema_accepts_hidden_dealroom_or_market() {
         serde_json::to_value(&t.input_schema).unwrap()
     };
     let limit = schema("place_limit_order");
+    assert_eq!(limit["properties"]["hidden"]["type"], "boolean", "{limit}");
     let required: Vec<&str> = limit["required"]
         .as_array()
         .unwrap()
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect();
+    assert!(
+        !required.contains(&"hidden"),
+        "hidden defaults to false: {limit}"
+    );
     for f in ["market_id", "side", "qty", "price"] {
         assert!(required.contains(&f), "{f} not required: {limit}");
     }
@@ -1011,7 +1358,6 @@ async fn no_schema_accepts_hidden_dealroom_or_market() {
     );
     assert!(marketable["properties"]["price"].is_null(), "{marketable}");
 }
-
 #[tokio::test]
 async fn write_tools_annotations() {
     let h = start_with(fake(), |c| c.allow_withdraw = true, |_| {}).await;
@@ -1059,6 +1405,8 @@ async fn limit_order_reaches_venue_and_ledger() {
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert_eq!(lines[0]["kind"], "usage");
     assert_eq!(lines[0]["qty"], "1200000");
+    // The id derived before the send, recorded with the usage.
+    assert_eq!(lines[0]["order_id"], id_hex(0xa1));
     // ceil(1.2 * 2.5) in pair units.
     assert_eq!(lines[0]["quote"], "3000000");
     assert_eq!(lines[0]["day"], utc_day(now()));
@@ -1205,13 +1553,17 @@ async fn unknown_fields_are_rejected() {
     v.push_send(accepted_send(0xa5));
     let probe = v.clone();
     let h = start(v, |_| {}).await;
-    let mut args = limit_buy("1", "2.5");
-    args["hidden"] = json!(true);
-    let r = h.call("place_limit_order", args).await;
-    assert_refused(&r, "hidden");
+    for (field, value) in [
+        ("match_order_ids", json!([id_hex(0x01)])),
+        ("quote_budget", json!("10")),
+    ] {
+        let mut args = limit_buy("1", "2.5");
+        args[field] = value;
+        let r = h.call("place_limit_order", args).await;
+        assert_refused(&r, field);
+    }
     assert_nothing_signed(&probe);
 }
-
 #[tokio::test]
 async fn usage_written_before_send() {
     let v = market_venue();
@@ -1237,14 +1589,17 @@ async fn usage_written_before_send() {
 #[tokio::test]
 async fn unknown_is_not_resent() {
     let v = market_venue();
+    v.push_derived_id(id(0x7d));
     v.push_send(SendResult::Unknown);
     let probe = v.clone();
     let h = start(v, |_| {}).await;
     let o = h.ok("place_limit_order", limit_buy("1", "2.5")).await;
     assert_eq!(o["state"], "unknown");
-    assert_eq!(o["orderId"], Value::Null);
+    // The id derived before the send, so the agent can look it up.
+    assert_eq!(o["orderId"], id_hex(0x7d));
     assert_eq!(probe.sends().len(), 1);
     h.ok("my_orders", json!({"status": "all"})).await;
+    h.ok("get_order", json!({"order_id": id_hex(0x7d)})).await;
     let _ = h.call("get_order", json!({"order_id": id_hex(0x77)})).await;
     h.ok("my_orders", json!({})).await;
     assert_eq!(probe.sends().len(), 1, "{:?}", probe.calls());
@@ -1262,7 +1617,7 @@ async fn unknown_send_is_recorded_and_counted() {
     let l = h.ok("limits", json!({})).await;
     assert_eq!(l["markets"][0]["usedToday"]["qtyRaw"], "1250000");
     assert_eq!(l["markets"][0]["usedToday"]["quoteRaw"], "3125000");
-    // An unresolved unknown has no id to look up by, so `my_orders` shows it.
+    // The venue has no record of it, so `my_orders` shows it as unknown.
     let open = h.ok("my_orders", json!({})).await;
     assert_eq!(open["orders"][0]["state"], "unknown");
     assert_eq!(open["orders"][0]["qtyRaw"], "1250000");
@@ -1427,15 +1782,7 @@ async fn marketable_order_prices_from_book() {
     let books = probe
         .calls()
         .iter()
-        .filter(|c| {
-            matches!(
-                c,
-                Call::Book {
-                    filter_by_trader: None,
-                    ..
-                }
-            )
-        })
+        .filter(|c| matches!(c, Call::Book { .. }))
         .count();
     assert_eq!(books, 2, "one book read per order");
 }
@@ -1459,7 +1806,6 @@ async fn marketable_with_empty_side_refused() {
     let v = fake();
     v.set_book(
         MARKET,
-        None,
         book(&[book_entry(0x01, arborter_pb::Side::Bid, BID, 500_000)]),
     );
     let probe = v.clone();
@@ -1540,6 +1886,15 @@ async fn cancel_unknown_id_requires_side() {
 #[tokio::test]
 async fn cancel_ledger_order_uses_ledger_market_and_side() {
     let v = fake();
+    v.set_order(my_order(
+        0xab,
+        arborter_pb::Side::Ask,
+        MyOrderState::Open,
+        2_500_000,
+        1_000_000,
+        0,
+        vec![],
+    ));
     let probe = v.clone();
     let h = start(v, |l| {
         l.append(sent(Side::Sell, 1_000_000, 2_500_000, accepted(0xab)))
@@ -1614,6 +1969,7 @@ async fn concurrent_orders_cannot_double_spend_daily_cap() {
             qty: 5_500_000,
             quote: 0,
             price: 2_400_000,
+            order_id: None,
         })
         .unwrap();
     })
@@ -1840,17 +2196,16 @@ async fn venue_pin_verified_attestation_is_cached() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reads_wait_for_an_inflight_send() {
     let v = market_venue();
-    // The order rests in the agent's book as soon as the venue has it.
-    v.set_book(
-        MARKET,
-        Some(AGENT),
-        book(&[book_entry(
-            0xf1,
-            arborter_pb::Side::Bid,
-            2_500_000,
-            1_000_000,
-        )]),
-    );
+    // The venue reports the order as soon as it has it.
+    v.set_order(my_order(
+        0xf1,
+        arborter_pb::Side::Bid,
+        MyOrderState::Open,
+        2_500_000,
+        1_000_000,
+        0,
+        vec![],
+    ));
     v.push_send(accepted_send(0xf1));
     v.set_on_send(std::sync::Arc::new(|| {
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -2070,7 +2425,9 @@ async fn closing_the_client_mid_send_still_records_the_outcome() {
 }
 
 /// A usage record left without its outcome (the process died mid-send) shows
-/// in `my_orders` as an unknown order after a restart, and still counts.
+/// in `my_orders` as an unknown order after a restart, and still counts. One
+/// written before derived ids has no id and stays unknown; one with its
+/// derived id resolves through the venue.
 #[tokio::test]
 async fn orphan_usage_shows_as_unknown_after_restart() {
     let dir = tempfile::tempdir().unwrap();
@@ -2085,24 +2442,50 @@ async fn orphan_usage_shows_as_unknown_after_restart() {
             qty: 1_250_000,
             quote: 3_125_000,
             price: 2_500_000,
+            order_id: None,
+        })
+        .unwrap();
+        l.append(Record::Usage {
+            ts: now(),
+            day: today.clone(),
+            market_id: MARKET.into(),
+            side: Side::Sell,
+            qty: 600_000,
+            quote: 0,
+            price: 2_550_000,
+            order_id: Some(id_hex(0x0e)),
         })
         .unwrap();
     }
-    let h = start_in(dir, fake(), |_| {}, |_| {}).await;
+    let v = fake();
+    v.set_order(my_order(
+        0x0e,
+        arborter_pb::Side::Ask,
+        MyOrderState::Open,
+        2_550_000,
+        600_000,
+        0,
+        vec![],
+    ));
+    let probe = v.clone();
+    let h = start_in(dir, v, |_| {}, |_| {}).await;
     let open = h.ok("my_orders", json!({})).await;
     let orders = open["orders"].as_array().unwrap();
-    assert_eq!(orders.len(), 1, "{open}");
+    assert_eq!(orders.len(), 2, "{open}");
     assert_eq!(orders[0]["state"], "unknown");
     assert_eq!(orders[0]["orderId"], Value::Null);
     assert_eq!(orders[0]["qtyRaw"], "1250000");
     assert_eq!(orders[0]["priceRaw"], "2500000");
+    assert_eq!(orders[1]["state"], "open");
+    assert_eq!(orders[1]["orderId"], id_hex(0x0e));
+    assert_eq!(orders[1]["remainingRaw"], "600000");
     let l = h.ok("limits", json!({})).await;
-    assert_eq!(l["markets"][0]["usedToday"]["qtyRaw"], "1250000");
+    assert_eq!(l["markets"][0]["usedToday"]["qtyRaw"], "1850000");
     assert_eq!(l["markets"][0]["usedToday"]["quoteRaw"], "3125000");
-    // The file still holds the one usage line.
-    assert_eq!(ledger_lines(h.dir()).len(), 1);
+    // The file still holds the two usage lines, and nothing was re-sent.
+    assert_eq!(ledger_lines(h.dir()).len(), 2);
+    assert!(probe.sends().is_empty());
 }
-
 #[tokio::test]
 async fn halted_order_says_halted_when_venue_is_down() {
     // Config unreachable.
