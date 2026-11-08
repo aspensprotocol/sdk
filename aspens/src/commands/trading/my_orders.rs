@@ -13,8 +13,10 @@
 //!
 //! A `ReadSession` holds 1 to 4 delegations, all for one delegate key, so a
 //! user with wallets on several chains signs each once and every query covers
-//! all of them. When the caller passes the wallets, a delegation with less than
-//! five minutes left is re-signed before the query goes out.
+//! all of them. When the caller passes the wallets and a delegation has less
+//! than five minutes left, the session moves to a fresh delegate key, and every
+//! delegation is re-signed for it before the query goes out. A key is never
+//! re-delegated, so a leaked one reads for at most 24 hours.
 //!
 //! A Tron owner is always sent as lowercase `0x` hex; the `T…` form is refused
 //! by the venue.
@@ -115,6 +117,12 @@ impl ReadSession {
     /// The delegations currently in the session.
     pub fn delegations(&self) -> &[ReadDelegation] {
         &self.delegations
+    }
+
+    /// The public key of the session's delegate key, which every delegation
+    /// names.
+    pub fn delegate_pubkey(&self) -> [u8; 32] {
+        self.key.pubkey()
     }
 }
 
@@ -289,11 +297,17 @@ pub fn build_my_orders_request(
     Ok(build_request_at(session, query, now_ms()?, nonce))
 }
 
-/// Re-sign every delegation with less than [`REDELEGATE_BELOW`] left, for
-/// those whose owner is one of `wallets`. A delegation no wallet here owns is
-/// left alone. Returns how many were re-signed.
+/// Rotate the session's delegate key when a delegation it can renew is near
+/// expiry: when any delegation with less than [`REDELEGATE_BELOW`] left is
+/// owned by one of `wallets`, make a fresh [`DelegateKey`] and re-sign every
+/// delegation `wallets` own for it. The old key is dropped, so no key is ever
+/// re-delegated and none is valid for more than 24 hours. A delegation no
+/// wallet here owns cannot name the new key and is dropped from the session
+/// (it stays valid on the venue, for the old key, until it expires). With
+/// nothing to renew, the session is left as it is. Returns how many
+/// delegations were re-signed.
 ///
-/// The new window is the old one's length, but at least ten minutes and at
+/// Each new window is the old one's length, but at least ten minutes and at
 /// most 24 hours.
 pub(crate) async fn refresh_delegations(
     session: &mut ReadSession,
@@ -302,33 +316,72 @@ pub(crate) async fn refresh_delegations(
     architecture_of: impl Fn(&str) -> Result<Architecture>,
     now_s: u64,
 ) -> Result<usize> {
-    let mut refreshed = 0;
-    for i in 0..session.delegations.len() {
-        let d = session.delegations[i].clone();
-        if d.expires.saturating_sub(now_s) >= REDELEGATE_BELOW.as_secs() {
-            continue;
-        }
+    // Each delegation with the wallet that owns it, if one is here.
+    let mut owned = Vec::with_capacity(session.delegations.len());
+    for d in &session.delegations {
         let architecture = architecture_of(&d.owner_network)?;
-        let Some(wallet) = wallets.iter().find(|w| owns(w, architecture, &d.owner)) else {
-            continue;
-        };
+        let wallet = wallets
+            .iter()
+            .copied()
+            .find(|w| owns(w, architecture, &d.owner));
+        owned.push((d, architecture, wallet));
+    }
+    let due = owned.iter().any(|(d, _, w)| {
+        w.is_some() && d.expires.saturating_sub(now_s) < REDELEGATE_BELOW.as_secs()
+    });
+    if !due {
+        return Ok(0);
+    }
+    let key = DelegateKey::generate()?;
+    let mut renewed = Vec::with_capacity(owned.len());
+    for (d, architecture, wallet) in owned {
+        let Some(wallet) = wallet else { continue };
         let ttl = d
             .expires
             .saturating_sub(d.issued)
             .clamp(MIN_REDELEGATION_TTL.as_secs(), MAX_DELEGATION_TTL.as_secs());
-        session.delegations[i] = create_at(
-            wallet,
-            &d.owner_network,
-            architecture,
-            venue_id,
-            &session.key,
-            ttl,
-            now_s,
-        )
-        .await?;
-        refreshed += 1;
+        renewed.push(
+            create_at(
+                wallet,
+                &d.owner_network,
+                architecture,
+                venue_id,
+                &key,
+                ttl,
+                now_s,
+            )
+            .await?,
+        );
     }
-    Ok(refreshed)
+    let n = renewed.len();
+    // All signed for `key`, 1 to 4 of them (a subset of a valid session).
+    *session = ReadSession::new(renewed, key)?;
+    Ok(n)
+}
+
+/// Re-delegate `session` if it is due, as [`get_my_orders_with_wallet`] does
+/// before each query: when a delegation `wallets` can renew has less than five
+/// minutes left, the session moves to a fresh delegate key (see the module
+/// docs). Returns how many delegations were re-signed.
+pub async fn refresh_read_session_with_wallets(
+    config: &GetConfigResponse,
+    session: &mut ReadSession,
+    wallets: &[&Wallet],
+) -> Result<usize> {
+    let (venue_id, archs) = venue_context(config)?;
+    refresh_delegations(
+        session,
+        wallets,
+        &venue_id,
+        |network| {
+            archs
+                .get(network)
+                .copied()
+                .ok_or_else(|| eyre!("delegation names unknown network '{network}'"))
+        },
+        now()?.as_secs(),
+    )
+    .await
 }
 
 /// `venue_id` and a network-to-architecture map, from the venue config.
@@ -350,20 +403,7 @@ async fn prepare(
     session: &mut ReadSession,
     wallets: &[&Wallet],
 ) -> Result<()> {
-    let (venue_id, archs) = venue_context(config)?;
-    refresh_delegations(
-        session,
-        wallets,
-        &venue_id,
-        |network| {
-            archs
-                .get(network)
-                .copied()
-                .ok_or_else(|| eyre!("delegation names unknown network '{network}'"))
-        },
-        now()?.as_secs(),
-    )
-    .await?;
+    refresh_read_session_with_wallets(config, session, wallets).await?;
     Ok(())
 }
 
@@ -1276,8 +1316,12 @@ mod tests {
         let n = refresh_delegations(&mut session, &[&evm, &sol], VENUE, arch_of, NOW_S)
             .await
             .unwrap();
-        assert_eq!(n, 1);
-        assert_eq!(session.delegations[0], fresh, "300 s+ left is left alone");
+        // The stale one makes the session due; the key rotates, so the fresh
+        // one is re-signed for the new key too.
+        assert_eq!(n, 2);
+        assert_ne!(session.delegations[0], fresh);
+        assert_eq!(session.delegations[0].owner, fresh.owner);
+        assert_eq!(session.delegations[0].expires - NOW_S, 3600);
         let d = &session.delegations[1];
         assert_eq!(
             (d.issued, d.owner.as_str()),
@@ -1306,6 +1350,100 @@ mod tests {
             0
         );
         assert_eq!(s2.delegations[0], edge);
+    }
+
+    /// A re-delegation never extends the old key: it makes a fresh delegate
+    /// key and re-signs every delegation for it, so one key is valid for at
+    /// most 24 h. A delegation no wallet here owns cannot name the new key and
+    /// is dropped.
+    #[tokio::test]
+    async fn redelegation_rotates_the_delegate_key() {
+        let evm = evm_wallet();
+        let sol = solana_wallet();
+        let fresh = create_at(
+            &evm,
+            "base-sepolia",
+            Architecture::Evm,
+            VENUE,
+            &key(),
+            3600,
+            NOW_S,
+        )
+        .await
+        .unwrap();
+        let stale = create_at(
+            &sol,
+            "solana-devnet",
+            Architecture::Solana,
+            VENUE,
+            &key(),
+            3600,
+            NOW_S - 3600 + 120,
+        )
+        .await
+        .unwrap();
+        let orphan = create_at(
+            &evm,
+            "tron-nile",
+            Architecture::Tron,
+            VENUE,
+            &key(),
+            3600,
+            NOW_S,
+        )
+        .await
+        .unwrap();
+        let old_pk = key().pubkey();
+        let mut session =
+            ReadSession::new(vec![fresh.clone(), stale.clone(), orphan], key()).unwrap();
+        // Only the Solana delegation is near expiry, but the fresh EVM and Tron
+        // ones are re-signed too: every delegation must name the new key.
+        let n = refresh_delegations(&mut session, &[&evm, &sol], VENUE, arch_of, NOW_S)
+            .await
+            .unwrap();
+        assert_eq!(n, 3, "every delegation a wallet owns is re-signed");
+        let new_pk = session.delegate_pubkey();
+        assert_ne!(new_pk, old_pk, "a refresh makes a new delegate key");
+        assert_eq!(session.delegations().len(), 3);
+        for d in session.delegations() {
+            assert_eq!(d.delegate_pubkey, new_pk.to_vec(), "{}", d.owner_network);
+            assert_eq!(d.issued, NOW_S);
+            assert!(d.expires - d.issued <= 86_400);
+        }
+        assert_eq!(session.delegations()[0].owner, fresh.owner);
+        assert_eq!(session.delegations()[1].owner, stale.owner);
+
+        // A delegation no wallet owns is dropped when the key rotates.
+        let s1 = create_at(
+            &sol,
+            "solana-devnet",
+            Architecture::Solana,
+            VENUE,
+            &key(),
+            3600,
+            NOW_S - 3500,
+        )
+        .await
+        .unwrap();
+        let e1 = create_at(
+            &evm,
+            "base-sepolia",
+            Architecture::Evm,
+            VENUE,
+            &key(),
+            3600,
+            NOW_S,
+        )
+        .await
+        .unwrap();
+        let mut s = ReadSession::new(vec![e1, s1.clone()], key()).unwrap();
+        let n = refresh_delegations(&mut s, &[&sol], VENUE, arch_of, NOW_S)
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(s.delegations().len(), 1);
+        assert_eq!(s.delegations()[0].owner, s1.owner);
+        assert_ne!(s.delegate_pubkey(), old_pk);
     }
 
     #[tokio::test]

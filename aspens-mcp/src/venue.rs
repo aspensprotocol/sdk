@@ -28,7 +28,7 @@ use aspens::health::{PingResult, ping_grpc_server};
 use aspens::{
     AspensClient, CurveType, DelegateKey, ReadSession, Wallet, chain_curve,
     get_my_orders_from_config_with_wallet, list_my_orders_from_config_with_wallet,
-    load_trader_wallet, open_read_session_with_wallets,
+    load_trader_wallet, open_read_session_with_wallets, refresh_read_session_with_wallets,
 };
 use eyre::{Result, eyre};
 
@@ -378,6 +378,32 @@ pub struct SdkVenue {
     read: tokio::sync::Mutex<ReadState>,
 }
 
+/// Make `state` a delegated read session that is not due for renewal.
+///
+/// The first time, the startup key is delegated by every trader wallet that
+/// owns an account on the venue, for 24 hours. After that, a session with a
+/// delegation under five minutes from expiry moves to a fresh delegate key
+/// (`refresh_read_session_with_wallets`), re-signed by the wallets; the old key
+/// is dropped and never re-delegated, so any one key reads for at most 24 h.
+async fn ensure_session(
+    state: &mut ReadState,
+    cfg: &GetConfigResponse,
+    wallets: &[&Wallet],
+) -> Result<()> {
+    let key = match std::mem::replace(state, ReadState::Empty) {
+        ReadState::Session(mut s) => {
+            let refreshed = refresh_read_session_with_wallets(cfg, &mut s, wallets).await;
+            *state = ReadState::Session(s);
+            return refreshed.map(|_| ());
+        }
+        ReadState::Key(k) => k,
+        ReadState::Empty => DelegateKey::generate()?,
+    };
+    let session = open_read_session_with_wallets(cfg, wallets, key, MAX_DELEGATION_TTL).await?;
+    *state = ReadState::Session(session);
+    Ok(())
+}
+
 /// The read side's delegate key, before and after its delegations are signed.
 enum ReadState {
     /// Not delegated yet.
@@ -429,24 +455,6 @@ impl SdkVenue {
             config: Mutex::new(None),
             read: tokio::sync::Mutex::new(ReadState::Key(DelegateKey::generate()?)),
         })
-    }
-
-    /// Delegate the read key with the trader wallets if that has not been
-    /// done. Each delegation lasts 24 hours; the SDK re-signs one with less
-    /// than five minutes left before each read.
-    async fn ensure_session(&self, state: &mut ReadState, cfg: &GetConfigResponse) -> Result<()> {
-        let key = match std::mem::replace(state, ReadState::Empty) {
-            ReadState::Session(s) => {
-                *state = ReadState::Session(s);
-                return Ok(());
-            }
-            ReadState::Key(k) => k,
-            ReadState::Empty => DelegateKey::generate()?,
-        };
-        let session =
-            open_read_session_with_wallets(cfg, &self.wallets(), key, MAX_DELEGATION_TTL).await?;
-        *state = ReadState::Session(session);
-        Ok(())
     }
 
     fn wallets(&self) -> Vec<&Wallet> {
@@ -540,7 +548,7 @@ impl Venue for SdkVenue {
         }
         let cfg = self.config().await?;
         let mut state = self.read.lock().await;
-        self.ensure_session(&mut state, &cfg).await?;
+        ensure_session(&mut state, &cfg, &self.wallets()).await?;
         let ReadState::Session(session) = &mut *state else {
             return Err(eyre!("internal: no read session after delegating"));
         };
@@ -557,7 +565,7 @@ impl Venue for SdkVenue {
     ) -> Result<Vec<VenueOrder>> {
         let cfg = self.config().await?;
         let mut state = self.read.lock().await;
-        self.ensure_session(&mut state, &cfg).await?;
+        ensure_session(&mut state, &cfg, &self.wallets()).await?;
         let ReadState::Session(session) = &mut *state else {
             return Err(eyre!("internal: no read session after delegating"));
         };
@@ -1034,6 +1042,73 @@ mod tests {
             "{missing}"
         );
         assert!(collateral_key_missing(&cfg, "nope", Side::Buy, &evm_only).is_err());
+    }
+
+    /// The read session moves to a fresh delegate key when it re-delegates,
+    /// so the key made at startup stops being renewed: a leaked key reads for
+    /// at most 24 h however long the process runs.
+    #[tokio::test]
+    async fn read_session_refresh_rotates_the_delegate_key() {
+        use aspens::commands::config::config_pb::{Chain, Configuration};
+        let cfg = GetConfigResponse {
+            config: Some(Configuration {
+                chains: vec![Chain {
+                    network: "base-sepolia".into(),
+                    architecture: "evm".into(),
+                    ..Default::default()
+                }],
+                venue_id: "0123456789abcdef0123456789abcdef".into(),
+                ..Default::default()
+            }),
+        };
+        let wallet = Wallet::from_evm_hex(
+            "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
+        )
+        .unwrap();
+        let wallets = [&wallet];
+
+        // First use: delegated for the startup key, for 24 h.
+        let startup = DelegateKey::generate().unwrap();
+        let startup_pk = startup.pubkey();
+        let mut state = ReadState::Key(startup);
+        ensure_session(&mut state, &cfg, &wallets).await.unwrap();
+        let ReadState::Session(s) = &state else {
+            panic!("no session")
+        };
+        assert_eq!(s.delegate_pubkey(), startup_pk);
+        let d = &s.delegations()[0];
+        assert_eq!(d.expires - d.issued, MAX_DELEGATION_TTL.as_secs());
+
+        // Not due: the same key, untouched.
+        ensure_session(&mut state, &cfg, &wallets).await.unwrap();
+        let ReadState::Session(s) = &state else {
+            panic!("no session")
+        };
+        assert_eq!(s.delegate_pubkey(), startup_pk);
+
+        // Due (a delegation with a minute left): a new key, named by every
+        // delegation, and the old key is gone from the session.
+        let old = DelegateKey::generate().unwrap();
+        let old_pk = old.pubkey();
+        let short = aspens::create_read_delegation_with_wallet(
+            &wallet,
+            "base-sepolia",
+            aspens::Architecture::Evm,
+            "0123456789abcdef0123456789abcdef",
+            &old,
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+        let mut state = ReadState::Session(ReadSession::new(vec![short], old).unwrap());
+        ensure_session(&mut state, &cfg, &wallets).await.unwrap();
+        let ReadState::Session(s) = &state else {
+            panic!("no session")
+        };
+        assert_ne!(s.delegate_pubkey(), old_pk);
+        for d in s.delegations() {
+            assert_eq!(d.delegate_pubkey, s.delegate_pubkey().to_vec());
+        }
     }
 
     #[test]

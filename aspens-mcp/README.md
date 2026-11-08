@@ -30,7 +30,10 @@ covers. Set the caps to what you can afford to lose to a bad fill.
 delegate key at startup, holds it in memory only (it is never written to disk), and has each
 trader wallet sign a read-only delegation to it for 24 hours. **A leaked delegate key can read the
 owner's order statuses for up to 24 hours, and there is no early revocation. It can never trade,
-cancel or withdraw.** A restart makes a new key; the old delegations still read until they expire.
+cancel or withdraw.** The 24 hours hold however long the server runs: a key is delegated once and
+never renewed. When a delegation nears expiry, the server makes a fresh key and the wallets sign
+new delegations for it; the old key is dropped. A restart also makes a new key, and the old key's
+delegations still read until they expire.
 
 ## Install
 
