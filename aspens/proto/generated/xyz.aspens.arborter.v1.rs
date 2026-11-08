@@ -547,7 +547,10 @@ pub struct MyOrder {
     /// Pair-decimal units; empty for a market order.
     #[prost(string, tag = "8")]
     pub price: ::prost::alloc::string::String,
-    /// False when the initial quantity cannot be recovered.
+    /// False when the order has no initial quantity to report: a
+    /// `MY_ORDER_STATE_TRADED` order (known from its fills alone), or a market
+    /// bid, whose signed quantity bounds nothing (its quote budget does). A
+    /// closed market bid is FILLED if anything filled, else EXPIRED.
     #[prost(bool, tag = "9")]
     pub initial_qty_known: bool,
     /// Pair units; meaningful when `initial_qty_known`.
@@ -1109,6 +1112,12 @@ pub mod arborter_service_client {
         /// Owner-signed, paginated listing of the caller's own orders, same auth as
         /// `GetMyOrders`. Pass `MyOrdersQuery.cursor` from the previous page's
         /// `next_cursor` to continue.
+        ///
+        /// `MY_ORDER_STATE_TRADED` entries (orders the venue knows from their fills
+        /// alone, with no order record) are listed whatever `include_closed` is, and
+        /// only on the first page (empty `cursor`). They come after that page's
+        /// `limit` orders and do not count towards it: at most 500 of them, from
+        /// fills matched in the last 7 days, filtered by `market_id` when set.
         pub async fn list_my_orders(
             &mut self,
             request: impl tonic::IntoRequest<super::MyOrdersRequest>,
