@@ -640,6 +640,82 @@ pub async fn send_order_with_wallets(
     base_address: Option<String>,
     quote_address: Option<String>,
 ) -> Result<SendOrderResponse> {
+    let prepared = prepare_order_with_wallets(
+        &market_id,
+        side,
+        &quantity,
+        price.as_deref(),
+        wallets,
+        &config,
+        post_only,
+        hidden,
+        quote_budget,
+        match_order_ids,
+        base_address,
+        quote_address,
+    )?;
+    send_prepared_order_with_wallets(url, prepared, wallets).await
+}
+
+/// An order built and ready to sign, with the id the venue will derive for
+/// it. Made by [`prepare_order_with_wallets`], sent by
+/// [`send_prepared_order_with_wallets`].
+///
+/// The id is known before anything is signed or sent, so a caller can record
+/// it first and, if the send gets no answer, ask the venue about that id.
+/// Sending the same prepared order twice would submit it twice; it is
+/// consumed by the send for that reason.
+pub struct PreparedSend {
+    order: Order,
+    order_id: [u8; 32],
+    signing_curve: crate::wallet::CurveType,
+    signing_address: String,
+    signing_architecture: crate::wallet::Architecture,
+    config: GetConfigResponse,
+    market: crate::commands::config::config_pb::Market,
+    quantity_raw: String,
+    price_raw: Option<String>,
+}
+
+impl std::fmt::Debug for PreparedSend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedSend")
+            .field("order_id", &format!("0x{}", hex::encode(self.order_id)))
+            .field("market_id", &self.order.market_id)
+            .field("side", &self.order.side)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedSend {
+    /// The 32-byte id the venue derives for this order: the shared recipe
+    /// (`crate::orders::derive_order_id`) over the order as it will be signed.
+    pub fn order_id(&self) -> [u8; 32] {
+        self.order_id
+    }
+}
+
+/// Build the order [`send_order_with_wallets`] would send, without signing or
+/// sending it. Every argument means what it does there; this also performs
+/// every check that function makes before signing.
+///
+/// Pure: no I/O. The returned order carries a fresh nonce, so two calls with
+/// the same arguments prepare two different orders with two different ids.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_order_with_wallets(
+    market_id: &str,
+    side: i32,
+    quantity: &str,
+    price: Option<&str>,
+    wallets: &[&Wallet],
+    config: &GetConfigResponse,
+    post_only: bool,
+    hidden: bool,
+    quote_budget: Option<String>,
+    match_order_ids: Vec<[u8; 32]>,
+    base_address: Option<String>,
+    quote_address: Option<String>,
+) -> Result<PreparedSend> {
     if wallets.is_empty() {
         return Err(eyre::eyre!(
             "send_order_with_wallets requires at least one wallet"
@@ -657,14 +733,13 @@ pub async fn send_order_with_wallets(
     }
 
     // Look up market
-    let market = lookup_market(&config, &market_id)?;
+    let market = lookup_market(config, market_id)?;
     let pair_decimals = market.pair_decimals as u32;
 
     // Convert amounts
-    let quantity_raw = convert_to_pair_decimals(&quantity, pair_decimals)
+    let quantity_raw = convert_to_pair_decimals(quantity, pair_decimals)
         .map_err(|e| eyre::eyre!("Invalid quantity '{}': {}", quantity, e))?;
     let price_raw = price
-        .as_ref()
         .map(|p| convert_to_pair_decimals(p, pair_decimals))
         .transpose()
         .map_err(|e| eyre::eyre!("Invalid price: {}", e))?;
@@ -755,7 +830,7 @@ pub async fn send_order_with_wallets(
     // and the order id are derived by the arborter from the signed `Order`;
     // the commitment below is kept locally, for tracking.
     let prepared = prepare_order(
-        &config,
+        config,
         market,
         side,
         quantity_raw.clone(),
@@ -770,18 +845,70 @@ pub async fn send_order_with_wallets(
     )?;
 
     // The commitment above is this caller's own copy of the id, derived
-    // locally; the response below carries the arborter's own derivation of
-    // the same 32 bytes, computed from the order signed just after this log
-    // line. Logging both is the caller's one link between "what I computed"
-    // and "what the venue assigned" until the response returns.
+    // locally; the response carries the arborter's own derivation of the
+    // same 32 bytes, computed from the order signed at send time. Logging
+    // both is the caller's one link between "what I computed" and "what the
+    // venue assigned" until the response returns.
     tracing::info!(
         "Derived order id {} (nonce {}, budget {} in the token it gives)",
         prepared.commitment.order_id,
         prepared.commitment.nonce,
         prepared.commitment.input_amount,
     );
+    let id_hex = prepared
+        .commitment
+        .order_id
+        .strip_prefix("0x")
+        .unwrap_or(&prepared.commitment.order_id);
+    let order_id: [u8; 32] = hex::decode(id_hex)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| eyre::eyre!("internal: derived order id is not 32 bytes of hex"))?;
 
-    let result = call_send_order(url, prepared.order, signing_wallet, signing_architecture).await;
+    Ok(PreparedSend {
+        order: prepared.order,
+        order_id,
+        signing_curve: signing_wallet.curve(),
+        signing_address: signing_wallet.address(),
+        signing_architecture,
+        config: config.clone(),
+        market: market.clone(),
+        quantity_raw,
+        price_raw,
+    })
+}
+
+/// Sign `prepared` with the wallet its id was derived over (which must be
+/// one of `wallets`) and send it.
+pub async fn send_prepared_order_with_wallets(
+    url: String,
+    prepared: PreparedSend,
+    wallets: &[&Wallet],
+) -> Result<SendOrderResponse> {
+    let signing_wallet = wallets
+        .iter()
+        .copied()
+        .find(|w| w.curve() == prepared.signing_curve && w.address() == prepared.signing_address)
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "the signing wallet {} the order was prepared for is not among the wallets \
+                 given; nothing was signed",
+                prepared.signing_address
+            )
+        })?;
+    let PreparedSend {
+        order,
+        signing_architecture,
+        config,
+        market,
+        quantity_raw,
+        price_raw,
+        ..
+    } = prepared;
+    let side = order.side;
+    let pair_decimals = market.pair_decimals as u32;
+
+    let result = call_send_order(url, order, signing_wallet, signing_architecture).await;
 
     // Enhance balance errors with actual balance info (EVM only — Solana balance
     // queries via Alloy don't apply). Use the EVM-side wallet's address since
@@ -798,7 +925,7 @@ pub async fn send_order_with_wallets(
             if let Ok(user_address) = evm_wallet.address().parse::<Address>()
                 && let Some(enhanced) = enhance_balance_error(
                     &config,
-                    market,
+                    &market,
                     side,
                     &quantity_raw,
                     price_raw.as_deref(),
@@ -1320,6 +1447,92 @@ mod tests {
             );
         };
         assert_ne!(first.commitment.order_id, second.commitment.order_id);
+    }
+
+    /// The id a caller gets before sending is the one derived over the exact
+    /// `Order` that `send_prepared_order_with_wallets` signs: recomputing it
+    /// from that order's own fields (its nonce included) gives the same bytes.
+    #[test]
+    fn prepared_send_id_is_derived_from_the_order_it_signs() {
+        let (config, market) =
+            crate::commands::trading::gasless::tests::config_with_market(18, 6, 8);
+        let wallet = Wallet::from_evm_hex(TEST_PRIVKEY).expect("test key parses");
+        let p = prepare_order_with_wallets(
+            &market.market_id,
+            1,
+            "1.5",
+            Some("2.25"),
+            &[&wallet],
+            &config,
+            false,
+            true,
+            None,
+            vec![],
+            None,
+            None,
+        )
+        .expect("a hidden limit bid prepares");
+        assert!(p.order.hidden, "hidden must reach the signed order");
+        assert_eq!(p.order.quantity, "150000000");
+        assert_eq!(p.order.price.as_deref(), Some("225000000"));
+        let again = crate::commands::trading::gasless::build_order_commitment(
+            &config,
+            &market,
+            p.order.side,
+            &wallet,
+            &p.order.quantity,
+            p.order.price.as_deref(),
+            p.order.quote_budget.as_deref(),
+            p.order.nonce,
+        )
+        .unwrap();
+        assert_eq!(format!("0x{}", hex::encode(p.order_id())), again.order_id);
+        // A different nonce is a different id: the id really covers the nonce.
+        let other = crate::commands::trading::gasless::build_order_commitment(
+            &config,
+            &market,
+            p.order.side,
+            &wallet,
+            &p.order.quantity,
+            p.order.price.as_deref(),
+            None,
+            p.order.nonce + 1,
+        )
+        .unwrap();
+        assert_ne!(format!("0x{}", hex::encode(p.order_id())), other.order_id);
+    }
+
+    /// The prepared order is signed by the wallet its id was derived over;
+    /// sending it without that wallet is refused before anything is signed.
+    #[tokio::test]
+    async fn prepared_send_needs_the_wallet_it_was_derived_over() {
+        let (config, market) =
+            crate::commands::trading::gasless::tests::config_with_market(18, 6, 8);
+        let wallet = Wallet::from_evm_hex(TEST_PRIVKEY).expect("test key parses");
+        let p = prepare_order_with_wallets(
+            &market.market_id,
+            2,
+            "1",
+            Some("3"),
+            &[&wallet],
+            &config,
+            false,
+            false,
+            None,
+            vec![],
+            None,
+            None,
+        )
+        .unwrap();
+        let stranger = Wallet::from_evm_hex(
+            "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+        )
+        .unwrap();
+        let err =
+            send_prepared_order_with_wallets("http://127.0.0.1:1".to_string(), p, &[&stranger])
+                .await
+                .unwrap_err();
+        assert!(err.to_string().contains("signing wallet"), "{err}");
     }
 
     /// The refusals are enforced on the path that actually signs, not only in

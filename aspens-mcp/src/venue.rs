@@ -9,39 +9,50 @@ use std::time::Duration;
 
 use aspens::commands::config::config_pb::GetConfigResponse;
 use aspens::commands::config::{attestation_report_json, get_attestation, get_config};
-use aspens::commands::trading::arborter_pb::{self, CancelOrderResponse, SendOrderResponse, Trade};
+use aspens::commands::trading::arborter_pb::{
+    self, CancelOrderResponse, FillRole, MyOrder, SendOrderResponse, Trade,
+};
 use aspens::commands::trading::balance::{Balances, fetch_balances};
 use aspens::commands::trading::book_snapshot::{BookState, fetch_book_snapshot};
 use aspens::commands::trading::cancel_order::call_cancel_order_from_config_with_wallet;
 use aspens::commands::trading::deposit::call_deposit_from_config_with_wallet;
-use aspens::commands::trading::send_order::{origin_network_for_side, send_order_with_wallets};
-use aspens::commands::trading::stream_trades::{StreamTradesOptions, fetch_trades_snapshot};
+use aspens::commands::trading::my_orders::MAX_DELEGATION_TTL;
+use aspens::commands::trading::send_order::{
+    PreparedSend, origin_network_for_side, prepare_order_with_wallets,
+    send_prepared_order_with_wallets,
+};
 use aspens::commands::trading::withdraw::{
     WithdrawOpts, call_withdraw_from_config_with_wallet_opts,
 };
 use aspens::health::{PingResult, ping_grpc_server};
-use aspens::{AspensClient, CurveType, Wallet, chain_curve, load_trader_wallet};
+use aspens::{
+    AspensClient, CurveType, DelegateKey, ReadSession, Wallet, chain_curve,
+    get_my_orders_from_config_with_wallet, list_my_orders_from_config_with_wallet,
+    load_trader_wallet, open_read_session_with_wallets,
+};
 use eyre::{Result, eyre};
 
 use crate::config::Config;
 use crate::ledger::{Fill, Side};
-use crate::orders::order_id_hex;
+use crate::orders::{OrderFill, OrderState, Role, VenueOrder, order_id_hex};
 
-/// How long a book or trades stream is collected before it is cut off.
+/// How long a book stream is collected before it is cut off.
 pub const STREAM_WINDOW: Duration = Duration::from_millis(1500);
 
-/// One fill of the agent's, from the venue's historical Trades stream.
-/// Amounts are pair-decimal units.
+/// A limit order as the order path hands it to the venue. `qty` and `price`
+/// are HUMAN decimal strings (the SDK scales them by the config's pair
+/// decimals): the caller formats them from pair units with
+/// `aspens::decimals::format_decimal_amount`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TradeFill {
-    /// The order the trade matched (`0x` + 64 hex), `None` when the venue sent none.
-    pub order_hit: Option<String>,
-    pub qty: u128,
-    pub price: u128,
-    /// The venue's `Trade.timestamp`.
-    pub ts: u64,
-    /// The agent's address is one of the trade's maker addresses.
-    pub maker: bool,
+pub struct LimitOrder {
+    pub market_id: String,
+    pub side: Side,
+    pub qty: String,
+    pub price: String,
+    pub post_only: bool,
+    pub hidden: bool,
+    pub settle_base: Option<String>,
+    pub settle_quote: Option<String>,
 }
 
 /// The outcome of a send.
@@ -87,37 +98,37 @@ pub trait Venue: Send + Sync + 'static {
     /// The venue config, cached after the first success.
     fn config(&self) -> impl Future<Output = Result<GetConfigResponse>> + Send;
 
-    /// The book, collected for [`STREAM_WINDOW`], optionally filtered to one trader.
-    fn book(
-        &self,
-        market_id: String,
-        filter_by_trader: Option<String>,
-    ) -> impl Future<Output = Result<BookState>> + Send;
+    /// The public book, collected for [`STREAM_WINDOW`].
+    fn book(&self, market_id: String) -> impl Future<Output = Result<BookState>> + Send;
 
-    /// `trader`'s historical fills on `market_id`, collected for [`STREAM_WINDOW`].
-    fn my_fills(
-        &self,
-        market_id: String,
-        trader: String,
-    ) -> impl Future<Output = Result<Vec<TradeFill>>> + Send;
-
-    /// Send a limit order, signed against `cfg`: the config snapshot the caller
-    /// checked, never one fetched here. `qty` and `price` are HUMAN decimal
-    /// strings (the SDK scales them by `cfg`'s pair decimals): the caller formats
-    /// them from pair units with `aspens::decimals::format_decimal_amount`.
-    /// Never hidden, never a market order, never a discretionary fill.
-    #[allow(clippy::too_many_arguments)]
-    fn send_limit(
+    /// A limit order, built against `cfg` (the config snapshot the caller
+    /// checked, never one fetched here) but neither signed nor sent, and the
+    /// id the venue will derive for it (`0x` + 64 hex). Never a market order,
+    /// never a discretionary fill. No I/O.
+    type Prepared: Send + 'static;
+    fn prepare_limit(
         &self,
         cfg: &GetConfigResponse,
-        market_id: String,
-        side: Side,
-        qty: String,
-        price: String,
-        post_only: bool,
-        settle_base: Option<String>,
-        settle_quote: Option<String>,
-    ) -> impl Future<Output = SendResult> + Send;
+        order: LimitOrder,
+    ) -> Result<(String, Self::Prepared)>;
+
+    /// Sign and send a prepared order, once.
+    fn send_prepared(&self, prepared: Self::Prepared) -> impl Future<Output = SendResult> + Send;
+
+    /// The agent's orders with these ids, as the venue's order-status records
+    /// hold them. An id the venue has no record of for the agent is absent.
+    fn orders_by_id(
+        &self,
+        ids: Vec<[u8; 32]>,
+    ) -> impl Future<Output = Result<Vec<VenueOrder>>> + Send;
+
+    /// The agent's open orders, on one market or all, plus with
+    /// `include_closed` those closed within the venue's retention.
+    fn list_orders(
+        &self,
+        market_id: Option<String>,
+        include_closed: bool,
+    ) -> impl Future<Output = Result<Vec<VenueOrder>>> + Send;
 
     fn cancel(
         &self,
@@ -205,23 +216,6 @@ pub fn classify_cancel(r: Result<CancelOrderResponse>) -> Result<CancelResult> {
     }
 }
 
-/// EVM-style `0x` addresses compare lowercase; anything else (base58) exactly.
-fn canonical_address(a: &str) -> String {
-    if a.starts_with("0x") || a.starts_with("0X") {
-        a.to_lowercase()
-    } else {
-        a.to_string()
-    }
-}
-
-/// The agent made this trade as maker: its address is a maker address.
-pub fn is_maker(trade: &Trade, agent: &str) -> bool {
-    let agent = canonical_address(agent);
-    [&trade.maker_base_address, &trade.maker_quote_address]
-        .iter()
-        .any(|m| canonical_address(m) == agent)
-}
-
 /// A trade's qty and price as pair-decimal `u128`s.
 fn trade_amounts(t: &Trade) -> Result<(u128, u128)> {
     match (t.qty.parse::<u128>(), t.price.parse::<u128>()) {
@@ -269,55 +263,100 @@ pub fn send_result_from_response(resp: &SendOrderResponse) -> SendResult {
     }
 }
 
-/// Map one Trades-stream entry to the agent's fill. Unparseable amounts are an
-/// error: a dropped fill would under-report usage.
-pub fn trade_fill(t: &Trade, agent: &str) -> Result<TradeFill> {
-    let (qty, price) = trade_amounts(t)?;
-    let order_hit = match t.order_hit.len() {
-        0 => None,
-        _ => match <[u8; 32]>::try_from(t.order_hit.as_slice()) {
-            Ok(id) => Some(order_id_hex(&id)),
-            Err(_) => {
-                tracing::warn!(
-                    len = t.order_hit.len(),
-                    ts = t.timestamp,
-                    "trade order_hit is not 32 bytes; fill left unattributed"
-                );
-                None
-            }
-        },
-    };
-    Ok(TradeFill {
-        order_hit,
-        qty,
-        price,
-        ts: t.timestamp,
-        maker: is_maker(t, agent),
-    })
+fn amount(what: &str, id: &str, v: &str) -> Result<u128> {
+    v.parse::<u128>()
+        .map_err(|_| eyre!("venue order {id}: {what} {v:?} is not a pair-unit integer"))
 }
 
-/// The agent's address on `market_id`'s base leg: the venue's `filter_by_trader`.
-pub fn base_leg_address(
+/// Map one entry of `GetMyOrders`/`ListMyOrders`: `None` when the venue has
+/// no record of the id. Anything unreadable is an error, never dropped: a
+/// dropped fill would under-report what filled.
+pub fn venue_order(o: &MyOrder) -> Result<Option<VenueOrder>> {
+    let id = <[u8; 32]>::try_from(o.order_id.as_slice())
+        .map_err(|_| eyre!("venue returned an order id of {} bytes", o.order_id.len()))?;
+    if !o.found {
+        return Ok(None);
+    }
+    let order_id = order_id_hex(&id);
+    let side = match arborter_pb::Side::try_from(o.side) {
+        Ok(arborter_pb::Side::Bid) => Side::Buy,
+        Ok(arborter_pb::Side::Ask) => Side::Sell,
+        _ => return Err(eyre!("venue order {order_id}: unknown side {}", o.side)),
+    };
+    let remaining = if o.initial_qty_known {
+        Some(amount("remaining qty", &order_id, &o.remaining_qty)?)
+    } else {
+        None
+    };
+    let mut fills = Vec::with_capacity(o.fills.len());
+    for f in &o.fills {
+        let fill_id = <[u8; 32]>::try_from(f.fill_id.as_slice()).map_err(|_| {
+            eyre!(
+                "venue order {order_id}: a fill id of {} bytes",
+                f.fill_id.len()
+            )
+        })?;
+        let role = match FillRole::try_from(f.role) {
+            Ok(FillRole::Maker) => Role::Maker,
+            Ok(FillRole::Taker) => Role::Taker,
+            _ => {
+                return Err(eyre!(
+                    "venue order {order_id}: unknown fill role {}",
+                    f.role
+                ));
+            }
+        };
+        fills.push(OrderFill {
+            fill_id: Some(order_id_hex(&fill_id)),
+            role,
+            qty: amount("fill qty", &order_id, &f.qty)?,
+            price: amount("fill price", &order_id, &f.price)?,
+            ts: f.match_ts_ms,
+        });
+    }
+    Ok(Some(VenueOrder {
+        market_id: o.market_id.clone(),
+        side,
+        hidden: o.is_hidden,
+        state: OrderState::from_venue(o.state),
+        filled: amount("filled qty", &order_id, &o.filled_qty)?,
+        remaining,
+        fills,
+        order_id,
+    }))
+}
+
+/// The venue orders among `entries`, skipping those it has no record of.
+pub fn venue_orders(entries: &[MyOrder]) -> Result<Vec<VenueOrder>> {
+    entries
+        .iter()
+        .filter_map(|o| venue_order(o).transpose())
+        .collect()
+}
+
+/// Why the agent cannot read the status of its `side` order on `market_id`:
+/// the leg it gives (quote for a buy, base for a sell) is on a chain whose
+/// curve has no trader key. `None` when it can.
+pub fn collateral_key_missing(
     config: &GetConfigResponse,
     market_id: &str,
+    side: Side,
     addrs: &Addresses,
-) -> Result<String> {
-    let market = config
-        .get_market_by_id(market_id)
-        .ok_or_else(|| eyre!("no such market in the venue config: {market_id}"))?;
+) -> Result<Option<String>> {
+    let network = origin_network_for_side(config, market_id, wire_side(side))?;
     let chain = config
-        .get_chain(&market.base_chain_network)
-        .ok_or_else(|| eyre!("base chain '{}' not in config", market.base_chain_network))?;
-    let addr = match chain_curve(chain)? {
-        CurveType::Secp256k1 => &addrs.evm,
-        CurveType::Ed25519 => &addrs.solana,
+        .get_chain(network)
+        .ok_or_else(|| eyre!("chain '{network}' not in config"))?;
+    let have = match chain_curve(chain)? {
+        CurveType::Secp256k1 => addrs.evm.is_some(),
+        CurveType::Ed25519 => addrs.solana.is_some(),
     };
-    addr.clone().ok_or_else(|| {
-        eyre!(
-            "no trader key for base chain '{}' of {market_id}",
-            market.base_chain_network
+    Ok((!have).then(|| {
+        format!(
+            "no trader key for chain '{network}', the leg this order gives, so its status cannot \
+             be read"
         )
-    })
+    }))
 }
 
 fn wire_side(side: Side) -> arborter_pb::Side {
@@ -334,6 +373,19 @@ pub struct SdkVenue {
     solana: Option<Wallet>,
     attestation_mrtd: Option<String>,
     config: Mutex<Option<GetConfigResponse>>,
+    /// The order-status read session. Its delegate key is made at startup,
+    /// held in memory only and never written anywhere.
+    read: tokio::sync::Mutex<ReadState>,
+}
+
+/// The read side's delegate key, before and after its delegations are signed.
+enum ReadState {
+    /// Not delegated yet.
+    Key(DelegateKey),
+    /// Delegated by every trader wallet that owns an account on the venue.
+    Session(ReadSession),
+    /// A delegation attempt failed after taking the key; a new key is made.
+    Empty,
 }
 
 /// Load the trader wallet for `curve` when its variable is set; a set but
@@ -375,7 +427,26 @@ impl SdkVenue {
             solana,
             attestation_mrtd: cfg.venue.as_ref().and_then(|v| v.attestation_mrtd.clone()),
             config: Mutex::new(None),
+            read: tokio::sync::Mutex::new(ReadState::Key(DelegateKey::generate()?)),
         })
+    }
+
+    /// Delegate the read key with the trader wallets if that has not been
+    /// done. Each delegation lasts 24 hours; the SDK re-signs one with less
+    /// than five minutes left before each read.
+    async fn ensure_session(&self, state: &mut ReadState, cfg: &GetConfigResponse) -> Result<()> {
+        let key = match std::mem::replace(state, ReadState::Empty) {
+            ReadState::Session(s) => {
+                *state = ReadState::Session(s);
+                return Ok(());
+            }
+            ReadState::Key(k) => k,
+            ReadState::Empty => DelegateKey::generate()?,
+        };
+        let session =
+            open_read_session_with_wallets(cfg, &self.wallets(), key, MAX_DELEGATION_TTL).await?;
+        *state = ReadState::Session(session);
+        Ok(())
     }
 
     fn wallets(&self) -> Vec<&Wallet> {
@@ -420,51 +491,36 @@ impl Venue for SdkVenue {
         Ok(c)
     }
 
-    async fn book(&self, market_id: String, filter_by_trader: Option<String>) -> Result<BookState> {
-        fetch_book_snapshot(self.url.clone(), market_id, filter_by_trader, STREAM_WINDOW).await
+    async fn book(&self, market_id: String) -> Result<BookState> {
+        fetch_book_snapshot(self.url.clone(), market_id, None, STREAM_WINDOW).await
     }
 
-    async fn my_fills(&self, market_id: String, trader: String) -> Result<Vec<TradeFill>> {
-        let opts = StreamTradesOptions {
-            market_id,
-            historical_closed_trades: true,
-            filter_by_trader: Some(trader.clone()),
-        };
-        // The window starts once the stream is established; a stream that is
-        // not established, or fails, is an error, never an empty fill list.
-        let trades = fetch_trades_snapshot(self.url.clone(), opts, STREAM_WINDOW).await?;
-        trades.iter().map(|t| trade_fill(t, &trader)).collect()
-    }
+    type Prepared = PreparedSend;
 
-    async fn send_limit(
+    fn prepare_limit(
         &self,
         cfg: &GetConfigResponse,
-        market_id: String,
-        side: Side,
-        qty: String,
-        price: String,
-        post_only: bool,
-        settle_base: Option<String>,
-        settle_quote: Option<String>,
-    ) -> SendResult {
-        let wire = wire_side(side) as i32;
-        let result = send_order_with_wallets(
-            self.url.clone(),
-            market_id,
-            wire,
-            qty,
-            Some(price),
+        order: LimitOrder,
+    ) -> Result<(String, PreparedSend)> {
+        let prepared = prepare_order_with_wallets(
+            &order.market_id,
+            wire_side(order.side) as i32,
+            &order.qty,
+            Some(&order.price),
             &self.wallets(),
-            cfg.clone(),
-            post_only,
-            false,
+            cfg,
+            order.post_only,
+            order.hidden,
             None,
             vec![],
-            settle_base,
-            settle_quote,
-        )
-        .await;
-        match result {
+            order.settle_base,
+            order.settle_quote,
+        )?;
+        Ok((order_id_hex(&prepared.order_id()), prepared))
+    }
+
+    async fn send_prepared(&self, prepared: PreparedSend) -> SendResult {
+        match send_prepared_order_with_wallets(self.url.clone(), prepared, &self.wallets()).await {
             Ok(resp) => send_result_from_response(&resp),
             Err(e) => {
                 tracing::warn!(error = %format!("{e:#}"), "send_order failed");
@@ -476,6 +532,45 @@ impl Venue for SdkVenue {
                 classify_send_error(&e)
             }
         }
+    }
+
+    async fn orders_by_id(&self, ids: Vec<[u8; 32]>) -> Result<Vec<VenueOrder>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let cfg = self.config().await?;
+        let mut state = self.read.lock().await;
+        self.ensure_session(&mut state, &cfg).await?;
+        let ReadState::Session(session) = &mut *state else {
+            return Err(eyre!("internal: no read session after delegating"));
+        };
+        let entries =
+            get_my_orders_from_config_with_wallet(&self.url, &cfg, session, &self.wallets(), &ids)
+                .await?;
+        venue_orders(&entries)
+    }
+
+    async fn list_orders(
+        &self,
+        market_id: Option<String>,
+        include_closed: bool,
+    ) -> Result<Vec<VenueOrder>> {
+        let cfg = self.config().await?;
+        let mut state = self.read.lock().await;
+        self.ensure_session(&mut state, &cfg).await?;
+        let ReadState::Session(session) = &mut *state else {
+            return Err(eyre!("internal: no read session after delegating"));
+        };
+        let entries = list_my_orders_from_config_with_wallet(
+            &self.url,
+            &cfg,
+            session,
+            &self.wallets(),
+            market_id.as_deref(),
+            include_closed,
+        )
+        .await?;
+        venue_orders(&entries)
     }
 
     async fn cancel(
@@ -704,33 +799,6 @@ mod tests {
         assert_eq!(classify_send_error(&lost), SendResult::Unknown);
     }
 
-    fn trade(maker_base: &str, maker_quote: &str, taker_base: &str) -> Trade {
-        Trade {
-            maker_base_address: maker_base.to_string(),
-            maker_quote_address: maker_quote.to_string(),
-            taker_base_address: taker_base.to_string(),
-            taker_quote_address: taker_base.to_string(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn maker_flag_uses_canonical_lowercase() {
-        let checksummed = "0x52908400098527886E0F7030069857D2E4169EE7";
-        let lower = checksummed.to_lowercase();
-        let other = "0x8617e340b3d01fa5f11f306f4090fd50e238070d";
-
-        assert!(is_maker(&trade(&lower, other, other), checksummed));
-        assert!(is_maker(&trade(other, &lower, other), checksummed));
-        // Taker on both legs: not a maker fill.
-        assert!(!is_maker(&trade(other, other, &lower), checksummed));
-
-        // base58 compares exactly: case is significant.
-        let sol = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
-        assert!(is_maker(&trade(sol, other, other), sol));
-        assert!(!is_maker(&trade(&sol.to_lowercase(), other, other), sol));
-    }
-
     fn priced(ts: u64, qty: &str, price: &str, hit: Vec<u8>) -> Trade {
         Trade {
             timestamp: ts,
@@ -831,66 +899,141 @@ mod tests {
         );
     }
 
-    #[test]
-    fn trade_fill_maps_hit_ts_and_maker() {
-        let agent = "0x52908400098527886E0F7030069857D2E4169EE7";
-        let mut t = priced(1_900, "70", "3100", vec![0xcd; 32]);
-        t.maker_base_address = agent.to_lowercase();
-        assert_eq!(
-            trade_fill(&t, agent).ok(),
-            Some(TradeFill {
-                order_hit: Some(format!("0x{}", "cd".repeat(32))),
-                qty: 70,
-                price: 3100,
-                ts: 1_900,
-                maker: true,
-            })
-        );
-        let empty_hit = priced(1_901, "70", "3100", vec![]);
-        let f = trade_fill(&empty_hit, agent).unwrap();
-        assert_eq!((f.order_hit, f.maker), (None, false));
-        assert!(trade_fill(&priced(1_902, "70", "-1", vec![]), agent).is_err());
+    fn my_order(found: bool) -> MyOrder {
+        use aspens::commands::trading::arborter_pb::{MyFill, MyOrderState};
+        MyOrder {
+            order_id: vec![0xab; 32],
+            found,
+            market_id: "m-1".into(),
+            side: arborter_pb::Side::Ask as i32,
+            is_hidden: true,
+            price: "2600".into(),
+            initial_qty_known: true,
+            initial_qty: "1200".into(),
+            filled_qty: "450".into(),
+            remaining_qty: "750".into(),
+            state: MyOrderState::Cancelled as i32,
+            fills: vec![
+                MyFill {
+                    fill_id: vec![0xc1; 32],
+                    price: "2610".into(),
+                    qty: "150".into(),
+                    match_ts_ms: 1_700,
+                    role: FillRole::Taker as i32,
+                },
+                MyFill {
+                    fill_id: vec![0xc2; 32],
+                    price: "2600".into(),
+                    qty: "300".into(),
+                    match_ts_ms: 1_800,
+                    role: FillRole::Maker as i32,
+                },
+            ],
+            ..Default::default()
+        }
     }
 
     #[test]
-    fn base_leg_address_follows_base_chain_curve() {
+    fn venue_order_maps_every_field() {
+        let v = venue_order(&my_order(true)).unwrap().unwrap();
+        assert_eq!(v.order_id, format!("0x{}", "ab".repeat(32)));
+        assert_eq!(v.market_id, "m-1");
+        assert_eq!(v.side, Side::Sell);
+        assert!(v.hidden);
+        assert_eq!(v.state, OrderState::Cancelled);
+        assert_eq!(v.filled, 450);
+        assert_eq!(v.remaining, Some(750));
+        assert_eq!(
+            v.fills,
+            vec![
+                OrderFill {
+                    fill_id: Some(format!("0x{}", "c1".repeat(32))),
+                    role: Role::Taker,
+                    qty: 150,
+                    price: 2610,
+                    ts: 1_700,
+                },
+                OrderFill {
+                    fill_id: Some(format!("0x{}", "c2".repeat(32))),
+                    role: Role::Maker,
+                    qty: 300,
+                    price: 2600,
+                    ts: 1_800,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn venue_order_not_found_is_none_and_unknown_size_has_no_remaining() {
+        assert_eq!(venue_order(&my_order(false)).unwrap(), None);
+        let mut traded = my_order(true);
+        traded.initial_qty_known = false;
+        traded.remaining_qty = String::new();
+        assert_eq!(venue_order(&traded).unwrap().unwrap().remaining, None);
+        // `venue_orders` keeps only what the venue found.
+        let got = venue_orders(&[my_order(false), my_order(true)]).unwrap();
+        assert_eq!(got.len(), 1);
+    }
+
+    #[test]
+    fn unreadable_venue_order_is_an_error() {
+        let mut bad_id = my_order(true);
+        bad_id.order_id = vec![1; 31];
+        assert!(venue_order(&bad_id).is_err());
+        let mut bad_qty = my_order(true);
+        bad_qty.fills[1].qty = "x".into();
+        assert!(venue_order(&bad_qty).is_err());
+        let mut bad_role = my_order(true);
+        bad_role.fills[0].role = 0;
+        assert!(venue_order(&bad_role).is_err());
+        let mut bad_side = my_order(true);
+        bad_side.side = 0;
+        assert!(venue_order(&bad_side).is_err());
+        let mut bad_remaining = my_order(true);
+        bad_remaining.remaining_qty = "-1".into();
+        assert!(venue_order(&bad_remaining).is_err());
+        // One bad entry fails the whole read rather than vanishing from it.
+        assert!(venue_orders(&[my_order(true), bad_qty]).is_err());
+    }
+
+    #[test]
+    fn collateral_key_follows_the_leg_the_order_gives() {
         use aspens::commands::config::config_pb::{Chain, Configuration, Market};
         let chain = |network: &str, arch: &str| Chain {
             network: network.to_string(),
             architecture: arch.to_string(),
             ..Default::default()
         };
-        let market = |id: &str, base: &str, quote: &str| Market {
-            market_id: id.to_string(),
-            base_chain_network: base.to_string(),
-            quote_chain_network: quote.to_string(),
-            ..Default::default()
-        };
         let cfg = GetConfigResponse {
             config: Some(Configuration {
                 chains: vec![chain("sol", "solana"), chain("base", "evm")],
-                markets: vec![
-                    market("sol-base", "sol", "base"),
-                    market("base-sol", "base", "sol"),
-                ],
+                markets: vec![Market {
+                    market_id: "sol-base".to_string(),
+                    base_chain_network: "sol".to_string(),
+                    quote_chain_network: "base".to_string(),
+                    ..Default::default()
+                }],
                 ..Default::default()
             }),
         };
-        let addrs = Addresses {
-            evm: Some("0xevm".to_string()),
-            solana: Some("SoLaddr".to_string()),
-        };
-        assert_eq!(
-            base_leg_address(&cfg, "sol-base", &addrs).unwrap(),
-            "SoLaddr"
-        );
-        assert_eq!(base_leg_address(&cfg, "base-sol", &addrs).unwrap(), "0xevm");
         let evm_only = Addresses {
             evm: Some("0xevm".to_string()),
             solana: None,
         };
-        assert!(base_leg_address(&cfg, "sol-base", &evm_only).is_err());
-        assert!(base_leg_address(&cfg, "nope", &addrs).is_err());
+        // A buy gives quote (EVM here): readable. A sell gives base (Solana).
+        assert_eq!(
+            collateral_key_missing(&cfg, "sol-base", Side::Buy, &evm_only).unwrap(),
+            None
+        );
+        let missing = collateral_key_missing(&cfg, "sol-base", Side::Sell, &evm_only)
+            .unwrap()
+            .unwrap();
+        assert!(
+            missing.contains("no trader key for chain 'sol'"),
+            "{missing}"
+        );
+        assert!(collateral_key_missing(&cfg, "nope", Side::Buy, &evm_only).is_err());
     }
 
     #[test]

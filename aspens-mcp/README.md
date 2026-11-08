@@ -26,6 +26,12 @@ guard then follows them. What holds is size: a buy can never commit more quote t
 the book has moved away; that is the ordinary risk of a limit order, not something the guard
 covers. Set the caps to what you can afford to lose to a bad fill.
 
+**The read key.** To read your orders' status from the venue, aspens-mcp makes an Ed25519
+delegate key at startup, holds it in memory only (it is never written to disk), and has each
+trader wallet sign a read-only delegation to it for 24 hours. **A leaked delegate key can read the
+owner's order statuses for up to 24 hours, and there is no early revocation. It can never trade,
+cancel or withdraw.** A restart makes a new key; the old delegations still read until they expire.
+
 ## Install
 
 From a checkout of this repo:
@@ -83,9 +89,11 @@ Read:
 - `top_of_book`: best bid and best ask of a market.
 - `orderbook`: visible depth of a market, aggregated by price.
 - `balances`: per token and chain, the wallet, available and locked amounts, plus native gas.
-- `my_orders`: the orders this server sent and their state; filter `open`, `closed` or `all`.
+- `my_orders`: the orders this server sent, with the venue's record of each (state, filled and
+  remaining quantity, fills); filter `open`, `closed` or `all`.
 - `get_order`: one of those orders by id, with its fills.
-- `my_fills`: your fills on a market, maker and taker, newest last.
+- `my_fills`: your fills on a market, maker and taker, each with its order and fill id, newest
+  last. It covers open orders and orders closed in the last 7 days.
 - `account_status`: your addresses per curve, which keys are loaded, venue reachability, halt
   state and reason, whether the venue is pinned, and `venueTrust`: with no `[venue]` pin it says
   the `stack_url` endpoint is trusted.
@@ -95,7 +103,8 @@ Read:
 Write (each checks every limit before anything is signed; a refusal names each rule that blocked
 it):
 
-- `place_limit_order`: a limit order; optional `post_only` and allowlisted settle addresses.
+- `place_limit_order`: a limit order; optional `post_only`, `hidden`, and allowlisted settle
+  addresses.
 - `place_marketable_order`: takes liquidity with a limit at the best opposite price moved by
   `slippage_bps` (default 50); the limit price goes through the price guard.
 - `cancel_order`: cancels by id; an order that is not live is reported as `already_gone`.
@@ -105,11 +114,31 @@ it):
   `allow_withdraw = true`.
 - `halt`: stops new orders, deposits and withdrawals, with an optional reason.
 
-There are no hidden orders, no named-id (dealroom) fills and no raw market orders: those
-parameters are absent from the schemas.
+There are no named-id (dealroom) fills and no raw market orders: those parameters are absent from
+the schemas.
 
-An order in state `unknown` got no answer from the venue. The server never re-sends it; check it
-later with `my_orders` or `get_order`.
+### Hidden orders
+
+`place_limit_order` takes `hidden: true` (default `false`). A hidden order stays out of the
+venue's public book, and its fills print with your side redacted. It goes through every limit a
+visible order does: the size and daily caps, the price guard, the halt and the venue pin. You still
+see it: `get_order`, `my_orders` and `my_fills` read the venue's owner-signed order-status records,
+which show an owner their own hidden orders and their maker fills.
+
+### Order states
+
+Order state comes from the venue's order-status records: `open`, `partially_filled`, `filled`,
+`cancelled`, `expired`, `dropped_by_restart` (the venue restarted while the order rested),
+`traded` (closed by fills; the venue cannot recover its initial size, so no remaining quantity is
+shown) and `unspecified` (a state this server does not know). Two more come from the server's own
+ledger: `rejected`, when the venue refused the send, and `unknown`, when the venue has no record of
+the order.
+
+Before an order is signed, its id is derived from the exact order and recorded with its usage. A
+send that gets no answer is reported `unknown` with that id, and `get_order` asks the venue about
+it; once the venue reports it, its real state replaces `unknown`. The server never re-sends it.
+The venue reports a closed order for 7 days; an accepted order older than that which it no longer
+reports reads `unknown` under `closed`.
 
 ## Halt and resume
 
@@ -133,13 +162,16 @@ aspens-mcp resume --config ~/.aspens-mcp/aspens-mcp.toml
   order, deposit or withdraw touches (both legs of a market) needs an entry.
 - **A venue restart that changes a market's pair decimals refuses orders on that market until
   aspens-mcp restarts.** The limits were resolved in the old units; restarting re-resolves them.
-- **An order whose send was cut off shows as `unknown`.** Usage (with the order's qty and price)
-  is fsynced before the order is signed; the outcome record comes after the venue answers. When
-  the client goes away (stdin closes) mid-send, the server waits up to 70 s for the send to finish
-  and record its outcome before exiting. If the process dies before that, the next start replays
-  the usage record as a sent order in state `unknown`, listed by `my_orders` and still counted
-  against the day's limits. It has no order id, so check the venue directly (for example
-  `aspens-cli`) to see whether it was placed.
+- **An order whose send was cut off shows as `unknown` until the venue reports it.** Usage (with
+  the order's qty, price and derived id) is fsynced before the order is signed; the outcome record
+  comes after the venue answers. When the client goes away (stdin closes) mid-send, the server
+  waits up to 70 s for the send to finish and record its outcome before exiting. If the process
+  dies before that, the next start replays the usage record as a sent order in state `unknown`,
+  listed by `my_orders`, looked up on the venue by its derived id, and still counted against the
+  day's limits. A usage record written by an older build has no id; it stays `unknown`, so check
+  the venue directly (for example `aspens-cli my-orders`) to see whether it was placed.
+- **Order status can trail a send by a moment.** The venue records a fill once it commits, so
+  `get_order` right after `place_limit_order` may not show a taker fill the send response did.
 - **`halt` and `cancel_order` can wait up to about 60 s behind an order in flight.** The ledger is
   held from an order's usage record until its outcome record, across the send (whose gRPC
   timeout is 60 s), and both tools need the ledger.

@@ -11,8 +11,8 @@ use aspens::decimals::format_decimal_amount;
 use serde_json::{Map, Value, json};
 
 use crate::config::MarketLimits;
-use crate::ledger::{Fill, SentRecord, Side};
-use crate::orders::{OrderState, OrderView};
+use crate::ledger::{SentRecord, Side};
+use crate::orders::{OrderFill, OrderState, OrderView};
 use crate::redact::redact;
 
 /// `raw` in units of `10^-decimals`, as a decimal string; `null` when the
@@ -216,14 +216,13 @@ pub fn balances(b: &Balances) -> Value {
     json!({ "tokens": tokens, "native": native })
 }
 
-fn fills(fills: &[Fill], d: u32) -> Vec<Value> {
+fn fills(fills: &[OrderFill], d: u32) -> Vec<Value> {
     fills
         .iter()
         .map(|f| {
-            let mut m = Map::new();
+            let mut m = object(json!({ "fillId": f.fill_id, "role": f.role, "ts": f.ts }));
             put_amount(&mut m, "qty", Some(f.qty), d);
             put_amount(&mut m, "price", Some(f.price), d);
-            m.insert("ts".into(), f.ts.into());
             Value::Object(m)
         })
         .collect()
@@ -239,10 +238,11 @@ pub fn order(sent: &SentRecord, v: &OrderView, d: u32) -> Value {
     }));
     put_amount(&mut m, "qty", Some(v.qty), d);
     put_amount(&mut m, "price", Some(v.price), d);
-    put_amount(&mut m, "filled", Some(v.filled), d);
+    put_amount(&mut m, "filled", v.filled, d);
     put_amount(&mut m, "remaining", v.remaining, d);
     m.insert("fills".into(), fills(&v.fills, d).into());
     m.insert("state".into(), json!(v.state));
+    m.insert("hidden".into(), json!(v.hidden));
     m.insert(
         "note".into(),
         v.note.as_deref().map_or(Value::Null, |n| redact(n).into()),
@@ -270,24 +270,19 @@ pub fn stale_order(
     put_amount(&mut m, "remaining", None, None);
     m.insert("fills".into(), json!([]));
     m.insert("state".into(), json!(state));
+    m.insert("hidden".into(), Value::Null);
     m.insert("note".into(), redact(note).into());
     Value::Object(m)
 }
 
-/// One of the agent's fills.
-pub fn fill(
-    market_id: &str,
-    order_id: Option<&str>,
-    side: Option<Side>,
-    role: &str,
-    f: &Fill,
-    d: u32,
-) -> Value {
+/// One of the agent's fills, on its order `order_id`.
+pub fn fill(market_id: &str, order_id: &str, side: Side, f: &OrderFill, d: u32) -> Value {
     let mut m = object(json!({
         "marketId": market_id,
         "orderId": order_id,
+        "fillId": f.fill_id,
         "side": side,
-        "role": role,
+        "role": f.role,
         "ts": f.ts,
     }));
     put_amount(&mut m, "qty", Some(f.qty), d);

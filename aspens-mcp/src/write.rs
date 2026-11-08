@@ -18,9 +18,9 @@ use tokio::sync::Mutex;
 use crate::config::{Config, MarketLimits, parse_amount};
 use crate::ledger::{Ledger, Record, SentOutcome, SentRecord, Side};
 use crate::limits::{BookTop, OrderRequest, Refusal, addr_matches, check_order, utc_day};
-use crate::orders::{VenueView, derive};
+use crate::orders::{from_send, tracked_id};
 use crate::server::InFlight;
-use crate::venue::{CancelResult, SendResult, Venue};
+use crate::venue::{CancelResult, LimitOrder, SendResult, Venue};
 use crate::views::{self, put_amount};
 
 /// How an order's limit price is set.
@@ -38,6 +38,7 @@ pub(crate) struct PlaceRequest {
     pub qty: String,
     pub pricing: Pricing,
     pub post_only: bool,
+    pub hidden: bool,
     pub settle_base: Option<String>,
     pub settle_quote: Option<String>,
 }
@@ -68,25 +69,6 @@ fn wire_side(side: Side) -> &'static str {
         Side::Buy => "buy",
         Side::Sell => "sell",
     }
-}
-
-/// The state of an order just sent, from its send outcome alone: an accepted
-/// order the venue put in the book rests with what its taker fills left.
-fn placed_view(sent: &SentRecord) -> crate::orders::OrderView {
-    let mut view = VenueView::default();
-    if let SentOutcome::Accepted {
-        order_id,
-        in_book: true,
-        taker_fills,
-    } = &sent.outcome
-    {
-        let filled = taker_fills
-            .iter()
-            .fold(0u128, |acc, f| acc.saturating_add(f.qty));
-        view.in_book
-            .insert(order_id.clone(), sent.qty.saturating_sub(filled));
-    }
-    derive(sent, None, false, &view)
 }
 
 impl<V: Venue> Writer<'_, V> {
@@ -148,11 +130,12 @@ impl<V: Venue> Writer<'_, V> {
     /// one venue config snapshot (everything
     /// below is checked against it, and the order is signed against it); parse
     /// amounts; read the book; check the venue pin; then take the ledger, check
-    /// the limits, and in a spawned task record the usage, send, and record the
-    /// outcome. The ledger is held from the check to the outcome record, so no
-    /// read can see a sent order the ledger lacks, and two orders cannot both
-    /// pass on the same usage. The task runs to completion even if this future
-    /// is dropped, so a usage record is never left without its outcome.
+    /// the limits, build the order and derive its id, and in a spawned task
+    /// record the usage (with that id), sign and send, and record the outcome.
+    /// The ledger is held from the check to the outcome record, so no read can
+    /// see a sent order the ledger lacks, and two orders cannot both pass on
+    /// the same usage. The task runs to completion even if this future is
+    /// dropped, so a usage record is never left without its outcome.
     pub async fn place(&self, req: PlaceRequest) -> Result<Value> {
         let what = "order";
         // The refusals that need no venue, first: a halted server says so even
@@ -209,7 +192,7 @@ impl<V: Venue> Writer<'_, V> {
         };
 
         // 2. One book read: the price guard's reference, and a marketable price.
-        let book = match self.venue.book(req.market_id.clone(), None).await {
+        let book = match self.venue.book(req.market_id.clone()).await {
             Ok(b) => b,
             Err(_) if !offline.is_empty() => return Err(refused(what, &offline)),
             Err(e) => return Err(e),
@@ -258,14 +241,32 @@ impl<V: Venue> Writer<'_, V> {
             }
         };
 
-        // 5-7 run in their own task, which owns the ledger guard: dropping
+        // 5. Build the order against the checked snapshot, and derive the id
+        // the venue will give it. Nothing is signed yet. The SDK takes human
+        // strings and scales them by its pair decimals, checked equal above.
+        let order = LimitOrder {
+            market_id: req.market_id.clone(),
+            side: req.side,
+            qty: format_decimal_amount(qty, d),
+            price: format_decimal_amount(price, d),
+            post_only: req.post_only,
+            hidden: req.hidden,
+            settle_base: req.settle_base.clone(),
+            settle_quote: req.settle_quote.clone(),
+        };
+        let (derived_id, prepared) = self
+            .venue
+            .prepare_limit(&vcfg, order)
+            .map_err(|e| refused(what, &[format!("building the order: {e:#}")]))?;
+
+        // 6-8 run in their own task, which owns the ledger guard: dropping
         // this future cannot stop it between the usage and the outcome.
         let venue = self.venue.clone();
         let now = self.now;
         let in_flight = self.in_flight.enter();
         let task = tokio::spawn(async move {
             let _in_flight = in_flight;
-            // 5. Usage, durable before anything is signed.
+            // 6. Usage, with the derived id, durable before anything is signed.
             ledger
                 .append(Record::Usage {
                     ts: now,
@@ -275,37 +276,38 @@ impl<V: Venue> Writer<'_, V> {
                     qty: commit.qty,
                     quote: commit.quote,
                     price,
+                    order_id: Some(derived_id.clone()),
                 })
                 .map_err(|e| eyre!("recording usage failed, nothing was signed: {e:#}"))?;
 
-            // 6. Send, signed against the checked snapshot. The SDK takes human
-            // strings and scales them by its pair decimals, checked equal above.
-            let result = venue
-                .send_limit(
-                    &vcfg,
-                    req.market_id.clone(),
-                    req.side,
-                    format_decimal_amount(qty, d),
-                    format_decimal_amount(price, d),
-                    req.post_only,
-                    req.settle_base.clone(),
-                    req.settle_quote.clone(),
-                )
-                .await;
+            // 7. Sign and send, once.
+            let result = venue.send_prepared(prepared).await;
 
-            // 7. The outcome. `Unknown` is recorded as such and never re-sent.
+            // 8. The outcome. `Unknown` is recorded with the derived id, so a
+            // later read asks the venue about it; it is never re-sent.
             let outcome = match result {
                 SendResult::Accepted {
                     order_id,
                     in_book,
                     taker_fills,
-                } => SentOutcome::Accepted {
-                    order_id,
-                    in_book,
-                    taker_fills,
-                },
+                } => {
+                    if order_id != derived_id {
+                        tracing::warn!(
+                            venue = %order_id,
+                            derived = %derived_id,
+                            "the venue's order id differs from the one derived before sending"
+                        );
+                    }
+                    SentOutcome::Accepted {
+                        order_id,
+                        in_book,
+                        taker_fills,
+                    }
+                }
                 SendResult::Failed { code, message } => SentOutcome::Failed { code, message },
-                SendResult::Unknown => SentOutcome::Unknown,
+                SendResult::Unknown => SentOutcome::Unknown {
+                    order_id: Some(derived_id),
+                },
             };
             let sent = SentRecord {
                 ts: now,
@@ -329,8 +331,8 @@ impl<V: Venue> Writer<'_, V> {
             eyre!("internal: the send task failed ({e}); do not resubmit, check my_orders")
         })??;
 
-        // 8. The order as it stands.
-        Ok(views::order(&sent, &placed_view(&sent), d))
+        // 9. The order as it stands.
+        Ok(views::order(&sent, &from_send(&sent), d))
     }
 
     /// Cancel an order. An id in the ledger takes its market and side from
@@ -344,12 +346,11 @@ impl<V: Venue> Writer<'_, V> {
         let id = crate::server::parse_order_id(order_id)?;
         let from_ledger = {
             let ledger = self.ledger.lock().await;
-            ledger.sent().into_iter().find_map(|s| match &s.outcome {
-                SentOutcome::Accepted { order_id, .. } if *order_id == id => {
-                    Some((s.market_id.clone(), s.side))
-                }
-                _ => None,
-            })
+            ledger
+                .sent()
+                .into_iter()
+                .find(|s| tracked_id(s) == Some(id.as_str()))
+                .map(|s| (s.market_id.clone(), s.side))
         };
         let (market_id, side) = match (from_ledger, market_id, side) {
             (Some(known), _, _) => known,
@@ -599,7 +600,7 @@ mod tests {
                 ..Default::default()
             });
         }
-        v.set_book(MARKET, None, book);
+        v.set_book(MARKET, book);
         v
     }
 
@@ -672,6 +673,7 @@ mod tests {
             qty: "1".into(),
             pricing: Pricing::Limit("2.5".into()),
             post_only: false,
+            hidden: false,
             settle_base: None,
             settle_quote: None,
         });

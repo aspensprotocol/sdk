@@ -31,6 +31,7 @@ pub use super::arborter_pb::{
     MyOrder, MyOrdersQuery, MyOrdersRequest, MyOrdersResponse, ReadDelegation,
 };
 use crate::client::AspensClient;
+use crate::commands::config::config_pb::GetConfigResponse;
 use crate::grpc::create_channel;
 use crate::wallet::{Architecture, CurveType, Wallet, chain_architecture};
 
@@ -330,26 +331,26 @@ pub(crate) async fn refresh_delegations(
     Ok(refreshed)
 }
 
-/// Look up `venue_id` and a network-to-architecture map from the venue config.
-async fn venue_context(client: &AspensClient) -> Result<(String, HashMap<String, Architecture>)> {
-    let config = client.get_config().await?;
+/// `venue_id` and a network-to-architecture map, from the venue config.
+fn venue_context(config: &GetConfigResponse) -> Result<(String, HashMap<String, Architecture>)> {
     let config = config
         .config
+        .as_ref()
         .ok_or_else(|| eyre!("the venue returned no configuration"))?;
     check_venue_id(&config.venue_id)?;
     let mut archs = HashMap::new();
     for chain in &config.chains {
         archs.insert(chain.network.clone(), chain_architecture(chain)?);
     }
-    Ok((config.venue_id, archs))
+    Ok((config.venue_id.clone(), archs))
 }
 
 async fn prepare(
-    client: &AspensClient,
+    config: &GetConfigResponse,
     session: &mut ReadSession,
     wallets: &[&Wallet],
 ) -> Result<()> {
-    let (venue_id, archs) = venue_context(client).await?;
+    let (venue_id, archs) = venue_context(config)?;
     refresh_delegations(
         session,
         wallets,
@@ -366,6 +367,55 @@ async fn prepare(
     Ok(())
 }
 
+/// Open a read session for `key` covering every account `wallets` own on
+/// this venue: one delegation, valid for `ttl`, per chain family (EVM, Tron,
+/// Solana) that has both a chain in `config` and a wallet of its curve. Each
+/// delegation names the first configured network of its family.
+///
+/// An EVM key owns its EVM and its Tron account through two delegations; the
+/// venue verifies each under its own scheme. Errors when no wallet owns an
+/// account on any configured chain.
+pub async fn open_read_session_with_wallets(
+    config: &GetConfigResponse,
+    wallets: &[&Wallet],
+    key: DelegateKey,
+    ttl: Duration,
+) -> Result<ReadSession> {
+    let cfg = config
+        .config
+        .as_ref()
+        .ok_or_else(|| eyre!("the venue returned no configuration"))?;
+    let mut families: Vec<Architecture> = Vec::new();
+    let mut delegations = Vec::new();
+    for chain in &cfg.chains {
+        let architecture = chain_architecture(chain)?;
+        if families.contains(&architecture) {
+            continue;
+        }
+        let Some(wallet) = wallets.iter().find(|w| w.curve() == architecture.curve()) else {
+            continue;
+        };
+        families.push(architecture);
+        delegations.push(
+            create_read_delegation_with_wallet(
+                wallet,
+                &chain.network,
+                architecture,
+                &cfg.venue_id,
+                &key,
+                ttl,
+            )
+            .await?,
+        );
+    }
+    if delegations.is_empty() {
+        return Err(eyre!(
+            "no wallet given owns an account on any chain this venue lists"
+        ));
+    }
+    ReadSession::new(delegations, key)
+}
+
 /// Fetch the caller's orders by id, in the order given (duplicates dropped).
 /// More than 100 ids go out as several calls and are merged by order id. An id
 /// the venue has no record of for these owners comes back with `found: false`.
@@ -378,8 +428,28 @@ pub async fn get_my_orders_with_wallet(
     wallets: &[&Wallet],
     ids: &[[u8; 32]],
 ) -> Result<Vec<MyOrder>> {
-    prepare(client, session, wallets).await?;
-    let rpc = ArborterServiceClient::new(create_channel(client.stack_url().as_str()).await?);
+    let config = client.get_config().await?;
+    get_my_orders_from_config_with_wallet(
+        client.stack_url().as_str(),
+        &config,
+        session,
+        wallets,
+        ids,
+    )
+    .await
+}
+
+/// [`get_my_orders_with_wallet`] against the venue at `url`, whose
+/// configuration the caller already holds.
+pub async fn get_my_orders_from_config_with_wallet(
+    url: &str,
+    config: &GetConfigResponse,
+    session: &mut ReadSession,
+    wallets: &[&Wallet],
+    ids: &[[u8; 32]],
+) -> Result<Vec<MyOrder>> {
+    prepare(config, session, wallets).await?;
+    let rpc = ArborterServiceClient::new(create_channel(url).await?);
     get_orders_via(session, ids, |req| {
         let mut rpc = rpc.clone();
         async move {
@@ -403,8 +473,30 @@ pub async fn list_my_orders_with_wallet(
     market: Option<&str>,
     include_closed: bool,
 ) -> Result<Vec<MyOrder>> {
-    prepare(client, session, wallets).await?;
-    let rpc = ArborterServiceClient::new(create_channel(client.stack_url().as_str()).await?);
+    let config = client.get_config().await?;
+    list_my_orders_from_config_with_wallet(
+        client.stack_url().as_str(),
+        &config,
+        session,
+        wallets,
+        market,
+        include_closed,
+    )
+    .await
+}
+
+/// [`list_my_orders_with_wallet`] against the venue at `url`, whose
+/// configuration the caller already holds.
+pub async fn list_my_orders_from_config_with_wallet(
+    url: &str,
+    config: &GetConfigResponse,
+    session: &mut ReadSession,
+    wallets: &[&Wallet],
+    market: Option<&str>,
+    include_closed: bool,
+) -> Result<Vec<MyOrder>> {
+    prepare(config, session, wallets).await?;
+    let rpc = ArborterServiceClient::new(create_channel(url).await?);
     list_orders_via(session, market, include_closed, |req| {
         let mut rpc = rpc.clone();
         async move {
@@ -415,6 +507,85 @@ pub async fn list_my_orders_with_wallet(
         }
     })
     .await
+}
+
+/// The snake_case name of a `MyOrderState` value; `unspecified` for one this
+/// SDK does not know.
+pub fn my_order_state_name(state: i32) -> &'static str {
+    use super::arborter_pb::MyOrderState as S;
+    match S::try_from(state) {
+        Ok(S::Open) => "open",
+        Ok(S::PartiallyFilled) => "partially_filled",
+        Ok(S::Filled) => "filled",
+        Ok(S::Cancelled) => "cancelled",
+        Ok(S::Expired) => "expired",
+        Ok(S::DroppedByRestart) => "dropped_by_restart",
+        Ok(S::Traded) => "traded",
+        Ok(S::Unspecified) | Err(_) => "unspecified",
+    }
+}
+
+fn hex_id(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
+}
+
+/// `o` as JSON, with ids as `0x` hex and amounts as the venue's pair-unit
+/// strings. An order the venue did not find is its id and `found: false`.
+pub fn my_order_json(o: &MyOrder) -> serde_json::Value {
+    use super::arborter_pb::{FillRole, MyOrderKind, Side};
+    use serde_json::json;
+    if !o.found {
+        return json!({ "orderId": hex_id(&o.order_id), "found": false });
+    }
+    let side = match Side::try_from(o.side) {
+        Ok(Side::Bid) => "buy",
+        Ok(Side::Ask) => "sell",
+        _ => "unspecified",
+    };
+    let kind = match MyOrderKind::try_from(o.kind) {
+        Ok(MyOrderKind::Limit) => "limit",
+        Ok(MyOrderKind::Market) => "market",
+        Ok(MyOrderKind::Discretionary) => "discretionary",
+        _ => "unspecified",
+    };
+    let fills: Vec<serde_json::Value> = o
+        .fills
+        .iter()
+        .map(|f| {
+            let role = match FillRole::try_from(f.role) {
+                Ok(FillRole::Maker) => "maker",
+                Ok(FillRole::Taker) => "taker",
+                _ => "unspecified",
+            };
+            json!({
+                "fillId": hex_id(&f.fill_id),
+                "price": f.price,
+                "qty": f.qty,
+                "matchTsMs": f.match_ts_ms,
+                "role": role,
+            })
+        })
+        .collect();
+    json!({
+        "orderId": hex_id(&o.order_id),
+        "found": true,
+        "marketId": o.market_id,
+        "side": side,
+        "kind": kind,
+        "hidden": o.is_hidden,
+        "postOnly": o.is_post_only,
+        "price": o.price,
+        "initialQtyKnown": o.initial_qty_known,
+        "initialQty": o.initial_qty,
+        "filledQty": o.filled_qty,
+        "remainingQty": o.remaining_qty,
+        "state": my_order_state_name(o.state),
+        "createdAtMs": o.created_at_ms,
+        "closedAtMs": o.closed_at_ms,
+        "baseAddress": o.base_address,
+        "quoteAddress": o.quote_address,
+        "fills": fills,
+    })
 }
 
 pub(crate) async fn get_orders_via<F, Fut>(
@@ -788,6 +959,154 @@ mod tests {
         assert!(ReadSession::new(vec![delegation_stub(); 4], key()).is_ok());
         let other = DelegateKey::from_bytes(&[0x43; 32]);
         assert!(ReadSession::new(vec![delegation_stub()], other).is_err());
+    }
+
+    fn chain(network: &str, architecture: &str) -> crate::commands::config::config_pb::Chain {
+        crate::commands::config::config_pb::Chain {
+            network: network.into(),
+            architecture: architecture.into(),
+            ..Default::default()
+        }
+    }
+
+    fn venue_cfg(chains: Vec<crate::commands::config::config_pb::Chain>) -> GetConfigResponse {
+        GetConfigResponse {
+            config: Some(crate::commands::config::config_pb::Configuration {
+                chains,
+                venue_id: VENUE.into(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    /// One delegation per chain family a wallet can own, named for the first
+    /// network of that family, all for the session's key.
+    #[cfg(feature = "tron")]
+    #[tokio::test]
+    async fn session_opens_one_delegation_per_owned_family() {
+        let cfg = venue_cfg(vec![
+            chain("base-sepolia", "evm"),
+            chain("arb-sepolia", "evm"),
+            chain("solana-devnet", "solana"),
+            chain("tron-nile", "tron"),
+        ]);
+        let evm = evm_wallet();
+        let sol = solana_wallet();
+        let both =
+            open_read_session_with_wallets(&cfg, &[&evm, &sol], key(), Duration::from_secs(7_200))
+                .await
+                .unwrap();
+        let got: Vec<(&str, &str)> = both
+            .delegations()
+            .iter()
+            .map(|d| (d.owner_network.as_str(), d.owner.as_str()))
+            .collect();
+        let sol_addr = sol.address();
+        assert_eq!(
+            got,
+            vec![
+                ("base-sepolia", ANVIL_3_ADDR),
+                ("solana-devnet", sol_addr.as_str()),
+                ("tron-nile", ANVIL_3_ADDR_LOWER),
+            ]
+        );
+        for d in both.delegations() {
+            assert_eq!(d.delegate_pubkey, key().pubkey().to_vec());
+            assert_eq!(d.expires - d.issued, 7_200);
+        }
+
+        // Only an EVM key: its EVM and Tron accounts, nothing for Solana.
+        let evm_only =
+            open_read_session_with_wallets(&cfg, &[&evm], key(), Duration::from_secs(600))
+                .await
+                .unwrap();
+        let nets: Vec<&str> = evm_only
+            .delegations()
+            .iter()
+            .map(|d| d.owner_network.as_str())
+            .collect();
+        assert_eq!(nets, vec!["base-sepolia", "tron-nile"]);
+
+        // No wallet owns anything here: refused, not an empty session.
+        let sol_cfg = venue_cfg(vec![chain("solana-devnet", "solana")]);
+        let e = open_read_session_with_wallets(&sol_cfg, &[&evm], key(), Duration::from_secs(600))
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("no wallet"), "{e}");
+    }
+
+    #[test]
+    fn my_order_json_names_states_in_snake_case() {
+        use super::super::arborter_pb::MyOrderState as S;
+        let cases = [
+            (S::Unspecified, "unspecified"),
+            (S::Open, "open"),
+            (S::PartiallyFilled, "partially_filled"),
+            (S::Filled, "filled"),
+            (S::Cancelled, "cancelled"),
+            (S::Expired, "expired"),
+            (S::DroppedByRestart, "dropped_by_restart"),
+            (S::Traded, "traded"),
+        ];
+        for (state, name) in cases {
+            assert_eq!(my_order_state_name(state as i32), name);
+        }
+        assert_eq!(my_order_state_name(99), "unspecified");
+    }
+
+    #[test]
+    fn my_order_json_carries_every_field() {
+        use super::super::arborter_pb::{FillRole, MyFill, MyOrderKind, MyOrderState, Side};
+        let o = MyOrder {
+            order_id: vec![0xab; 32],
+            found: true,
+            market_id: "m-1".into(),
+            side: Side::Ask as i32,
+            kind: MyOrderKind::Limit as i32,
+            is_hidden: true,
+            is_post_only: false,
+            price: "2500".into(),
+            initial_qty_known: true,
+            initial_qty: "1200".into(),
+            filled_qty: "450".into(),
+            remaining_qty: "750".into(),
+            state: MyOrderState::Cancelled as i32,
+            created_at_ms: 1_000,
+            closed_at_ms: 2_000,
+            base_address: "0xbase".into(),
+            quote_address: "0xquote".into(),
+            fills: vec![MyFill {
+                fill_id: vec![0xcd; 32],
+                price: "2490".into(),
+                qty: "450".into(),
+                match_ts_ms: 1_500,
+                role: FillRole::Taker as i32,
+            }],
+        };
+        let j = my_order_json(&o);
+        assert_eq!(j["orderId"], format!("0x{}", "ab".repeat(32)));
+        assert_eq!(j["found"], true);
+        assert_eq!(j["side"], "sell");
+        assert_eq!(j["kind"], "limit");
+        assert_eq!(j["hidden"], true);
+        assert_eq!(j["state"], "cancelled");
+        assert_eq!(j["initialQty"], "1200");
+        assert_eq!(j["filledQty"], "450");
+        assert_eq!(j["remainingQty"], "750");
+        assert_eq!(j["closedAtMs"], 2_000);
+        assert_eq!(j["fills"][0]["role"], "taker");
+        assert_eq!(j["fills"][0]["price"], "2490");
+        assert_eq!(j["fills"][0]["fillId"], format!("0x{}", "cd".repeat(32)));
+
+        // Not found: the id and `found: false`, nothing else.
+        let nf = my_order_json(&MyOrder {
+            order_id: vec![0x01; 32],
+            ..Default::default()
+        });
+        assert_eq!(
+            nf,
+            serde_json::json!({ "orderId": format!("0x{}", "01".repeat(32)), "found": false })
+        );
     }
 
     fn ids(n: usize) -> Vec<[u8; 32]> {
