@@ -45,7 +45,8 @@
 //! The trader needs quote token on the venue (its buys) and base token on the
 //! venue (scenario 7's sell); the trader's second wallet needs quote token on
 //! the venue (scenario 7's buy); the counterparty needs base token on the
-//! venue (its sells). One run spends about 6 base units of the counterparty's.
+//! venue (its sells). One run sells 7 base units of the counterparty's; top it up
+//! between batches of runs or its sells fail with "insufficient balance".
 //!
 //! # Values
 //!
@@ -95,6 +96,19 @@ static RIG_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// How long a delegation made by this suite lasts.
 const TTL: Duration = Duration::from_secs(3_600);
 
+/// Set once the pre-flight sweep has run in this process.
+static SWEPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Printed once per process when the market cannot catch a scaling bug.
+static DECIMALS_WARNING: std::sync::Once = std::sync::Once::new();
+
+/// The most orders the sweep or the panic guard will cancel, so neither can
+/// run unbounded against a book that is not what this suite expects.
+const MAX_CLEANUP: usize = 64;
+
+/// One cancel attempt's deadline in the sweep and the panic guard.
+const CANCEL_DEADLINE: Duration = Duration::from_secs(10);
+
 // ---- rig ----
 
 struct Rig {
@@ -104,6 +118,12 @@ struct Rig {
     trader: Wallet,
     trader2: Wallet,
     counter: Wallet,
+    /// The three wallets' keys, in the order trader, trader2, counter, so the
+    /// panic guard can rebuild them on its own thread.
+    keys: [String; 3],
+    /// Every order this test placed: `(wallet index, side, id)`. Cancelled
+    /// best-effort if the test panics.
+    placed: std::sync::Mutex<Vec<(usize, &'static str, [u8; 32])>>,
     /// Pair decimals of the market.
     d: u32,
     base_network: String,
@@ -126,17 +146,84 @@ fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} is not set: {HELP}"))
 }
 
-fn wallet_from(path: &str) -> (Wallet, BTreeMap<String, String>, String) {
+fn wallet_from(path: &str) -> (Wallet, String, BTreeMap<String, String>, String) {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
     let vars = env_file_vars(&text);
     let key = vars
         .get("TRADER_PRIVKEY")
-        .unwrap_or_else(|| panic!("{path} has no TRADER_PRIVKEY"));
+        .unwrap_or_else(|| panic!("{path} has no TRADER_PRIVKEY"))
+        .clone();
     (
-        Wallet::from_evm_hex(key).expect("TRADER_PRIVKEY"),
+        Wallet::from_evm_hex(&key).expect("TRADER_PRIVKEY"),
+        key,
         vars,
         text,
     )
+}
+
+fn side_name(side: i32) -> &'static str {
+    if side == WireSide::Ask as i32 {
+        "sell"
+    } else {
+        "buy"
+    }
+}
+
+/// Cancel `orders` (`(wallet, market, side, id)`), each bounded by
+/// [`CANCEL_DEADLINE`], logging rather than failing. An order that is already
+/// closed answers NOT_FOUND, which is fine.
+async fn cancel_best_effort(stack: &str, orders: &[(&Wallet, String, &str, [u8; 32])]) {
+    let Ok(cfg) = get_config(stack.to_string()).await else {
+        eprintln!(
+            "    cleanup: GetConfig failed; {} orders left",
+            orders.len()
+        );
+        return;
+    };
+    for (wallet, market, side, id) in orders.iter().take(MAX_CLEANUP) {
+        let r = tokio::time::timeout(
+            CANCEL_DEADLINE,
+            call_cancel_order_from_config_with_wallet(
+                stack.to_string(),
+                market.clone(),
+                side.to_string(),
+                *id,
+                wallet,
+                cfg.clone(),
+            ),
+        )
+        .await;
+        let outcome = match r {
+            Ok(Ok(_)) => "cancelled".to_string(),
+            Ok(Err(e)) => format!("not cancelled ({e:#})"),
+            Err(_) => "timed out".to_string(),
+        };
+        eprintln!(
+            "    cleanup: {side} {} of {}: {outcome}",
+            hex::encode(id),
+            wallet.address()
+        );
+    }
+}
+
+/// A loud notice for a global test-value constraint the rig cannot meet.
+fn warn_unmet_decimals(pair: i64, base: (String, u32), quote: (String, u32)) {
+    let p = u32::try_from(pair).unwrap_or(u32::MAX);
+    if p != base.1 && p != quote.1 {
+        return;
+    }
+    DECIMALS_WARNING.call_once(|| {
+        let bar = "!".repeat(78);
+        eprintln!(
+            "\n{bar}\n\
+             WARNING: UNMET TEST-VALUE CONSTRAINT \"pair decimals != either token's decimals\"\n\
+             The market's pair decimals are {pair}; {} has {} and {} has {}.\n\
+             Pair units equal token units here, so a status amount scaled by the wrong\n\
+             decimals reads the same and this suite CANNOT catch a scaling bug.\n\
+             (Not a failure: the rig has no market that meets it. Open item.)\n{bar}\n",
+            base.0, base.1, quote.0, quote.1
+        );
+    });
 }
 
 /// Panic unless `url`'s host is loopback.
@@ -172,9 +259,9 @@ impl Rig {
     async fn load() -> Rig {
         assert_eq!(std::env::var("RIG").as_deref(), Ok("1"), "{HELP}");
         let market = required("ASPENS_MCP_RIG_MARKET");
-        let (trader, tvars, trader_env) = wallet_from(&required("ASPENS_MCP_RIG_TRADER_ENV"));
-        let (trader2, _, _) = wallet_from(&required("ASPENS_MCP_RIG_TRADER2_ENV"));
-        let (counter, _, _) = wallet_from(&required("ASPENS_MCP_RIG_COUNTER_ENV"));
+        let (trader, k1, tvars, trader_env) = wallet_from(&required("ASPENS_MCP_RIG_TRADER_ENV"));
+        let (trader2, k2, _, _) = wallet_from(&required("ASPENS_MCP_RIG_TRADER2_ENV"));
+        let (counter, k3, _, _) = wallet_from(&required("ASPENS_MCP_RIG_COUNTER_ENV"));
         let addrs = [trader.address(), trader2.address(), counter.address()];
         assert!(
             addrs[0] != addrs[1] && addrs[1] != addrs[2] && addrs[0] != addrs[2],
@@ -200,17 +287,89 @@ impl Rig {
             m.base_chain_network, m.quote_chain_network,
             "scenario 7 needs a market whose legs are on two networks"
         );
-        Rig {
+        let token_decimals = |network: &str, symbol: &str| {
+            let t = cfg
+                .get_token(network, symbol)
+                .unwrap_or_else(|| panic!("{symbol}@{network} is not in the venue config"));
+            (format!("{symbol}@{network}"), t.decimals)
+        };
+        warn_unmet_decimals(
+            m.pair_decimals.into(),
+            token_decimals(&m.base_chain_network, &m.base_chain_token_symbol),
+            token_decimals(&m.quote_chain_network, &m.quote_chain_token_symbol),
+        );
+        let rig = Rig {
             stack,
             market,
             trader_env,
             trader,
             trader2,
             counter,
+            keys: [k1, k2, k3],
+            placed: std::sync::Mutex::new(Vec::new()),
             d: u32::try_from(m.pair_decimals).expect("pair decimals"),
             base_network: m.base_chain_network.clone(),
             quote_network: m.quote_chain_network.clone(),
+        };
+        if !SWEPT.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            rig.sweep().await;
         }
+        rig
+    }
+
+    fn wallets(&self) -> [&Wallet; 3] {
+        [&self.trader, &self.trader2, &self.counter]
+    }
+
+    /// Pre-flight: cancel every open order the suite's own three wallets have
+    /// on the venue (any market), as `ListMyOrders` under each wallet's own
+    /// delegation reports them, so a run that panicked earlier leaves the next
+    /// one the book it expects. Touches nothing any other wallet owns.
+    async fn sweep(&self) {
+        let cfg = self.config().await;
+        let mut open = Vec::new();
+        for w in self.wallets() {
+            let mut session = self.session(&[w]).await;
+            let listed = list_my_orders_from_config_with_wallet(
+                &self.stack,
+                &cfg,
+                &mut session,
+                &[],
+                None,
+                false,
+            )
+            .await
+            .expect("pre-flight ListMyOrders");
+            for o in listed.into_iter().filter(|o| {
+                o.found && matches!(state(o), MyOrderState::Open | MyOrderState::PartiallyFilled)
+            }) {
+                let id = <[u8; 32]>::try_from(o.order_id.as_slice()).expect("32-byte id");
+                open.push((w, o.market_id.clone(), side_name(o.side), id));
+            }
+        }
+        eprintln!(
+            "    pre-flight sweep: {} open order(s) of the suite's wallets",
+            open.len()
+        );
+        assert!(
+            open.len() <= MAX_CLEANUP,
+            "the suite's wallets have {} open orders; refusing to sweep more than {MAX_CLEANUP}",
+            open.len()
+        );
+        cancel_best_effort(&self.stack, &open).await;
+    }
+
+    /// Record an order this test placed, for the panic guard.
+    fn track(&self, wallet: &Wallet, side: WireSide, id: [u8; 32]) {
+        let i = self
+            .wallets()
+            .iter()
+            .position(|w| w.address() == wallet.address())
+            .expect("a suite wallet");
+        self.placed
+            .lock()
+            .unwrap()
+            .push((i, side_name(side as i32), id));
     }
 
     /// One base unit, in pair units.
@@ -248,6 +407,20 @@ impl Rig {
         price: u128,
         hidden: bool,
     ) -> [u8; 32] {
+        self.send_settling(wallet, side, qty, price, hidden, None)
+            .await
+    }
+
+    /// [`Rig::send`], settling the quote leg to `quote_address` when given.
+    async fn send_settling(
+        &self,
+        wallet: &Wallet,
+        side: WireSide,
+        qty: u128,
+        price: u128,
+        hidden: bool,
+        quote_address: Option<String>,
+    ) -> [u8; 32] {
         let resp = send_order_with_wallets(
             self.stack.clone(),
             self.market.clone(),
@@ -261,11 +434,13 @@ impl Rig {
             None,
             vec![],
             None,
-            None,
+            quote_address,
         )
         .await
         .unwrap_or_else(|e| panic!("send_order from {} failed: {e:#}", wallet.address()));
-        <[u8; 32]>::try_from(resp.order_id.as_slice()).expect("32-byte order id")
+        let id = <[u8; 32]>::try_from(resp.order_id.as_slice()).expect("32-byte order id");
+        self.track(wallet, side, id);
+        id
     }
 
     async fn cancel(&self, wallet: &Wallet, side: &str, id: [u8; 32]) {
@@ -350,6 +525,44 @@ impl Rig {
             "order {} never became {what}: last {last:?}",
             hex::encode(id)
         );
+    }
+}
+
+/// The panic guard: if a test panics, cancel every order it placed, on a
+/// thread of its own (a test's runtime cannot be re-entered from `drop`),
+/// bounded by [`MAX_CLEANUP`] and [`CANCEL_DEADLINE`] per order.
+impl Drop for Rig {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        let placed = std::mem::take(&mut *self.placed.lock().unwrap_or_else(|e| e.into_inner()));
+        if placed.is_empty() {
+            return;
+        }
+        let (stack, market, keys) = (self.stack.clone(), self.market.clone(), self.keys.clone());
+        let t = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("cleanup runtime");
+            rt.block_on(async {
+                let wallets: Vec<Wallet> = keys
+                    .iter()
+                    .map(|k| Wallet::from_evm_hex(k).expect("suite key"))
+                    .collect();
+                let orders: Vec<_> = placed
+                    .iter()
+                    .map(|(i, side, id)| (&wallets[*i], market.clone(), *side, *id))
+                    .collect();
+                eprintln!(
+                    "    panic guard: cancelling {} placed order(s)",
+                    orders.len()
+                );
+                cancel_best_effort(&stack, &orders).await;
+            });
+        });
+        let _ = t.join();
     }
 }
 
@@ -932,8 +1145,17 @@ async fn s7_two_delegations_list_both_sides() {
     assert!(lo > 0 && lo < hi);
     let sell_qty = rig.unit() * 5;
     let buy_qty = rig.unit() * 7;
+    // The sell settles its receive (quote) leg to the second wallet, so an
+    // owner taken from the receive leg would list it under the wrong wallet.
     let sell = rig
-        .send(&rig.trader, WireSide::Ask, sell_qty, hi, false)
+        .send_settling(
+            &rig.trader,
+            WireSide::Ask,
+            sell_qty,
+            hi,
+            false,
+            Some(rig.trader2.address()),
+        )
         .await;
     let buy = rig
         .send(&rig.trader2, WireSide::Bid, buy_qty, lo, false)
@@ -1010,6 +1232,10 @@ async fn s7_two_delegations_list_both_sides() {
     assert!(
         s.base_address.eq_ignore_ascii_case(&rig.trader.address()),
         "{s:?}"
+    );
+    assert!(
+        s.quote_address.eq_ignore_ascii_case(&rig.trader2.address()),
+        "the sell's receive leg is the second wallet: {s:?}"
     );
     assert!(
         b.quote_address.eq_ignore_ascii_case(&rig.trader2.address()),
@@ -1184,6 +1410,11 @@ async fn s8_mcp_hidden_order_tracked_to_filled() {
         .await;
     assert_eq!(o["state"], "open", "{o}");
     let id = o["orderId"].as_str().expect("orderId").to_string();
+    let raw_id: [u8; 32] = hex::decode(id.trim_start_matches("0x"))
+        .ok()
+        .and_then(|v| v.try_into().ok())
+        .expect("orderId is 0x + 64 hex");
+    rig.track(&rig.trader, WireSide::Bid, raw_id);
 
     let g = mcp.ok("get_order", json!({"order_id": id})).await;
     assert_eq!(g["state"], "open", "{g}");
