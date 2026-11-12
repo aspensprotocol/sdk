@@ -113,8 +113,9 @@ fn refused_before_issue(status: &tonic::Status) -> bool {
 /// repeat it after each wait of `schedule` while the answer is a refusal that
 /// happened before any voucher was issued ([`refused_before_issue`]). The last
 /// status is returned once the waits run out, or once the next attempt would
-/// start more than the schedule's deadline after the first. Any other answer,
-/// success or failure, is returned at once.
+/// start more than the schedule's deadline after the first (an attempt that
+/// would start exactly at the deadline does start). Any other answer, success
+/// or failure, is returned at once.
 ///
 /// The same signed request is sent each time: the venue authenticates the
 /// signature over `network|token|account|amount` only, with no nonce or
@@ -295,10 +296,14 @@ impl VoucherSource<'_> {
 /// A voucher request the venue refuses before issuing anything is repeated:
 /// five attempts, and no new attempt more than a minute after the first, so a
 /// call can take over a minute to return. Dropping the future, or timing it
-/// out from the outside, does not cancel a withdrawal the venue is already
-/// serving: it may issue the voucher anyway. A caller that gives up on a
-/// call must check the balance and the voucher state before withdrawing again
-/// for the same intent, or it can withdraw twice.
+/// out from the outside, before the voucher has arrived withdraws nothing
+/// twice: nobody holds the signature, and the venue keeps the funds held until
+/// its expiry sweep releases them. A second withdrawal happens when the first
+/// call keeps running after the caller gave up (as when a tool host times out
+/// a call it does not abort), or was dropped after the on-chain submit was
+/// broadcast, and the caller then asks again. A caller that gives up on a call
+/// must check the balance and the voucher state before withdrawing again for
+/// the same intent.
 pub async fn call_withdraw_from_config_with_wallet(
     url: String,
     network: String,
@@ -1294,6 +1299,34 @@ mod retry_tests {
         );
     }
 
+    /// A 50 s call, then one wait: the second attempt would start at 50 s plus
+    /// the wait. Returns how many calls ran under a 60 s deadline.
+    async fn calls_with_wait(wait: Duration) -> usize {
+        let mut script = Script::new(
+            (0..2)
+                .map(|_| Err(Status::unavailable(IN_PROGRESS)))
+                .collect(),
+        );
+        script.takes = Duration::from_secs(50);
+        let waits = [wait];
+        let schedule = RetrySchedule {
+            waits: &waits,
+            deadline: Duration::from_secs(60),
+        };
+        let _ = withdraw_with_retry(&schedule, || script.next()).await;
+        script.calls()
+    }
+
+    /// The bound is on when an attempt STARTS and an attempt starting exactly
+    /// at the deadline is allowed: starts at 59.999 s and 60 s run, 60.001 s
+    /// does not.
+    #[tokio::test(start_paused = true)]
+    async fn the_sixty_second_bound_includes_an_attempt_starting_exactly_at_it() {
+        assert_eq!(calls_with_wait(ms(9_999)).await, 2);
+        assert_eq!(calls_with_wait(ms(10_000)).await, 2);
+        assert_eq!(calls_with_wait(ms(10_001)).await, 1);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn failed_precondition_is_returned_at_once() {
         let script = Script::new(vec![Err(Status::failed_precondition("insufficient"))]);
@@ -1327,9 +1360,10 @@ mod retry_tests {
     }
 
     /// A dropped connection may have followed an issued voucher, and a repeat
-    /// would issue a second one, so a transport-level UNAVAILABLE, the
-    /// venue's signer-paused refusal, and a gateway 502/503/504 are not
-    /// retried.
+    /// would issue a second one, so a transport-level UNAVAILABLE and a
+    /// gateway 502/503/504 are not retried. The venue's signer-paused refusal
+    /// never follows an issued voucher; it is left alone because a locked or
+    /// unreachable signer does not recover within seconds.
     #[tokio::test(start_paused = true)]
     async fn unavailable_that_may_follow_an_issued_voucher_is_not_retried() {
         for message in [
