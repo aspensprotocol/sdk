@@ -107,6 +107,19 @@ bump (see **Versioning** in `README.md`).
   chain with an unknown architecture as "bad architecture" rather than in a
   guessed 18-decimal unit.
 
+### Fixed
+
+- A withdrawal the venue refuses with `UNAVAILABLE` is asked again, after
+  0.5 s, 1 s, 2 s and 4 s (five attempts), and the last status is returned if
+  all five are refused. Only refusals that happened before any voucher was
+  issued are retried: the venue's "withdrawal not issued — retry shortly"
+  (another withdrawal for the account in progress, a settlement batch being
+  resolved, the settle lock busy) and the gateway's HTTP 429 rate limit.
+  Any other `UNAVAILABLE`, such as a dropped connection, is returned at once,
+  because the request carries no nonce and a repeat after a voucher was
+  issued would issue a second one. Applies to the gRPC voucher request on
+  every chain; the FCE transport is unchanged.
+
 ## [0.8.0] — 2026-10-20
 
 **Pairs with an arborter that has replay protection (arborter #380).** Against

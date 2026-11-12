@@ -34,6 +34,80 @@ pub(crate) enum VoucherSource<'a> {
     Fce(&'a crate::fce::FceClient),
 }
 
+/// Waits between the attempts of [`withdraw_with_retry`]: five attempts, so
+/// four waits, 7.5 s in all.
+const WITHDRAW_RETRY_DELAYS: [std::time::Duration; 4] = [
+    std::time::Duration::from_millis(500),
+    std::time::Duration::from_secs(1),
+    std::time::Duration::from_secs(2),
+    std::time::Duration::from_secs(4),
+];
+
+/// What tonic 0.14 writes as the message of a status it infers from an HTTP
+/// 429 that carried no `grpc-status`: the gateway's rate limit, answered
+/// before the request reached the venue.
+const GATEWAY_RATE_LIMIT_MESSAGE: &str =
+    "grpc-status header missing, mapped from HTTP status code 429";
+
+/// The words every venue refusal of "come back shortly" carries (another
+/// withdrawal in progress for the account, a settlement batch being resolved,
+/// the settle lock busy past its bound). The venue writes them only on paths
+/// that return before any hold or voucher exists.
+const VENUE_NOT_ISSUED_MARKER: &str = "withdrawal not issued";
+
+/// Whether `status` is a refusal that provably happened before any voucher
+/// was issued, so asking again cannot produce a second voucher.
+///
+/// `UNAVAILABLE` alone is not enough. A connection that drops after the venue
+/// has placed a hold and signed a voucher also surfaces as `UNAVAILABLE` with
+/// a transport message, and the withdrawal request carries no nonce, so the
+/// venue would treat a repeat as a new request and issue a second voucher for
+/// a further amount while the balance allows. Only two shapes are known to be
+/// pre-issue: the venue's own message saying the withdrawal was not issued,
+/// and the gateway's HTTP 429 (the request never reached the venue). Every
+/// other `UNAVAILABLE`, including a venue's "exits paused" refusal and any
+/// transport failure, is returned to the caller.
+fn refused_before_issue(status: &tonic::Status) -> bool {
+    status.code() == tonic::Code::Unavailable
+        && (status.message().contains(VENUE_NOT_ISSUED_MARKER)
+            || status.message() == GATEWAY_RATE_LIMIT_MESSAGE)
+}
+
+/// Run `call` (one `Withdraw` request, built fresh or cloned each time), and
+/// repeat it after 0.5 s, 1 s, 2 s and 4 s while the answer is a refusal that
+/// happened before any voucher was issued ([`refused_before_issue`]). After
+/// the fifth attempt the last status is returned. Any other answer, success
+/// or failure, is returned at once.
+///
+/// The same signed request is sent each time: the venue authenticates the
+/// signature over `network|token|account|amount` only, with no nonce or
+/// expiry, so a repeat verifies exactly as the first did.
+pub(crate) async fn withdraw_with_retry<F, Fut>(
+    mut call: F,
+) -> Result<super::arborter_pb::WithdrawResponse, tonic::Status>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<super::arborter_pb::WithdrawResponse, tonic::Status>>,
+{
+    let mut waits = WITHDRAW_RETRY_DELAYS.iter();
+    loop {
+        match call().await {
+            Err(status) if refused_before_issue(&status) => match waits.next() {
+                Some(wait) => {
+                    tracing::warn!(
+                        message = status.message(),
+                        wait_ms = wait.as_millis() as u64,
+                        "withdrawal refused before issue; retrying"
+                    );
+                    tokio::time::sleep(*wait).await;
+                }
+                None => return Err(status),
+            },
+            other => return other,
+        }
+    }
+}
+
 /// The voucher fields both transports return, normalized. Deliberately not the
 /// gRPC `WithdrawResponse`: the submit code below should not care which wire
 /// produced these bytes.
@@ -61,17 +135,25 @@ impl VoucherSource<'_> {
         match self {
             Self::Grpc(url) => {
                 let channel = create_channel(url).await?;
-                let mut client = ArborterServiceClient::new(channel);
-                let v = client
-                    .withdraw(tonic::Request::new(WithdrawRequest {
-                        network: network.to_string(),
-                        token: token.to_string(),
-                        account: account.to_string(),
-                        amount: amount.to_string(),
-                        signature,
-                    }))
-                    .await?
-                    .into_inner();
+                let client = ArborterServiceClient::new(channel);
+                let request = WithdrawRequest {
+                    network: network.to_string(),
+                    token: token.to_string(),
+                    account: account.to_string(),
+                    amount: amount.to_string(),
+                    signature,
+                };
+                let v = withdraw_with_retry(|| {
+                    let mut client = client.clone();
+                    let request = request.clone();
+                    async move {
+                        Ok(client
+                            .withdraw(tonic::Request::new(request))
+                            .await?
+                            .into_inner())
+                    }
+                })
+                .await?;
                 Ok(Voucher {
                     amount: v.amount,
                     nonce: v.nonce,
@@ -1029,5 +1111,145 @@ mod tron_tests {
             2
         );
         assert_eq!(broadcasts(&server).await.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use tokio::time::Instant;
+    use tonic::{Code, Status};
+
+    use super::super::arborter_pb::WithdrawResponse;
+    use super::{GATEWAY_RATE_LIMIT_MESSAGE, withdraw_with_retry};
+
+    const IN_PROGRESS: &str = "another withdrawal for this account on base is in progress; \
+                               withdrawal not issued — retry shortly";
+
+    fn voucher() -> WithdrawResponse {
+        WithdrawResponse {
+            amount: "1000000".into(),
+            nonce: 7,
+            ..Default::default()
+        }
+    }
+
+    /// Answers each call from `script` in order and counts the calls.
+    struct Script {
+        answers: Mutex<Vec<Result<WithdrawResponse, Status>>>,
+        calls: AtomicUsize,
+    }
+
+    impl Script {
+        fn new(mut answers: Vec<Result<WithdrawResponse, Status>>) -> Self {
+            answers.reverse();
+            Self {
+                answers: Mutex::new(answers),
+                calls: AtomicUsize::new(0),
+            }
+        }
+        fn next(&self) -> Result<WithdrawResponse, Status> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.answers.lock().unwrap().pop().expect("script ran out")
+        }
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unavailable_twice_then_ok_is_one_voucher_after_one_and_a_half_seconds() {
+        let script = Script::new(vec![
+            Err(Status::unavailable(IN_PROGRESS)),
+            Err(Status::unavailable(IN_PROGRESS)),
+            Ok(voucher()),
+        ]);
+        let start = Instant::now();
+        let got = withdraw_with_retry(|| async { script.next() }).await;
+        assert_eq!(got.unwrap().nonce, 7);
+        assert_eq!(script.calls(), 3);
+        // 0.5 s + 1 s.
+        assert_eq!(start.elapsed(), Duration::from_millis(1500));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn always_unavailable_is_five_calls_over_seven_and_a_half_seconds() {
+        let script = Script::new(
+            (0..5)
+                .map(|_| Err(Status::unavailable(IN_PROGRESS)))
+                .collect(),
+        );
+        let start = Instant::now();
+        let err = withdraw_with_retry(|| async { script.next() })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Code::Unavailable);
+        assert_eq!(err.message(), IN_PROGRESS);
+        assert_eq!(script.calls(), 5);
+        // 0.5 + 1 + 2 + 4 s, with no wait after the last attempt.
+        assert_eq!(start.elapsed(), Duration::from_millis(7500));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_precondition_is_returned_at_once() {
+        let script = Script::new(vec![Err(Status::failed_precondition("insufficient"))]);
+        let start = Instant::now();
+        let err = withdraw_with_retry(|| async { script.next() })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Code::FailedPrecondition);
+        assert_eq!(script.calls(), 1);
+        assert_eq!(start.elapsed(), Duration::ZERO);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_gateway_rate_limit_is_retried() {
+        let script = Script::new(vec![
+            Err(Status::unavailable(GATEWAY_RATE_LIMIT_MESSAGE)),
+            Ok(voucher()),
+        ]);
+        let start = Instant::now();
+        withdraw_with_retry(|| async { script.next() })
+            .await
+            .unwrap();
+        assert_eq!(script.calls(), 2);
+        assert_eq!(start.elapsed(), Duration::from_millis(500));
+    }
+
+    /// A dropped connection may have followed an issued voucher, and a repeat
+    /// would issue a second one, so a transport-level UNAVAILABLE, the
+    /// venue's signer-paused refusal, and a gateway 503/504 are not retried.
+    #[tokio::test(start_paused = true)]
+    async fn unavailable_that_may_follow_an_issued_voucher_is_not_retried() {
+        for message in [
+            "transport error",
+            "error reading a body from connection",
+            "exits paused: signer unreachable",
+            "grpc-status header missing, mapped from HTTP status code 504",
+            "grpc-status header missing, mapped from HTTP status code 503",
+        ] {
+            let script = Script::new(vec![Err(Status::unavailable(message))]);
+            let start = Instant::now();
+            let err = withdraw_with_retry(|| async { script.next() })
+                .await
+                .unwrap_err();
+            assert_eq!(err.message(), message);
+            assert_eq!(script.calls(), 1, "{message}");
+            assert_eq!(start.elapsed(), Duration::ZERO, "{message}");
+        }
+    }
+
+    /// The words must come with UNAVAILABLE: the same text under another code
+    /// is not a retry request.
+    #[tokio::test(start_paused = true)]
+    async fn the_marker_under_another_code_is_not_retried() {
+        let script = Script::new(vec![Err(Status::internal(IN_PROGRESS))]);
+        withdraw_with_retry(|| async { script.next() })
+            .await
+            .unwrap_err();
+        assert_eq!(script.calls(), 1);
     }
 }
