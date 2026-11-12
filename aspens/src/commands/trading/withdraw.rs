@@ -34,26 +34,59 @@ pub(crate) enum VoucherSource<'a> {
     Fce(&'a crate::fce::FceClient),
 }
 
-/// Waits between the attempts of [`withdraw_with_retry`]: five attempts, so
-/// four waits, 7.5 s in all.
-const WITHDRAW_RETRY_DELAYS: [std::time::Duration; 4] = [
-    std::time::Duration::from_millis(500),
-    std::time::Duration::from_secs(1),
-    std::time::Duration::from_secs(2),
-    std::time::Duration::from_secs(4),
-];
+/// How [`withdraw_with_retry`] paces its attempts: one wait after each refused
+/// attempt but the last, and a bound on how long after the first attempt a new
+/// one may still start.
+pub(crate) struct RetrySchedule<'a> {
+    /// Waits between attempts; the attempts are one more than this.
+    pub(crate) waits: &'a [std::time::Duration],
+    /// No attempt starts later than this after the first one started.
+    pub(crate) deadline: std::time::Duration,
+}
 
-/// What tonic 0.14 writes as the message of a status it infers from an HTTP
-/// 429 that carried no `grpc-status`: the gateway's rate limit, answered
-/// before the request reached the venue.
-const GATEWAY_RATE_LIMIT_MESSAGE: &str =
+impl RetrySchedule<'static> {
+    /// Five attempts, 0.5 s, 1 s, 2 s and 4 s apart (7.5 s of waiting), and no
+    /// new attempt more than 60 s after the first. One refused attempt can
+    /// itself take about 20 s (the venue waits up to 10 s twice for a
+    /// chain's settlement lock), so without the bound five of them would run
+    /// close to two minutes.
+    pub(crate) const WITHDRAW: Self = Self {
+        waits: &[
+            std::time::Duration::from_millis(500),
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(4),
+        ],
+        deadline: std::time::Duration::from_secs(60),
+    };
+}
+
+/// The message tonic 0.14 gives a status it infers from an HTTP 429 whose
+/// body is empty (no `grpc-status` header, nothing to decode).
+const HTTP_429_INFERRED_MESSAGE: &str =
     "grpc-status header missing, mapped from HTTP status code 429";
+
+/// The text tonic 0.14 puts in the `INTERNAL` status it raises when a 429's
+/// non-empty body (such as a rate limiter's "Too Many Requests") does not
+/// decode as a gRPC frame; it names the HTTP status of the response.
+const HTTP_429_BODY_MESSAGE: &str = "while receiving response with status: 429";
 
 /// The words every venue refusal of "come back shortly" carries (another
 /// withdrawal in progress for the account, a settlement batch being resolved,
-/// the settle lock busy past its bound). The venue writes them only on paths
-/// that return before any hold or voucher exists.
+/// the settle lock busy past its bound, a hold that could not be made
+/// durable). The venue writes them only on paths that return before any
+/// voucher is signed; some come after a hold was placed, and the venue
+/// releases it before answering.
 const VENUE_NOT_ISSUED_MARKER: &str = "withdrawal not issued";
+
+/// Whether `status` came from an HTTP 429 answered by the gateway in front of
+/// the venue. The venue itself never answers 429, so such a request was not
+/// forwarded. tonic gives the status a different code and text depending on
+/// whether the 429 had a body; both texts are recognised, whatever the code.
+fn is_gateway_rate_limit(status: &tonic::Status) -> bool {
+    let message = status.message();
+    message == HTTP_429_INFERRED_MESSAGE || message.contains(HTTP_429_BODY_MESSAGE)
+}
 
 /// Whether `status` is a refusal that provably happened before any voucher
 /// was issued, so asking again cannot produce a second voucher.
@@ -63,37 +96,43 @@ const VENUE_NOT_ISSUED_MARKER: &str = "withdrawal not issued";
 /// a transport message, and the withdrawal request carries no nonce, so the
 /// venue would treat a repeat as a new request and issue a second voucher for
 /// a further amount while the balance allows. Only two shapes are known to be
-/// pre-issue: the venue's own message saying the withdrawal was not issued,
-/// and the gateway's HTTP 429 (the request never reached the venue). Every
-/// other `UNAVAILABLE`, including a venue's "exits paused" refusal and any
-/// transport failure, is returned to the caller.
+/// pre-issue: `UNAVAILABLE` with the venue's own message saying the
+/// withdrawal was not issued, and the gateway's HTTP 429
+/// ([`is_gateway_rate_limit`]). Every other status is returned to the caller,
+/// including any transport failure and a gateway 502, 503 or 504 (which can
+/// follow a request the venue did serve). The venue's "exits paused"
+/// refusal is also left alone: it is not retried because a signer that is
+/// locked or unreachable does not recover within seconds.
 fn refused_before_issue(status: &tonic::Status) -> bool {
-    status.code() == tonic::Code::Unavailable
-        && (status.message().contains(VENUE_NOT_ISSUED_MARKER)
-            || status.message() == GATEWAY_RATE_LIMIT_MESSAGE)
+    (status.code() == tonic::Code::Unavailable
+        && status.message().contains(VENUE_NOT_ISSUED_MARKER))
+        || is_gateway_rate_limit(status)
 }
 
 /// Run `call` (one `Withdraw` request, built fresh or cloned each time), and
-/// repeat it after 0.5 s, 1 s, 2 s and 4 s while the answer is a refusal that
-/// happened before any voucher was issued ([`refused_before_issue`]). After
-/// the fifth attempt the last status is returned. Any other answer, success
-/// or failure, is returned at once.
+/// repeat it after each wait of `schedule` while the answer is a refusal that
+/// happened before any voucher was issued ([`refused_before_issue`]). The last
+/// status is returned once the waits run out, or once the next attempt would
+/// start more than the schedule's deadline after the first. Any other answer,
+/// success or failure, is returned at once.
 ///
 /// The same signed request is sent each time: the venue authenticates the
 /// signature over `network|token|account|amount` only, with no nonce or
 /// expiry, so a repeat verifies exactly as the first did.
 pub(crate) async fn withdraw_with_retry<F, Fut>(
+    schedule: &RetrySchedule<'_>,
     mut call: F,
 ) -> Result<super::arborter_pb::WithdrawResponse, tonic::Status>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<super::arborter_pb::WithdrawResponse, tonic::Status>>,
 {
-    let mut waits = WITHDRAW_RETRY_DELAYS.iter();
+    let first = tokio::time::Instant::now();
+    let mut waits = schedule.waits.iter();
     loop {
         match call().await {
             Err(status) if refused_before_issue(&status) => match waits.next() {
-                Some(wait) => {
+                Some(wait) if first.elapsed() + *wait <= schedule.deadline => {
                     tracing::warn!(
                         message = status.message(),
                         wait_ms = wait.as_millis() as u64,
@@ -101,11 +140,38 @@ where
                     );
                     tokio::time::sleep(*wait).await;
                 }
-                None => return Err(status),
+                _ => return Err(status),
             },
             other => return other,
         }
     }
+}
+
+/// Request a voucher over gRPC, retrying per `schedule`.
+async fn fetch_grpc(
+    url: &str,
+    request: WithdrawRequest,
+    schedule: &RetrySchedule<'_>,
+) -> Result<Voucher> {
+    let channel = create_channel(url).await?;
+    let client = ArborterServiceClient::new(channel);
+    let v = withdraw_with_retry(schedule, || {
+        let mut client = client.clone();
+        let request = request.clone();
+        async move {
+            Ok(client
+                .withdraw(tonic::Request::new(request))
+                .await?
+                .into_inner())
+        }
+    })
+    .await?;
+    Ok(Voucher {
+        amount: v.amount,
+        nonce: v.nonce,
+        expiry: v.expiry,
+        signature: v.signature,
+    })
 }
 
 /// The voucher fields both transports return, normalized. Deliberately not the
@@ -134,8 +200,6 @@ impl VoucherSource<'_> {
     ) -> Result<Voucher> {
         match self {
             Self::Grpc(url) => {
-                let channel = create_channel(url).await?;
-                let client = ArborterServiceClient::new(channel);
                 let request = WithdrawRequest {
                     network: network.to_string(),
                     token: token.to_string(),
@@ -143,23 +207,7 @@ impl VoucherSource<'_> {
                     amount: amount.to_string(),
                     signature,
                 };
-                let v = withdraw_with_retry(|| {
-                    let mut client = client.clone();
-                    let request = request.clone();
-                    async move {
-                        Ok(client
-                            .withdraw(tonic::Request::new(request))
-                            .await?
-                            .into_inner())
-                    }
-                })
-                .await?;
-                Ok(Voucher {
-                    amount: v.amount,
-                    nonce: v.nonce,
-                    expiry: v.expiry,
-                    signature: v.signature,
-                })
+                fetch_grpc(url, request, &RetrySchedule::WITHDRAW).await
             }
             #[cfg(feature = "fce")]
             Self::Fce(fce) => {
@@ -243,6 +291,14 @@ impl VoucherSource<'_> {
 /// - **Tron**: the EVM voucher flow with the request signed under the TRON
 ///   message prefix and `withdraw(voucher, signature)` sent as a native Tron
 ///   transaction (the wallet burns TRX for its energy).
+///
+/// A voucher request the venue refuses before issuing anything is repeated:
+/// five attempts, and no new attempt more than a minute after the first, so a
+/// call can take over a minute to return. Dropping the future, or timing it
+/// out from the outside, does not cancel a withdrawal the venue is already
+/// serving: it may issue the voucher anyway. A caller that gives up on a
+/// call must check the balance and the voucher state before withdrawing again
+/// for the same intent, or it can withdraw twice.
 pub async fn call_withdraw_from_config_with_wallet(
     url: String,
     network: String,
@@ -1124,7 +1180,7 @@ mod retry_tests {
     use tonic::{Code, Status};
 
     use super::super::arborter_pb::WithdrawResponse;
-    use super::{GATEWAY_RATE_LIMIT_MESSAGE, withdraw_with_retry};
+    use super::{HTTP_429_INFERRED_MESSAGE, RetrySchedule, withdraw_with_retry};
 
     const IN_PROGRESS: &str = "another withdrawal for this account on base is in progress; \
                                withdrawal not issued — retry shortly";
@@ -1137,10 +1193,15 @@ mod retry_tests {
         }
     }
 
-    /// Answers each call from `script` in order and counts the calls.
+    /// Answers each call from `script` in order, counts the calls and notes
+    /// when each started.
     struct Script {
         answers: Mutex<Vec<Result<WithdrawResponse, Status>>>,
         calls: AtomicUsize,
+        started: Mutex<Vec<Duration>>,
+        origin: Instant,
+        /// Virtual time each call takes before it answers.
+        takes: Duration,
     }
 
     impl Script {
@@ -1149,15 +1210,27 @@ mod retry_tests {
             Self {
                 answers: Mutex::new(answers),
                 calls: AtomicUsize::new(0),
+                started: Mutex::new(Vec::new()),
+                origin: Instant::now(),
+                takes: Duration::ZERO,
             }
         }
-        fn next(&self) -> Result<WithdrawResponse, Status> {
+        async fn next(&self) -> Result<WithdrawResponse, Status> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.started.lock().unwrap().push(self.origin.elapsed());
+            tokio::time::sleep(self.takes).await;
             self.answers.lock().unwrap().pop().expect("script ran out")
         }
         fn calls(&self) -> usize {
             self.calls.load(Ordering::SeqCst)
         }
+        fn started(&self) -> Vec<Duration> {
+            self.started.lock().unwrap().clone()
+        }
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
     }
 
     #[tokio::test(start_paused = true)]
@@ -1168,36 +1241,64 @@ mod retry_tests {
             Ok(voucher()),
         ]);
         let start = Instant::now();
-        let got = withdraw_with_retry(|| async { script.next() }).await;
+        let got = withdraw_with_retry(&RetrySchedule::WITHDRAW, || script.next()).await;
         assert_eq!(got.unwrap().nonce, 7);
         assert_eq!(script.calls(), 3);
         // 0.5 s + 1 s.
-        assert_eq!(start.elapsed(), Duration::from_millis(1500));
+        assert_eq!(start.elapsed(), ms(1500));
     }
 
+    /// Each attempt starts after its own wait: 0.5, then 1, 2 and 4 s after
+    /// the one before. Swapping any two waits changes one of these offsets.
     #[tokio::test(start_paused = true)]
-    async fn always_unavailable_is_five_calls_over_seven_and_a_half_seconds() {
+    async fn always_unavailable_is_five_calls_started_at_the_scheduled_offsets() {
         let script = Script::new(
             (0..5)
                 .map(|_| Err(Status::unavailable(IN_PROGRESS)))
                 .collect(),
         );
         let start = Instant::now();
-        let err = withdraw_with_retry(|| async { script.next() })
+        let err = withdraw_with_retry(&RetrySchedule::WITHDRAW, || script.next())
             .await
             .unwrap_err();
         assert_eq!(err.code(), Code::Unavailable);
         assert_eq!(err.message(), IN_PROGRESS);
         assert_eq!(script.calls(), 5);
-        // 0.5 + 1 + 2 + 4 s, with no wait after the last attempt.
-        assert_eq!(start.elapsed(), Duration::from_millis(7500));
+        assert_eq!(
+            script.started(),
+            vec![ms(0), ms(500), ms(1500), ms(3500), ms(7500)]
+        );
+        // No wait after the last attempt.
+        assert_eq!(start.elapsed(), ms(7500));
+    }
+
+    /// Calls that each take 25 s: attempts start at 0 and 25.5 s and 51.5 s;
+    /// the next would start at 78.5 s, past the 60 s bound, so it does not and
+    /// the third refusal is returned.
+    #[tokio::test(start_paused = true)]
+    async fn no_attempt_starts_more_than_sixty_seconds_after_the_first() {
+        let mut script = Script::new(
+            (0..5)
+                .map(|_| Err(Status::unavailable(IN_PROGRESS)))
+                .collect(),
+        );
+        script.takes = Duration::from_secs(25);
+        let err = withdraw_with_retry(&RetrySchedule::WITHDRAW, || script.next())
+            .await
+            .unwrap_err();
+        assert_eq!(err.message(), IN_PROGRESS);
+        assert_eq!(
+            script.started(),
+            vec![ms(0), ms(25_500), ms(51_500)],
+            "the fourth attempt would have started at 78.5 s"
+        );
     }
 
     #[tokio::test(start_paused = true)]
     async fn failed_precondition_is_returned_at_once() {
         let script = Script::new(vec![Err(Status::failed_precondition("insufficient"))]);
         let start = Instant::now();
-        let err = withdraw_with_retry(|| async { script.next() })
+        let err = withdraw_with_retry(&RetrySchedule::WITHDRAW, || script.next())
             .await
             .unwrap_err();
         assert_eq!(err.code(), Code::FailedPrecondition);
@@ -1205,23 +1306,30 @@ mod retry_tests {
         assert_eq!(start.elapsed(), Duration::ZERO);
     }
 
+    /// Both shapes tonic gives an HTTP 429 are retried, whatever the code.
     #[tokio::test(start_paused = true)]
-    async fn the_gateway_rate_limit_is_retried() {
-        let script = Script::new(vec![
-            Err(Status::unavailable(GATEWAY_RATE_LIMIT_MESSAGE)),
-            Ok(voucher()),
-        ]);
-        let start = Instant::now();
-        withdraw_with_retry(|| async { script.next() })
-            .await
-            .unwrap();
-        assert_eq!(script.calls(), 2);
-        assert_eq!(start.elapsed(), Duration::from_millis(500));
+    async fn the_gateway_rate_limit_is_retried_in_both_shapes() {
+        for status in [
+            Status::unavailable(HTTP_429_INFERRED_MESSAGE),
+            Status::internal(
+                "protocol error: received message with invalid compression flag: 84 (valid flags \
+                 are 0 and 1) while receiving response with status: 429 Too Many Requests",
+            ),
+        ] {
+            let script = Script::new(vec![Err(status), Ok(voucher())]);
+            let start = Instant::now();
+            withdraw_with_retry(&RetrySchedule::WITHDRAW, || script.next())
+                .await
+                .unwrap();
+            assert_eq!(script.calls(), 2);
+            assert_eq!(start.elapsed(), ms(500));
+        }
     }
 
     /// A dropped connection may have followed an issued voucher, and a repeat
     /// would issue a second one, so a transport-level UNAVAILABLE, the
-    /// venue's signer-paused refusal, and a gateway 503/504 are not retried.
+    /// venue's signer-paused refusal, and a gateway 502/503/504 are not
+    /// retried.
     #[tokio::test(start_paused = true)]
     async fn unavailable_that_may_follow_an_issued_voucher_is_not_retried() {
         for message in [
@@ -1233,7 +1341,7 @@ mod retry_tests {
         ] {
             let script = Script::new(vec![Err(Status::unavailable(message))]);
             let start = Instant::now();
-            let err = withdraw_with_retry(|| async { script.next() })
+            let err = withdraw_with_retry(&RetrySchedule::WITHDRAW, || script.next())
                 .await
                 .unwrap_err();
             assert_eq!(err.message(), message);
@@ -1242,14 +1350,192 @@ mod retry_tests {
         }
     }
 
-    /// The words must come with UNAVAILABLE: the same text under another code
-    /// is not a retry request.
+    /// The venue's words must come with UNAVAILABLE: the same text under
+    /// another code is not a retry request.
     #[tokio::test(start_paused = true)]
     async fn the_marker_under_another_code_is_not_retried() {
         let script = Script::new(vec![Err(Status::internal(IN_PROGRESS))]);
-        withdraw_with_retry(|| async { script.next() })
+        withdraw_with_retry(&RetrySchedule::WITHDRAW, || script.next())
             .await
             .unwrap_err();
         assert_eq!(script.calls(), 1);
+    }
+}
+
+/// `fetch_grpc` against a raw HTTP/2 server that answers from a script, so
+/// the status each answer becomes is the one tonic really produces.
+#[cfg(test)]
+mod fetch_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use bytes::Bytes;
+    use prost::Message;
+    use tokio::net::TcpListener;
+
+    use super::super::arborter_pb::{WithdrawRequest, WithdrawResponse};
+    use super::{RetrySchedule, fetch_grpc};
+
+    const NOT_ISSUED: &str =
+        "settlement is in progress on base; withdrawal not issued — retry shortly";
+
+    /// What the fake server answers one request with.
+    #[derive(Clone)]
+    enum Answer {
+        /// A plain HTTP response with this status and body, no gRPC trailers.
+        Http(u16, &'static str),
+        /// A gRPC error, trailers-only.
+        Grpc(u8, &'static str),
+        /// A voucher.
+        Voucher,
+    }
+
+    /// Answer request `n` with `script[n]`, the last entry once it runs out.
+    /// Returns the URL and the count of requests served.
+    async fn fake_venue(script: Vec<Answer>) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let count = Arc::new(AtomicUsize::new(0));
+        let served = count.clone();
+        tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let script = script.clone();
+                let count = count.clone();
+                tokio::spawn(async move {
+                    let mut conn = h2::server::handshake(socket).await.unwrap();
+                    while let Some(Ok((_request, mut respond))) = conn.accept().await {
+                        let n = count.fetch_add(1, Ordering::SeqCst);
+                        let answer = script[n.min(script.len() - 1)].clone();
+                        match answer {
+                            Answer::Http(status, body) => {
+                                let response =
+                                    http::Response::builder().status(status).body(()).unwrap();
+                                let mut send =
+                                    respond.send_response(response, body.is_empty()).unwrap();
+                                if !body.is_empty() {
+                                    send.send_data(Bytes::from_static(body.as_bytes()), true)
+                                        .unwrap();
+                                }
+                            }
+                            Answer::Grpc(code, message) => {
+                                let response = http::Response::builder()
+                                    .status(200)
+                                    .header("content-type", "application/grpc")
+                                    .header("grpc-status", code.to_string())
+                                    .header("grpc-message", message.replace(' ', "%20"))
+                                    .body(())
+                                    .unwrap();
+                                respond.send_response(response, true).unwrap();
+                            }
+                            Answer::Voucher => {
+                                let response = http::Response::builder()
+                                    .status(200)
+                                    .header("content-type", "application/grpc")
+                                    .body(())
+                                    .unwrap();
+                                let mut send = respond.send_response(response, false).unwrap();
+                                let body = WithdrawResponse {
+                                    amount: "1000000".into(),
+                                    nonce: 7,
+                                    expiry: 1_900_000_000,
+                                    signature: vec![0x11; 65],
+                                    ..Default::default()
+                                }
+                                .encode_to_vec();
+                                let mut frame = vec![0u8];
+                                frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                                frame.extend_from_slice(&body);
+                                send.send_data(Bytes::from(frame), false).unwrap();
+                                let mut trailers = http::HeaderMap::new();
+                                trailers.insert("grpc-status", "0".parse().unwrap());
+                                send.send_trailers(trailers).unwrap();
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        (url, served)
+    }
+
+    /// Short real waits: the production schedule is tested on the paused
+    /// clock; here the wiring is.
+    const FAST: RetrySchedule<'static> = RetrySchedule {
+        waits: &[
+            Duration::from_millis(5),
+            Duration::from_millis(5),
+            Duration::from_millis(5),
+            Duration::from_millis(5),
+        ],
+        deadline: Duration::from_secs(30),
+    };
+
+    fn request() -> WithdrawRequest {
+        WithdrawRequest {
+            network: "base".into(),
+            token: "0xtoken".into(),
+            account: "0xaccount".into(),
+            amount: "1000000".into(),
+            signature: vec![1; 65],
+        }
+    }
+
+    async fn run(script: Vec<Answer>) -> (eyre::Result<super::Voucher>, usize) {
+        let (url, served) = fake_venue(script).await;
+        let got = fetch_grpc(&url, request(), &FAST).await;
+        (got, served.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn a_429_with_a_text_body_twice_then_a_voucher() {
+        let (got, served) = run(vec![
+            Answer::Http(429, "Too Many Requests"),
+            Answer::Http(429, "Too Many Requests"),
+            Answer::Voucher,
+        ])
+        .await;
+        assert_eq!(got.unwrap().nonce, 7);
+        assert_eq!(served, 3);
+    }
+
+    #[tokio::test]
+    async fn a_429_with_an_empty_body_twice_then_a_voucher() {
+        let (got, served) = run(vec![
+            Answer::Http(429, ""),
+            Answer::Http(429, ""),
+            Answer::Voucher,
+        ])
+        .await;
+        assert_eq!(got.unwrap().nonce, 7);
+        assert_eq!(served, 3);
+    }
+
+    #[tokio::test]
+    async fn a_venue_refusal_not_issued_then_a_voucher() {
+        let (got, served) = run(vec![Answer::Grpc(14, NOT_ISSUED), Answer::Voucher]).await;
+        assert_eq!(got.unwrap().nonce, 7);
+        assert_eq!(served, 2);
+    }
+
+    #[tokio::test]
+    async fn a_transport_like_unavailable_is_one_request() {
+        let (got, served) = run(vec![
+            Answer::Grpc(14, "error reading a body from connection"),
+            Answer::Voucher,
+        ])
+        .await;
+        let err = got.err().expect("the refusal is returned");
+        let status = err.downcast_ref::<tonic::Status>().expect("a status");
+        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert_eq!(served, 1);
+    }
+
+    #[tokio::test]
+    async fn a_503_is_one_request() {
+        let (got, served) = run(vec![Answer::Http(503, ""), Answer::Voucher]).await;
+        assert!(got.is_err());
+        assert_eq!(served, 1);
     }
 }

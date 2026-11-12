@@ -109,16 +109,19 @@ bump (see **Versioning** in `README.md`).
 
 ### Fixed
 
-- A withdrawal the venue refuses with `UNAVAILABLE` is asked again, after
-  0.5 s, 1 s, 2 s and 4 s (five attempts), and the last status is returned if
-  all five are refused. Only refusals that happened before any voucher was
-  issued are retried: the venue's "withdrawal not issued — retry shortly"
-  (another withdrawal for the account in progress, a settlement batch being
-  resolved, the settle lock busy) and the gateway's HTTP 429 rate limit.
-  Any other `UNAVAILABLE`, such as a dropped connection, is returned at once,
-  because the request carries no nonce and a repeat after a voucher was
-  issued would issue a second one. Applies to the gRPC voucher request on
-  every chain; the FCE transport is unchanged.
+- A withdrawal the venue refuses before issuing anything is asked again,
+  after 0.5 s, 1 s, 2 s and 4 s (five attempts, and no new attempt more than
+  60 s after the first), and the last status is returned if all are refused.
+  Retried: `UNAVAILABLE` carrying the venue's "withdrawal not issued — retry
+  shortly" (another withdrawal for the account in progress, a settlement batch
+  being resolved, the settle lock busy), and the gateway's HTTP 429 rate
+  limit, whether it arrives with an empty body or a text body. Any other
+  status, such as a dropped connection or a 503, is returned at once, because
+  the request carries no nonce and a repeat after a voucher was issued would
+  issue a second one. A call can now take over a minute, and a caller that
+  times out must check the balance and voucher state before withdrawing again
+  for the same intent. Applies to the gRPC voucher request on every chain;
+  the FCE transport is unchanged.
 
 ## [0.8.0] — 2026-10-20
 
