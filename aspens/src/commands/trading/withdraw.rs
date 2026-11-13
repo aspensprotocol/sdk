@@ -1,9 +1,10 @@
 use std::str::FromStr;
+use std::time::Duration;
 
 use crate::chain_client::named_chain_for;
 use alloy::network::EthereumWallet;
-use alloy::primitives::{Address, Bytes, U256};
-use alloy::providers::{Provider, ProviderBuilder};
+use alloy::primitives::{Address, B256, Bytes, U256};
+use alloy::providers::{PendingTransactionBuilder, Provider, ProviderBuilder};
 use alloy::signers::local::PrivateKeySigner;
 use eyre::Result;
 use url::Url;
@@ -108,8 +109,8 @@ fn is_gateway_rate_limit(status: &tonic::Status) -> bool {
 /// ([`is_gateway_rate_limit`]). Every other status is returned to the caller,
 /// including any transport failure and a gateway 502, 503 or 504 (which can
 /// follow a request the venue did serve). The venue's "exits paused"
-/// refusal is also left alone: it is not retried because a signer that is
-/// locked or unreachable does not recover within seconds.
+/// refusal (its signer locked, unreachable or failing attestation) is retried
+/// when it says the withdrawal was not issued, like any other such refusal.
 fn refused_before_issue(status: &tonic::Status) -> bool {
     (status.code() == tonic::Code::Unavailable
         && status.message().contains(VENUE_NOT_ISSUED_MARKER))
@@ -303,8 +304,14 @@ impl VoucherSource<'_> {
 /// A voucher request the venue refuses before issuing anything is repeated:
 /// five attempts, and no new attempt more than a minute after the first. The
 /// last attempt can start at the minute and then has the channel's own
-/// one-minute timeout, so a call can take about two minutes to return before
-/// the on-chain submit begins. Each call yields at most one voucher. A second
+/// one-minute timeout, so the voucher can take about two minutes to arrive.
+/// The EVM submit that follows is bounded too: up to four attempts, each
+/// given a minute to confirm and then ten seconds to read whether the voucher
+/// was paid, so nearly five minutes more, and about seven for the whole call.
+/// When a transaction may have been broadcast but the chain never said the
+/// voucher was paid, the error is a [`WithdrawOutcomeUnknown`]: the
+/// withdrawal can still land, so check the chain before asking again. Each
+/// call yields at most one voucher. A second
 /// concurrent call for the same account, which the venue refuses while the
 /// first is in progress, waits and then proceeds as its own withdrawal;
 /// de-duplicating intent is the caller's job. Dropping the future, or timing it
@@ -1018,6 +1025,9 @@ async fn call_withdraw_from_config_evm(
     //    that backs the voucher isn't visible to this tx yet); a reverted tx
     //    never sets `usedWithdrawNonces`, so resubmitting the identical voucher
     //    is safe and avoids re-requesting (which would hit the now-held balance).
+    //    Each attempt is bounded, and after each one that did not confirm the
+    //    contract is asked whether the voucher was paid (see
+    //    [`submit_evm_voucher`]).
     let contract = MidribV3::new(contract_addr, &provider);
     let onchain_voucher = MidribV3::WithdrawalVoucher {
         account: signer_address,
@@ -1028,51 +1038,180 @@ async fn call_withdraw_from_config_evm(
         expiry: U256::from(voucher.expiry),
     };
     let voucher_sig = Bytes::from(voucher.signature);
-    let mut last_err = None;
-    let mut result = None;
-    for attempt in 0..EVM_VOUCHER_SUBMIT_MAX_ATTEMPTS {
-        // `send` and `watch` surface distinct alloy error types, so match each
-        // rather than `?`-unify them; flatten both into the retry's last_err.
-        let outcome = match contract
-            .withdraw(onchain_voucher.clone(), voucher_sig.clone())
-            .send()
-            .await
-        {
-            Ok(pending) => pending
-                .with_required_confirmations(1)
-                .watch()
-                .await
-                .map_err(|e| eyre::eyre!("{e}")),
-            Err(e) => Err(eyre::eyre!("{e}")),
-        };
-        match outcome {
-            Ok(tx) => {
-                result = Some(tx);
-                break;
-            }
-            Err(e) => {
-                last_err = Some(e);
-                if attempt + 1 < EVM_VOUCHER_SUBMIT_MAX_ATTEMPTS {
-                    tracing::warn!(
-                        attempt,
-                        "voucher submit failed (possibly settle-propagation race); \
-                         resubmitting the same voucher"
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        EVM_VOUCHER_SUBMIT_RETRY_MS,
-                    ))
-                    .await;
+    let tx_hash = submit_evm_voucher(
+        voucher.nonce,
+        || async {
+            let pending = contract
+                .withdraw(onchain_voucher.clone(), voucher_sig.clone())
+                .send()
+                .await?;
+            Ok(*pending.tx_hash())
+        },
+        |hash| {
+            let root = provider.root().clone();
+            async move {
+                let receipt = PendingTransactionBuilder::new(root, hash)
+                    .with_required_confirmations(1)
+                    .get_receipt()
+                    .await?;
+                if receipt.status() {
+                    Ok(())
+                } else {
+                    Err(eyre::eyre!("withdraw transaction {hash} reverted"))
                 }
             }
-        }
-    }
-    let result = result.ok_or_else(|| {
-        last_err.unwrap_or_else(|| eyre::eyre!("voucher submit failed after retries"))
-    })?;
+        },
+        || async {
+            Ok(contract
+                .usedWithdrawNonces(signer_address, U256::from(voucher.nonce))
+                .call()
+                .await?)
+        },
+        EVM_VOUCHER_SUBMIT_MAX_ATTEMPTS,
+    )
+    .await?;
 
-    tracing::info!("Withdraw voucher submitted on-chain: {result:?}");
+    match tx_hash {
+        Some(hash) => tracing::info!("Withdraw voucher paid on-chain: transaction {hash}"),
+        None => tracing::info!(
+            "Withdraw voucher paid on-chain (nonce {}); the paying transaction was not seen here",
+            voucher.nonce
+        ),
+    }
 
     Ok(())
+}
+
+/// How long one EVM voucher submit may take, from sending the transaction to
+/// its first confirmation, before the contract is asked whether the voucher
+/// was paid.
+const EVM_VOUCHER_WATCH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long the read of whether a voucher nonce was used may take before it
+/// counts as unanswered.
+const EVM_NONCE_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// An EVM withdrawal whose transaction may have been broadcast but whose
+/// outcome could not be learned: it was not seen to confirm, and the contract
+/// never said the voucher was paid. The transaction can still land, paying
+/// the voucher; a voucher pays at most once, but a new withdrawal for the same
+/// intent would be a second voucher, so the chain must be checked first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WithdrawOutcomeUnknown {
+    /// The voucher's nonce: `usedWithdrawNonces(account, nonce)` on the
+    /// contract says whether it was paid.
+    pub voucher_nonce: u64,
+    /// The last transaction sent for the voucher, when one is known. `None`
+    /// when a send never answered, so its transaction hash was not learned.
+    pub tx_hash: Option<B256>,
+}
+
+impl std::fmt::Display for WithdrawOutcomeUnknown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "withdrawal submitted, outcome unknown: voucher nonce {}, transaction ",
+            self.voucher_nonce
+        )?;
+        match &self.tx_hash {
+            Some(hash) => write!(f, "{hash}")?,
+            None => write!(f, "unknown")?,
+        }
+        write!(f, "; check the chain before asking again")
+    }
+}
+
+impl std::error::Error for WithdrawOutcomeUnknown {}
+
+/// Submit one EVM voucher, up to `attempts` times, and report what the chain
+/// says about it.
+///
+/// Each attempt runs `send` (returns the transaction hash once broadcast) and
+/// then `watch` on that hash (returns once it confirms, an error if it
+/// reverted), both together bounded by [`EVM_VOUCHER_WATCH_TIMEOUT`]. A
+/// confirmed transaction is the answer, `Ok(Some(hash))`. After any other
+/// attempt, `nonce_used` asks the contract whether the voucher was paid,
+/// bounded by [`EVM_NONCE_READ_TIMEOUT`]:
+/// - paid: success, `Ok` with the last hash sent (`None` if no send
+///   answered; the voucher was paid by a transaction not seen here);
+/// - not paid, or no answer: another attempt with the same voucher after a
+///   short wait, while attempts remain.
+///
+/// Once the attempts run out, the result is [`WithdrawOutcomeUnknown`] when
+/// a transaction may have been broadcast (a send answered with a hash, or
+/// never answered), since it can still land; otherwise every send failed
+/// and the last send error is returned. A voucher pays at most once and a
+/// reverted transaction leaves its nonce unused, so resubmitting the same
+/// voucher cannot pay it twice.
+async fn submit_evm_voucher<S, SF, W, WF, N, NF>(
+    voucher_nonce: u64,
+    mut send: S,
+    mut watch: W,
+    mut nonce_used: N,
+    attempts: usize,
+) -> Result<Option<B256>>
+where
+    S: FnMut() -> SF,
+    SF: std::future::Future<Output = Result<B256>>,
+    W: FnMut(B256) -> WF,
+    WF: std::future::Future<Output = Result<()>>,
+    N: FnMut() -> NF,
+    NF: std::future::Future<Output = Result<bool>>,
+{
+    let mut last_hash = None;
+    let mut maybe_broadcast = false;
+    let mut last_err = None;
+    for attempt in 0..attempts {
+        let mut sent = None;
+        let submitted = tokio::time::timeout(EVM_VOUCHER_WATCH_TIMEOUT, async {
+            let hash = send().await?;
+            sent = Some(hash);
+            watch(hash).await.map(|()| hash)
+        })
+        .await;
+        if let Some(hash) = sent {
+            last_hash = Some(hash);
+            maybe_broadcast = true;
+        }
+        let err = match submitted {
+            Ok(Ok(hash)) => return Ok(Some(hash)),
+            Ok(Err(e)) => e,
+            Err(_) => {
+                // A send still pending at the bound may have broadcast.
+                maybe_broadcast = true;
+                eyre::eyre!(
+                    "withdraw transaction not confirmed within {}s",
+                    EVM_VOUCHER_WATCH_TIMEOUT.as_secs()
+                )
+            }
+        };
+        tracing::warn!(attempt, error = %err, "voucher submit did not confirm");
+        last_err = Some(err);
+
+        match tokio::time::timeout(EVM_NONCE_READ_TIMEOUT, nonce_used()).await {
+            Ok(Ok(true)) => return Ok(last_hash),
+            Ok(Ok(false)) => {}
+            Ok(Err(e)) => tracing::warn!(error = %e, "could not read whether the voucher was paid"),
+            Err(_) => tracing::warn!("reading whether the voucher was paid timed out"),
+        }
+
+        if attempt + 1 < attempts {
+            tracing::warn!(
+                attempt,
+                "voucher not paid (possibly settle-propagation race); \
+                 resubmitting the same voucher"
+            );
+            tokio::time::sleep(Duration::from_millis(EVM_VOUCHER_SUBMIT_RETRY_MS)).await;
+        }
+    }
+    if maybe_broadcast {
+        return Err(WithdrawOutcomeUnknown {
+            voucher_nonce,
+            tx_hash: last_hash,
+        }
+        .into());
+    }
+    Err(last_err.unwrap_or_else(|| eyre::eyre!("voucher submit made no attempt")))
 }
 
 /// EVM voucher-submit retries: resubmit the SAME voucher on a transient
@@ -1373,9 +1512,8 @@ mod retry_tests {
 
     /// A dropped connection may have followed an issued voucher, and a repeat
     /// would issue a second one, so a transport-level UNAVAILABLE and a
-    /// gateway 502/503/504 are not retried. The venue's signer-paused refusal
-    /// never follows an issued voucher; it is left alone because a locked or
-    /// unreachable signer does not recover within seconds.
+    /// gateway 502/503/504 are not retried. A signer-paused refusal without
+    /// the venue's not-issued words is not retried either.
     #[tokio::test(start_paused = true)]
     async fn unavailable_that_may_follow_an_issued_voucher_is_not_retried() {
         for message in [
@@ -1394,6 +1532,20 @@ mod retry_tests {
             assert_eq!(script.calls(), 1, "{message}");
             assert_eq!(start.elapsed(), Duration::ZERO, "{message}");
         }
+    }
+
+    /// A signer-paused refusal that says the withdrawal was not issued is
+    /// retried like any other such refusal.
+    #[tokio::test(start_paused = true)]
+    async fn exits_paused_saying_not_issued_is_retried() {
+        let paused = "exits paused: signer locked; withdrawal not issued — retry shortly";
+        assert!(super::refused_before_issue(&Status::unavailable(paused)));
+        let script = Script::new(vec![Err(Status::unavailable(paused)), Ok(voucher())]);
+        let start = Instant::now();
+        let got = withdraw_with_retry(&RetrySchedule::WITHDRAW, || script.next()).await;
+        assert_eq!(got.unwrap().nonce, 7);
+        assert_eq!(script.calls(), 2);
+        assert_eq!(start.elapsed(), ms(500));
     }
 
     /// The gateway's 429 is recognised by the code and text tonic pairs
@@ -1616,5 +1768,300 @@ mod fetch_tests {
         let (got, served) = run(vec![Answer::Drop, Answer::Voucher]).await;
         assert!(got.is_err());
         assert_eq!(served, 1);
+    }
+}
+
+#[cfg(test)]
+mod submit_tests {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use alloy::primitives::B256;
+    use eyre::Result;
+    use tokio::time::Instant;
+
+    use super::{EVM_VOUCHER_WATCH_TIMEOUT, WithdrawOutcomeUnknown, submit_evm_voucher};
+
+    const NONCE: u64 = 9;
+    const ATTEMPTS: usize = 3;
+
+    fn h(byte: u8) -> B256 {
+        B256::repeat_byte(byte)
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    enum Send {
+        /// Answer from the script in order.
+        Scripted,
+        /// Never answer.
+        Hangs,
+    }
+
+    enum Watch {
+        Confirms,
+        Hangs,
+    }
+
+    enum Read {
+        Used,
+        Unused,
+        /// Unused on the first read, used on every later one.
+        UsedFromSecond,
+        Fails,
+        Hangs,
+    }
+
+    /// A chain that answers the three calls as told, and counts them.
+    struct Chain {
+        send: Send,
+        sends: Mutex<Vec<Result<B256, String>>>,
+        watch: Watch,
+        read: Read,
+        sent: AtomicUsize,
+        watched: Mutex<Vec<B256>>,
+        reads: AtomicUsize,
+    }
+
+    impl Chain {
+        fn new(mut sends: Vec<Result<B256, String>>, watch: Watch, read: Read) -> Self {
+            sends.reverse();
+            Self {
+                send: Send::Scripted,
+                sends: Mutex::new(sends),
+                watch,
+                read,
+                sent: AtomicUsize::new(0),
+                watched: Mutex::new(Vec::new()),
+                reads: AtomicUsize::new(0),
+            }
+        }
+
+        async fn send(&self) -> Result<B256> {
+            self.sent.fetch_add(1, Ordering::SeqCst);
+            if let Send::Hangs = self.send {
+                std::future::pending::<()>().await;
+            }
+            let next = self
+                .sends
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("send script ran out");
+            next.map_err(|e| eyre::eyre!(e))
+        }
+
+        async fn watch(&self, hash: B256) -> Result<()> {
+            self.watched.lock().unwrap().push(hash);
+            match self.watch {
+                Watch::Confirms => Ok(()),
+                Watch::Hangs => std::future::pending().await,
+            }
+        }
+
+        async fn nonce_used(&self) -> Result<bool> {
+            let read = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
+            match self.read {
+                Read::UsedFromSecond => Ok(read >= 2),
+                Read::Used => Ok(true),
+                Read::Unused => Ok(false),
+                Read::Fails => Err(eyre::eyre!("read refused")),
+                Read::Hangs => std::future::pending().await,
+            }
+        }
+
+        async fn submit(&self) -> Result<Option<B256>> {
+            submit_evm_voucher(
+                NONCE,
+                || self.send(),
+                |hash| self.watch(hash),
+                || self.nonce_used(),
+                ATTEMPTS,
+            )
+            .await
+        }
+
+        fn sent(&self) -> usize {
+            self.sent.load(Ordering::SeqCst)
+        }
+
+        fn reads(&self) -> usize {
+            self.reads.load(Ordering::SeqCst)
+        }
+    }
+
+    fn outcome_unknown(err: &eyre::Report) -> &WithdrawOutcomeUnknown {
+        err.downcast_ref::<WithdrawOutcomeUnknown>()
+            .unwrap_or_else(|| panic!("not an unknown outcome: {err}"))
+    }
+
+    #[test]
+    fn the_watch_timeout_is_a_minute() {
+        assert_eq!(EVM_VOUCHER_WATCH_TIMEOUT, Duration::from_secs(60));
+    }
+
+    /// A confirmed transaction is the answer; the nonce is not asked about.
+    #[tokio::test(start_paused = true)]
+    async fn confirmed_is_its_hash_without_reading_the_nonce() {
+        let chain = Chain::new(vec![Ok(h(0xaa))], Watch::Confirms, Read::Unused);
+        let start = Instant::now();
+        assert_eq!(chain.submit().await.unwrap(), Some(h(0xaa)));
+        assert_eq!(chain.sent(), 1);
+        assert_eq!(*chain.watched.lock().unwrap(), vec![h(0xaa)]);
+        assert_eq!(chain.reads(), 0);
+        assert_eq!(start.elapsed(), Duration::ZERO);
+    }
+
+    /// The watch gives up at a minute; the contract says the voucher was
+    /// paid, so that is the answer and nothing is sent again.
+    #[tokio::test(start_paused = true)]
+    async fn unconfirmed_but_paid_is_its_hash_at_a_minute() {
+        let chain = Chain::new(vec![Ok(h(0xaa))], Watch::Hangs, Read::Used);
+        let start = Instant::now();
+        assert_eq!(chain.submit().await.unwrap(), Some(h(0xaa)));
+        assert_eq!(chain.sent(), 1);
+        assert_eq!(chain.reads(), 1);
+        assert_eq!(start.elapsed(), Duration::from_secs(60));
+    }
+
+    /// Three sends, none confirmed and the nonce still unused after each:
+    /// any of them may yet land, so the outcome is unknown and names the
+    /// last transaction. 3 x 60 s of watching plus two 0.7 s waits.
+    #[tokio::test(start_paused = true)]
+    async fn unconfirmed_and_unpaid_three_times_is_outcome_unknown() {
+        let chain = Chain::new(
+            vec![Ok(h(0xaa)), Ok(h(0xbb)), Ok(h(0xcc))],
+            Watch::Hangs,
+            Read::Unused,
+        );
+        let start = Instant::now();
+        let err = chain.submit().await.unwrap_err();
+        assert_eq!(
+            *outcome_unknown(&err),
+            WithdrawOutcomeUnknown {
+                voucher_nonce: 9,
+                tx_hash: Some(h(0xcc)),
+            }
+        );
+        assert_eq!(
+            err.to_string(),
+            "withdrawal submitted, outcome unknown: voucher nonce 9, transaction \
+             0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc; \
+             check the chain before asking again"
+        );
+        assert_eq!(chain.sent(), 3);
+        assert_eq!(chain.reads(), 3);
+        assert_eq!(start.elapsed(), ms(181_400));
+    }
+
+    /// A send that failed, with the voucher already paid (by an earlier
+    /// transaction of this voucher that nobody here saw): success, with no
+    /// hash to report.
+    #[tokio::test(start_paused = true)]
+    async fn send_failed_but_paid_is_success_without_a_hash() {
+        let chain = Chain::new(vec![Err("nonce too low".into())], Watch::Hangs, Read::Used);
+        assert_eq!(chain.submit().await.unwrap(), None);
+        assert_eq!(chain.sent(), 1);
+        assert_eq!(chain.reads(), 1);
+        assert!(chain.watched.lock().unwrap().is_empty());
+    }
+
+    /// An earlier unconfirmed send, then a send that failed with the voucher
+    /// paid: the earlier transaction is the one reported.
+    #[tokio::test(start_paused = true)]
+    async fn paid_after_a_failed_send_reports_the_earlier_transaction() {
+        let chain = Chain::new(
+            vec![Ok(h(0xaa)), Err("nonce too low".into())],
+            Watch::Hangs,
+            Read::UsedFromSecond,
+        );
+        let start = Instant::now();
+        assert_eq!(chain.submit().await.unwrap(), Some(h(0xaa)));
+        assert_eq!(chain.sent(), 2);
+        assert_eq!(chain.reads(), 2);
+        assert_eq!(start.elapsed(), ms(60_700));
+    }
+
+    /// Nothing was ever sent and the voucher is unpaid: the last send error,
+    /// not an unknown outcome.
+    #[tokio::test(start_paused = true)]
+    async fn send_failed_three_times_unpaid_is_the_last_send_error() {
+        let chain = Chain::new(
+            vec![
+                Err("revert one".into()),
+                Err("revert two".into()),
+                Err("revert three".into()),
+            ],
+            Watch::Hangs,
+            Read::Unused,
+        );
+        let start = Instant::now();
+        let err = chain.submit().await.unwrap_err();
+        assert!(err.downcast_ref::<WithdrawOutcomeUnknown>().is_none());
+        assert_eq!(err.to_string(), "revert three");
+        assert_eq!(chain.sent(), 3);
+        assert_eq!(chain.reads(), 3);
+        assert_eq!(start.elapsed(), ms(1_400));
+    }
+
+    /// The nonce cannot be read after any of three unconfirmed sends: the
+    /// outcome is unknown and names the last transaction.
+    #[tokio::test(start_paused = true)]
+    async fn unconfirmed_and_unreadable_three_times_is_outcome_unknown() {
+        let chain = Chain::new(
+            vec![Ok(h(0xaa)), Ok(h(0xbb)), Ok(h(0xcc))],
+            Watch::Hangs,
+            Read::Fails,
+        );
+        let err = chain.submit().await.unwrap_err();
+        assert_eq!(
+            *outcome_unknown(&err),
+            WithdrawOutcomeUnknown {
+                voucher_nonce: 9,
+                tx_hash: Some(h(0xcc)),
+            }
+        );
+        assert_eq!(chain.sent(), 3);
+        assert_eq!(chain.reads(), 3);
+    }
+
+    /// A send that never answers may have broadcast the transaction, so it
+    /// is bounded like the watch and, unpaid three times, ends as an unknown
+    /// outcome with no hash to name.
+    #[tokio::test(start_paused = true)]
+    async fn a_send_that_never_answers_is_outcome_unknown_without_a_hash() {
+        let mut chain = Chain::new(vec![], Watch::Confirms, Read::Unused);
+        chain.send = Send::Hangs;
+        let start = Instant::now();
+        let err = chain.submit().await.unwrap_err();
+        assert_eq!(
+            *outcome_unknown(&err),
+            WithdrawOutcomeUnknown {
+                voucher_nonce: 9,
+                tx_hash: None,
+            }
+        );
+        assert_eq!(chain.sent(), 3);
+        assert_eq!(chain.reads(), 3);
+        assert_eq!(start.elapsed(), ms(181_400));
+    }
+
+    /// A nonce read that never answers is bounded at 10 s and counts as
+    /// unanswered: 3 x (60 s + 10 s) plus two 0.7 s waits.
+    #[tokio::test(start_paused = true)]
+    async fn a_nonce_read_that_never_answers_is_bounded() {
+        let chain = Chain::new(
+            vec![Ok(h(0xaa)), Ok(h(0xbb)), Ok(h(0xcc))],
+            Watch::Hangs,
+            Read::Hangs,
+        );
+        let start = Instant::now();
+        let err = chain.submit().await.unwrap_err();
+        assert_eq!(outcome_unknown(&err).tx_hash, Some(h(0xcc)));
+        assert_eq!(chain.reads(), 3);
+        assert_eq!(start.elapsed(), ms(211_400));
     }
 }

@@ -785,8 +785,8 @@ impl<V: Venue> Server<V> {
     #[tool(
         description = "Withdraw a token from the venue to your own wallet address on that \
         network. amount is a decimal string in the token's own units. Refused when halted. \
-        A call can take about two minutes. If your host times out, the withdrawal may still \
-        complete: check the balance before asking again.",
+        A call can take about seven minutes. If your host times out, or the call reports the \
+        outcome unknown, the withdrawal may still complete: check the balance before asking again.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,

@@ -806,7 +806,16 @@ async fn s3_rest_cancel_already_gone() {
     assert_eq!(raw(&o, "remainingRaw"), Some(rig.qty), "{o}");
 
     assert_eq!(cancel(&mcp, &id).await["result"], "cancelled");
-    let g = mcp.ok("get_order", json!({"order_id": id})).await;
+    // The order's status is written after the cancel answers: look for up to
+    // 5 s, every 100 ms.
+    let mut g = mcp.ok("get_order", json!({"order_id": id})).await;
+    for _ in 0..50 {
+        if g["state"] == "cancelled" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        g = mcp.ok("get_order", json!({"order_id": id})).await;
+    }
     assert_eq!(g["state"], "cancelled", "{g}");
     assert_eq!(cancel(&mcp, &id).await["result"], "already_gone");
     mcp.stop().await;
