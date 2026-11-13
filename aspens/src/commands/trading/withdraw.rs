@@ -6,7 +6,13 @@ use alloy::consensus::TxEnvelope;
 use alloy::eips::eip2718::Encodable2718;
 use alloy::network::EthereumWallet;
 use alloy::primitives::{Address, B256, Bytes, U256};
-use alloy::providers::{PendingTransactionBuilder, Provider, ProviderBuilder};
+use alloy::providers::fillers::{
+    BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
+    SimpleNonceManager, WalletFiller,
+};
+use alloy::providers::{
+    Identity, PendingTransactionBuilder, Provider, ProviderBuilder, RootProvider,
+};
 use alloy::signers::local::PrivateKeySigner;
 use eyre::Result;
 use url::Url;
@@ -981,7 +987,7 @@ async fn call_withdraw_from_config_evm(
             .connect_http(rpc_url.clone())
             .erased(),
     };
-    let signing = ProviderBuilder::new().wallet(wallet).connect_http(rpc_url);
+    let signing = signing_provider(wallet, rpc_url);
 
     // 1) Pre-flight gas check BEFORE requesting a voucher. A voucher places an
     //    off-chain withdraw HOLD on the funds (reserved until the voucher lands
@@ -1133,6 +1139,42 @@ impl std::fmt::Display for WithdrawOutcomeUnknown {
 }
 
 impl std::error::Error for WithdrawOutcomeUnknown {}
+
+/// The provider that fills and signs a withdraw transaction.
+type SigningProvider = FillProvider<
+    JoinFill<
+        JoinFill<
+            JoinFill<
+                JoinFill<JoinFill<Identity, GasFiller>, BlobGasFiller>,
+                NonceFiller<SimpleNonceManager>,
+            >,
+            ChainIdFiller,
+        >,
+        WalletFiller<EthereumWallet>,
+    >,
+    RootProvider,
+>;
+
+/// A provider that fills and signs transactions for `wallet` on `url`.
+///
+/// It has alloy's recommended fillers except that the account nonce is read
+/// from the node's pending transaction count on every fill instead of being
+/// cached and advanced locally. A locally advanced nonce moves on a fill
+/// whose transaction is never broadcast, such as one whose gas estimate
+/// reverts while the settlement backing a voucher is not yet visible: the
+/// next transaction is then signed with a nonce past one never used, cannot
+/// be mined until that gap is filled, and the voucher submit's retry can
+/// never succeed.
+fn signing_provider(wallet: EthereumWallet, url: Url) -> SigningProvider {
+    ProviderBuilder::new()
+        .disable_recommended_fillers()
+        .with_gas_estimation()
+        .with_blob_gas_estimation()
+        .with_simple_nonce_management()
+        .fetch_chain_id()
+        .wallet(wallet)
+        .connect_http(url)
+}
 
 /// Whether a confirmed withdraw transaction succeeded: a reverted one paid
 /// nothing.
@@ -2216,5 +2258,86 @@ mod submit_tests {
         assert_eq!(*outcome_unknown(&err), unknown_cc());
         assert_eq!(chain.reads(), 3);
         assert_eq!(start.elapsed(), ms(211_400));
+    }
+}
+
+#[cfg(test)]
+mod signing_provider_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use alloy::network::{EthereumWallet, TransactionBuilder};
+    use alloy::primitives::{Address, Bytes};
+    use alloy::rpc::types::TransactionRequest;
+    use alloy::signers::local::PrivateKeySigner;
+    use serde_json::{Value, json};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::method};
+
+    use super::signing_provider;
+
+    /// The account's pending transaction count on the mock node.
+    const PENDING: u64 = 5;
+
+    /// A JSON-RPC node that knows just enough to fill a transaction; it
+    /// counts the nonce reads.
+    struct Node {
+        nonce_reads: Arc<AtomicUsize>,
+    }
+
+    impl Respond for Node {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let result = match body["method"].as_str().unwrap() {
+                "eth_chainId" => json!("0x7a69"),
+                "eth_getTransactionCount" => {
+                    self.nonce_reads.fetch_add(1, Ordering::SeqCst);
+                    json!(format!("{PENDING:#x}"))
+                }
+                "eth_estimateGas" => json!("0x30d40"),
+                "eth_feeHistory" => json!({
+                    "oldestBlock": "0x1",
+                    "baseFeePerGas": ["0x3b9aca00", "0x3b9aca00"],
+                    "gasUsedRatio": [0.5],
+                    "reward": [["0x3b9aca00"]]
+                }),
+                other => panic!("mock node has no answer for {other}"),
+            };
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"jsonrpc": "2.0", "id": body["id"], "result": result}))
+        }
+    }
+
+    /// Two fills with nothing broadcast in between both take the node's
+    /// pending count: the nonce is read each time, never advanced locally, so
+    /// a fill that is not broadcast (a gas estimate that reverts, a broadcast
+    /// that never reached the node) leaves no gap for the next one.
+    #[tokio::test]
+    async fn every_fill_reads_the_pending_nonce_from_the_node() {
+        let server = MockServer::start().await;
+        let nonce_reads = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("POST"))
+            .respond_with(Node {
+                nonce_reads: nonce_reads.clone(),
+            })
+            .mount(&server)
+            .await;
+        let wallet = EthereumWallet::new(PrivateKeySigner::random());
+        let signing = signing_provider(wallet, server.uri().parse().unwrap());
+        let request = TransactionRequest::default()
+            .with_to(Address::repeat_byte(0x42))
+            .with_input(Bytes::from_static(&[0xde, 0xad]));
+
+        let mut nonces = Vec::new();
+        for _ in 0..2 {
+            let envelope = signing
+                .fill(request.clone())
+                .await
+                .unwrap()
+                .try_into_envelope()
+                .unwrap();
+            nonces.push(alloy::consensus::Transaction::nonce(&envelope));
+        }
+        assert_eq!(nonces, vec![5, 5]);
+        assert_eq!(nonce_reads.load(Ordering::SeqCst), 2);
     }
 }
