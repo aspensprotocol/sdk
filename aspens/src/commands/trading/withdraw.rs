@@ -318,7 +318,9 @@ impl VoucherSource<'_> {
 /// was paid, so nearly five minutes more, and about seven for the whole call.
 /// When a transaction was broadcast but the chain never said the voucher was
 /// paid, the error is a [`WithdrawOutcomeUnknown`]: the withdrawal can still
-/// land, so check the chain before asking again.
+/// land, so check the chain before asking again. A voucher whose nonce the
+/// contract already shows used before anything is sent is an error of its
+/// own, and nothing is submitted.
 ///
 /// Each call yields at most one voucher. A second concurrent call for the
 /// same account, which the venue refuses while the first is in progress,
@@ -994,7 +996,17 @@ async fn call_withdraw_from_config_evm(
     //    or expires), so requesting one we can't submit (no gas) would strand
     //    that hold until expiry. Fail fast instead so the funds stay
     //    immediately withdrawable.
-    let gas_balance = provider.get_balance(signer_address).await?;
+    let gas_balance = tokio::time::timeout(
+        crate::chain_client::RPC_PROBE_TIMEOUT,
+        provider.get_balance(signer_address),
+    )
+    .await
+    .map_err(|_| {
+        eyre::eyre!(
+            "reading the gas balance on {network} timed out after {}s (no voucher requested)",
+            crate::chain_client::RPC_PROBE_TIMEOUT.as_secs()
+        )
+    })??;
     tracing::info!("Gas balance: {} wei", gas_balance);
     if gas_balance < U256::from(MIN_GAS_BALANCE) {
         let balance_eth = gas_balance.to::<u128>() as f64 / 1e18;
@@ -1051,6 +1063,7 @@ async fn call_withdraw_from_config_evm(
     let signing = &signing;
     let tx_hash = submit_evm_voucher(
         voucher.nonce,
+        voucher.expiry,
         || async {
             let request = contract
                 .withdraw(onchain_voucher.clone(), voucher_sig.clone())
@@ -1089,9 +1102,12 @@ async fn call_withdraw_from_config_evm(
     .await?;
 
     match tx_hash {
-        Some(hash) => tracing::info!("Withdraw voucher paid on-chain: transaction {hash}"),
+        Some(hash) => tracing::info!(
+            "Withdraw voucher nonce {} paid on-chain; last transaction seen: {hash}",
+            voucher.nonce
+        ),
         None => tracing::info!(
-            "Withdraw voucher paid on-chain (nonce {}); the paying transaction was not seen here",
+            "Withdraw voucher nonce {} paid on-chain; no transaction of this call was seen",
             voucher.nonce
         ),
     }
@@ -1118,6 +1134,9 @@ pub struct WithdrawOutcomeUnknown {
     /// The voucher's nonce: `usedWithdrawNonces(account, nonce)` on the
     /// contract says whether it was paid.
     pub voucher_nonce: u64,
+    /// The voucher's expiry as the venue returned it, a unix time in seconds:
+    /// once a block's timestamp is past it the voucher can no longer pay.
+    pub voucher_expiry: u64,
     /// The last transaction broadcast for the voucher, or `None` when it is
     /// not known.
     pub tx_hash: Option<B256>,
@@ -1134,7 +1153,13 @@ impl std::fmt::Display for WithdrawOutcomeUnknown {
             Some(hash) => write!(f, "{hash}")?,
             None => write!(f, "unknown")?,
         }
-        write!(f, "; check the chain before asking again")
+        write!(
+            f,
+            ", expiry {}; check the chain before asking again: if the nonce is still \
+             unused once a block's timestamp is past the expiry, the voucher was not \
+             paid and never will be",
+            self.voucher_expiry
+        )
     }
 }
 
@@ -1189,6 +1214,14 @@ fn receipt_paid(hash: B256, succeeded: bool) -> Result<()> {
 /// Submit one EVM voucher, up to `attempts` times, and report what the chain
 /// says about it.
 ///
+/// Before the first attempt, `nonce_used` is asked once whether the voucher's
+/// nonce is already used. A nonce used before anything was sent means the
+/// venue issued a voucher that cannot pay: that is an error of its own and
+/// nothing is sent. Reading "used" after an attempt as success relies on
+/// this check. If that first read is not answered within
+/// [`EVM_NONCE_READ_TIMEOUT`], the submit goes ahead without it rather than
+/// block the withdrawal.
+///
 /// Each attempt runs `prepare` (fills and signs the transaction locally and
 /// returns its hash with the signed transaction), then `broadcast` with the
 /// signed transaction, then `watch` on the hash (returns once it confirms, an
@@ -1208,8 +1241,14 @@ fn receipt_paid(hash: B256, succeeded: bool) -> Result<()> {
 /// otherwise every attempt failed before broadcasting and the last error is
 /// returned. A voucher pays at most once and a reverted transaction leaves
 /// its nonce unused, so resubmitting the same voucher cannot pay it twice.
+///
+/// The cost of that: an attempt that timed out or saw a transient watch
+/// error re-signs at a fresh account nonce while its transaction may still
+/// be pending. Only one of them can pay, but up to `attempts - 1` extra
+/// transactions can later land, revert on the used nonce, and cost gas.
 async fn submit_evm_voucher<T, P, PF, BC, BF, W, WF, N, NF>(
     voucher_nonce: u64,
+    voucher_expiry: u64,
     mut prepare: P,
     mut broadcast: BC,
     mut watch: W,
@@ -1226,6 +1265,25 @@ where
     N: FnMut() -> NF,
     NF: std::future::Future<Output = Result<bool>>,
 {
+    match tokio::time::timeout(EVM_NONCE_READ_TIMEOUT, nonce_used()).await {
+        Ok(Ok(true)) => {
+            return Err(eyre::eyre!(
+                "the venue issued a withdrawal voucher with nonce {voucher_nonce}, which the \
+                 contract already shows used: it cannot pay, so nothing was submitted; report \
+                 this to the venue, which holds the amount until the voucher's expiry \
+                 {voucher_expiry}"
+            ));
+        }
+        Ok(Ok(false)) => {}
+        Ok(Err(e)) => tracing::warn!(
+            error = %e,
+            "could not read whether the voucher nonce is already used; submitting anyway"
+        ),
+        Err(_) => tracing::warn!(
+            "reading whether the voucher nonce is already used timed out; submitting anyway"
+        ),
+    }
+
     let mut last_hash = None;
     let mut last_err = None;
     for attempt in 0..attempts {
@@ -1272,6 +1330,7 @@ where
     if last_hash.is_some() {
         return Err(WithdrawOutcomeUnknown {
             voucher_nonce,
+            voucher_expiry,
             tx_hash: last_hash,
         }
         .into());
@@ -1851,6 +1910,7 @@ mod submit_tests {
     };
 
     const NONCE: u64 = 9;
+    const EXPIRY: u64 = 1_900_000_000;
     const ATTEMPTS: usize = 3;
 
     fn h(byte: u8) -> B256 {
@@ -1902,6 +1962,10 @@ mod submit_tests {
         broadcasts: Mutex<Vec<B256>>,
         watch: Watch,
         watched: Mutex<Vec<B256>>,
+        /// The read made before the first attempt.
+        pre_read: Read,
+        pre_reads: AtomicUsize,
+        /// The reads made after attempts; `UsedFromSecond` counts these.
         read: Read,
         reads: AtomicUsize,
     }
@@ -1922,6 +1986,8 @@ mod submit_tests {
                 broadcasts: Mutex::new(Vec::new()),
                 watch,
                 watched: Mutex::new(Vec::new()),
+                pre_read: Read::Unused,
+                pre_reads: AtomicUsize::new(0),
                 read,
                 reads: AtomicUsize::new(0),
             }
@@ -1962,8 +2028,13 @@ mod submit_tests {
         }
 
         async fn nonce_used(&self) -> Result<bool> {
-            let read = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
-            match self.read {
+            // The first read is the one before any attempt.
+            let (mode, read) = if self.pre_reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                (self.pre_read, 0)
+            } else {
+                (self.read, self.reads.fetch_add(1, Ordering::SeqCst) + 1)
+            };
+            match mode {
                 Read::Used => Ok(true),
                 Read::Unused => Ok(false),
                 Read::UsedFromSecond => Ok(read >= 2),
@@ -1975,6 +2046,7 @@ mod submit_tests {
         async fn submit(&self) -> Result<Option<B256>> {
             submit_evm_voucher(
                 NONCE,
+                EXPIRY,
                 || self.prepare(),
                 |signed| self.broadcast(signed),
                 |hash| self.watch(hash),
@@ -1996,8 +2068,14 @@ mod submit_tests {
             self.watched.lock().unwrap().clone()
         }
 
+        /// Reads after attempts, not counting the one before the first.
         fn reads(&self) -> usize {
             self.reads.load(Ordering::SeqCst)
+        }
+
+        /// Every read, the one before the first attempt included.
+        fn all_reads(&self) -> usize {
+            self.pre_reads.load(Ordering::SeqCst)
         }
     }
 
@@ -2013,6 +2091,7 @@ mod submit_tests {
     fn unknown_cc() -> WithdrawOutcomeUnknown {
         WithdrawOutcomeUnknown {
             voucher_nonce: 9,
+            voucher_expiry: 1_900_000_000,
             tx_hash: Some(h(0xcc)),
         }
     }
@@ -2048,6 +2127,7 @@ mod submit_tests {
         assert_eq!(chain.broadcasts(), vec![h(0xaa)]);
         assert_eq!(chain.watched(), vec![h(0xaa)]);
         assert_eq!(chain.reads(), 0);
+        assert_eq!(chain.all_reads(), 1);
         assert_eq!(start.elapsed(), Duration::ZERO);
     }
 
@@ -2080,8 +2160,10 @@ mod submit_tests {
         assert_eq!(
             err.to_string(),
             "withdrawal submitted, outcome unknown: voucher nonce 9, transaction \
-             0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc; \
-             check the chain before asking again"
+             0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, \
+             expiry 1900000000; check the chain before asking again: if the nonce \
+             is still unused once a block's timestamp is past the expiry, the \
+             voucher was not paid and never will be"
         );
         assert_eq!(chain.broadcasts(), vec![h(0xaa), h(0xbb), h(0xcc)]);
         assert_eq!(chain.reads(), 3);
@@ -2258,6 +2340,65 @@ mod submit_tests {
         assert_eq!(*outcome_unknown(&err), unknown_cc());
         assert_eq!(chain.reads(), 3);
         assert_eq!(start.elapsed(), ms(211_400));
+    }
+
+    /// The contract already shows the voucher's nonce used before anything
+    /// is sent: the venue issued a voucher that cannot pay. That is an error
+    /// of its own, never success, and nothing is sent.
+    #[tokio::test(start_paused = true)]
+    async fn nonce_already_used_before_the_first_attempt_is_an_error_and_sends_nothing() {
+        let mut chain = Chain::new(
+            vec![Ok(h(0xaa))],
+            Broadcast::Accepted,
+            Watch::Confirms,
+            Read::Unused,
+        );
+        chain.pre_read = Read::Used;
+        let err = chain.submit().await.unwrap_err();
+        assert!(err.downcast_ref::<WithdrawOutcomeUnknown>().is_none());
+        assert_eq!(
+            err.to_string(),
+            "the venue issued a withdrawal voucher with nonce 9, which the contract \
+             already shows used: it cannot pay, so nothing was submitted; report this \
+             to the venue, which holds the amount until the voucher's expiry 1900000000"
+        );
+        assert_eq!(chain.prepares(), 0);
+        assert!(chain.broadcasts().is_empty());
+        assert_eq!(chain.all_reads(), 1);
+    }
+
+    /// A read before the first attempt that fails does not block the
+    /// withdrawal.
+    #[tokio::test(start_paused = true)]
+    async fn an_unanswered_read_before_the_first_attempt_proceeds() {
+        let mut chain = Chain::new(
+            vec![Ok(h(0xaa))],
+            Broadcast::Accepted,
+            Watch::Confirms,
+            Read::Unused,
+        );
+        chain.pre_read = Read::Fails;
+        let start = Instant::now();
+        assert_eq!(chain.submit().await.unwrap(), Some(h(0xaa)));
+        assert_eq!(chain.prepares(), 1);
+        assert_eq!(start.elapsed(), Duration::ZERO);
+    }
+
+    /// A read before the first attempt that never answers is bounded at 10 s
+    /// and then the withdrawal proceeds.
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_read_before_the_first_attempt_proceeds_after_ten_seconds() {
+        let mut chain = Chain::new(
+            vec![Ok(h(0xaa))],
+            Broadcast::Accepted,
+            Watch::Confirms,
+            Read::Unused,
+        );
+        chain.pre_read = Read::Hangs;
+        let start = Instant::now();
+        assert_eq!(chain.submit().await.unwrap(), Some(h(0xaa)));
+        assert_eq!(chain.prepares(), 1);
+        assert_eq!(start.elapsed(), Duration::from_secs(10));
     }
 }
 
