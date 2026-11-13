@@ -40,6 +40,39 @@ pub fn format_error(err: &eyre::Report, context: &str, ctx: &BinaryContext) -> S
         return format!("Failed to {context}: {rpc}");
     }
 
+    // -- Withdrawal whose outcome is unknown -------------------------------
+
+    // Not a failure: the transaction may still pay. Its text holds a hash and
+    // a nonce, whose digits can contain "401" or "404", so it must not reach
+    // the substring battery below, and a "try again" hint would invite a
+    // second withdrawal.
+    if let Some(unknown) = err.chain().find_map(|e| {
+        e.downcast_ref::<aspens::commands::trading::withdraw::WithdrawOutcomeUnknown>()
+    }) {
+        let look = match unknown.tx_hash {
+            Some(_) => "look on chain for that transaction and whether",
+            None => "look on chain whether",
+        };
+        return format!(
+            "Outcome unknown for {context}: {unknown}\n\n\
+             The withdrawal may still pay. Before withdrawing again, {look} voucher nonce {} \
+             is used on the trade contract.",
+            unknown.voucher_nonce
+        );
+    }
+
+    // A voucher nonce the contract showed used before anything was submitted:
+    // the voucher may already have paid the account, so this is not a failure
+    // and must not reach the substring battery either.
+    if let Some(used) = err.chain().find_map(|e| {
+        e.downcast_ref::<aspens::commands::trading::withdraw::WithdrawNonceAlreadyUsed>()
+    }) {
+        return format!(
+            "Nothing submitted for {context}: {used}\n\n\
+             The withdrawal may already have paid. Check the chain before withdrawing again."
+        );
+    }
+
     // -- Transport / network ---------------------------------------------
 
     if err_string.contains("failed to connect")
@@ -493,5 +526,118 @@ mod tests {
         assert!(out.contains("Failed to do thing"));
         assert!(out.contains("something exotic and unmatched"));
         assert!(out.contains("Use -v flag"));
+    }
+
+    fn outcome_unknown(nonce: u64, hash: &str) -> eyre::Report {
+        use aspens::commands::trading::withdraw::WithdrawOutcomeUnknown;
+        eyre::Report::new(WithdrawOutcomeUnknown {
+            voucher_nonce: nonce,
+            voucher_expiry: 1_900_000_000,
+            tx_hash: Some(hash.parse().unwrap()),
+        })
+    }
+
+    /// An unknown withdrawal outcome is not a failure: it prints its own
+    /// message and says to check the chain, even when its transaction hash
+    /// contains "401" (the authentication branch's trigger).
+    #[test]
+    fn withdraw_outcome_unknown_with_401_in_its_hash_is_not_an_auth_failure() {
+        let hash = "0x4010000000000000000000000000000000000000000000000000000000000001";
+        let e = outcome_unknown(9, hash);
+        let out = format_error(&e, "withdraw 1 USDC from base", &BinaryContext::TRADER_CLI);
+        assert_eq!(
+            out,
+            "Outcome unknown for withdraw 1 USDC from base: withdrawal submitted, outcome \
+             unknown: voucher nonce 9, transaction \
+             0x4010000000000000000000000000000000000000000000000000000000000001, expiry \
+             1900000000; check the chain before asking again: if the nonce is still unused \
+             once a block's timestamp is past the expiry, the voucher was not paid and never \
+             will be\n\n\
+             The withdrawal may still pay. Before withdrawing again, look on chain for that \
+             transaction and whether voucher nonce 9 is used on the trade contract."
+        );
+    }
+
+    /// The same with a voucher nonce of 404 (the not-found branch's trigger).
+    #[test]
+    fn withdraw_outcome_unknown_with_nonce_404_is_not_resource_not_found() {
+        let hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let e = outcome_unknown(404, hash);
+        let out = format_error(&e, "withdraw 1 USDC from base", &BinaryContext::TRADER_REPL);
+        // Wrapped in context, it is still found.
+        let wrapped = outcome_unknown(404, hash).wrap_err("withdrawing 1 USDC on base");
+        assert_eq!(
+            format_error(
+                &wrapped,
+                "withdraw 1 USDC from base",
+                &BinaryContext::TRADER_REPL
+            ),
+            out
+        );
+        assert_eq!(
+            out,
+            "Outcome unknown for withdraw 1 USDC from base: withdrawal submitted, outcome \
+             unknown: voucher nonce 404, transaction \
+             0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, expiry \
+             1900000000; check the chain before asking again: if the nonce is still unused \
+             once a block's timestamp is past the expiry, the voucher was not paid and never \
+             will be\n\n\
+             The withdrawal may still pay. Before withdrawing again, look on chain for that \
+             transaction and whether voucher nonce 404 is used on the trade contract."
+        );
+    }
+
+    fn nonce_already_used(nonce: u64, expiry: u64) -> eyre::Report {
+        use aspens::commands::trading::withdraw::WithdrawNonceAlreadyUsed;
+        eyre::Report::new(WithdrawNonceAlreadyUsed {
+            voucher_nonce: nonce,
+            voucher_expiry: expiry,
+        })
+    }
+
+    /// A voucher nonce already used before anything was submitted may mean
+    /// the withdrawal was paid: it is not a failure, and its digits (an
+    /// expiry containing "401", a nonce of 404) must not reach the auth or
+    /// not-found branches.
+    #[test]
+    fn withdraw_nonce_already_used_with_401_in_its_expiry_is_not_an_auth_failure() {
+        let e = nonce_already_used(9, 1_794_010_400);
+        let out = format_error(&e, "withdraw 1 USDC from base", &BinaryContext::TRADER_CLI);
+        assert_eq!(
+            out,
+            "Nothing submitted for withdraw 1 USDC from base: the contract already shows \
+             withdrawal voucher nonce 9 used before this call submitted anything: either \
+             this voucher (expiry 1794010400) was already paid to the account by another \
+             submitter, or the venue issued a nonce that an earlier voucher used; check the \
+             chain for a Withdrawn event for this account and nonce (its token and amount \
+             say which) before withdrawing again\n\n\
+             The withdrawal may already have paid. Check the chain before withdrawing again."
+        );
+    }
+
+    /// The same with a voucher nonce of 404, wrapped in context too.
+    #[test]
+    fn withdraw_nonce_already_used_with_nonce_404_is_not_resource_not_found() {
+        let e = nonce_already_used(404, 1_794_010_400);
+        let out = format_error(&e, "withdraw 1 USDC from base", &BinaryContext::TRADER_REPL);
+        assert_eq!(
+            out,
+            "Nothing submitted for withdraw 1 USDC from base: the contract already shows \
+             withdrawal voucher nonce 404 used before this call submitted anything: either \
+             this voucher (expiry 1794010400) was already paid to the account by another \
+             submitter, or the venue issued a nonce that an earlier voucher used; check the \
+             chain for a Withdrawn event for this account and nonce (its token and amount \
+             say which) before withdrawing again\n\n\
+             The withdrawal may already have paid. Check the chain before withdrawing again."
+        );
+        let wrapped = nonce_already_used(404, 1_794_010_400).wrap_err("withdrawing 1 USDC");
+        assert_eq!(
+            format_error(
+                &wrapped,
+                "withdraw 1 USDC from base",
+                &BinaryContext::TRADER_REPL
+            ),
+            out
+        );
     }
 }

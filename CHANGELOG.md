@@ -66,6 +66,21 @@ bump (see **Versioning** in `README.md`).
   that only `aspens-mcp resume` lifts. Withdrawals are off unless enabled. See
   `aspens-mcp/README.md`, including its custody warning.
 
+- `commands::trading::withdraw::WithdrawOutcomeUnknown` (`voucher_nonce`,
+  `voucher_expiry`, `tx_hash`): the error an EVM withdrawal returns when a
+  transaction may have been broadcast but the chain never said the voucher was
+  paid. The transaction can still land, so check the chain before asking
+  again; once a block's timestamp is past the expiry with the nonce still
+  unused, the voucher was not paid and never will be. `aspens-cli` and
+  `aspens-repl` print it as an unknown outcome, not as a failure.
+- `commands::trading::withdraw::WithdrawNonceAlreadyUsed` (`voucher_nonce`,
+  `voucher_expiry`): the error an EVM withdrawal returns, with nothing
+  submitted, when the contract already shows the voucher's nonce used. Either
+  this voucher was already paid to the account by another submitter, or the
+  venue issued a nonce an earlier voucher used; check the chain for a
+  `Withdrawn` event for the account and nonce before withdrawing again.
+  `aspens-cli` and `aspens-repl` print it as such, not as a failure.
+
 ### Changed
 
 - `fetch_book_snapshot` and `fetch_top_of_book` count their collection window
@@ -127,6 +142,30 @@ bump (see **Versioning** in `README.md`).
   withdrawal; each call yields at most one voucher, and de-duplicating intent
   is the caller's job. Applies to the gRPC voucher request on every chain;
   the FCE transport is unchanged.
+- The venue's signer refusals ("exits paused: signer locked", "signer
+  unreachable", "signer attestation failed") are retried like the refusals
+  above when they carry "withdrawal not issued"; without the phrase they are
+  returned at once.
+- The EVM withdraw submit is bounded and reports what the chain says. Each
+  attempt (sign, broadcast, first confirmation) has 60 s; after any attempt
+  that did not confirm, the contract's `usedWithdrawNonces` is read (10 s):
+  used is success, unused or unanswered is another attempt with the same
+  voucher, up to four. A broadcast that errors or times out counts as
+  possibly sent, and when the attempts run out after one, the result is
+  `WithdrawOutcomeUnknown`, never a plain failure. Before the first attempt
+  the nonce is read once; a nonce already used then is
+  `WithdrawNonceAlreadyUsed` with nothing sent (either this voucher was
+  already paid by another submitter, or the venue issued a nonce an earlier
+  voucher used: a `Withdrawn` event for the account and nonce says which). Worst case, the submit takes nearly five minutes, and a
+  whole withdraw call about seven (the gas-balance read before the voucher
+  is now bounded at 10 s too). Previously the submit had no timeout and could
+  report a failure although its transaction had paid the voucher.
+- A withdraw transaction that confirms reverted is no longer reported as a
+  successful withdrawal; it is another attempt.
+- The withdraw transaction's account nonce is read from the node's pending
+  count on every fill. It was cached and advanced locally, so a retry after
+  a gas estimate that reverted signed past an unused nonce and could never
+  be mined.
 
 ## [0.8.0] — 2026-10-20
 
