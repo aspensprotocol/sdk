@@ -82,10 +82,17 @@ const VENUE_NOT_ISSUED_MARKER: &str = "withdrawal not issued";
 /// Whether `status` came from an HTTP 429 answered by the gateway in front of
 /// the venue. The venue itself never answers 429, so such a request was not
 /// forwarded. tonic gives the status a different code and text depending on
-/// whether the 429 had a body; both texts are recognised, whatever the code.
+/// whether the 429 had a body, and only these two pairings are recognised:
+/// `UNAVAILABLE` with the inferred text (empty body), and `INTERNAL` carrying
+/// the response-status text (a body that does not decode). The same text
+/// under any other code is not tonic's doing and is not a retry request.
 fn is_gateway_rate_limit(status: &tonic::Status) -> bool {
     let message = status.message();
-    message == HTTP_429_INFERRED_MESSAGE || message.contains(HTTP_429_BODY_MESSAGE)
+    match status.code() {
+        tonic::Code::Unavailable => message == HTTP_429_INFERRED_MESSAGE,
+        tonic::Code::Internal => message.contains(HTTP_429_BODY_MESSAGE),
+        _ => false,
+    }
 }
 
 /// Whether `status` is a refusal that provably happened before any voucher
@@ -294,8 +301,13 @@ impl VoucherSource<'_> {
 ///   transaction (the wallet burns TRX for its energy).
 ///
 /// A voucher request the venue refuses before issuing anything is repeated:
-/// five attempts, and no new attempt more than a minute after the first, so a
-/// call can take over a minute to return. Dropping the future, or timing it
+/// five attempts, and no new attempt more than a minute after the first. The
+/// last attempt can start at the minute and then has the channel's own
+/// one-minute timeout, so a call can take about two minutes to return before
+/// the on-chain submit begins. Each call yields at most one voucher. A second
+/// concurrent call for the same account, which the venue refuses while the
+/// first is in progress, waits and then proceeds as its own withdrawal;
+/// de-duplicating intent is the caller's job. Dropping the future, or timing it
 /// out from the outside, before the voucher has arrived withdraws nothing
 /// twice: nobody holds the signature, and the venue keeps the funds held until
 /// its expiry sweep releases them. A second withdrawal happens when the first
@@ -1384,6 +1396,29 @@ mod retry_tests {
         }
     }
 
+    /// The gateway's 429 is recognised by the code and text tonic pairs
+    /// together; either text under any other pairing is not a retry request.
+    #[tokio::test(start_paused = true)]
+    async fn the_429_text_under_another_code_is_not_retried() {
+        let body_text = "protocol error: received message with invalid compression flag: 84 \
+                         (valid flags are 0 and 1) while receiving response with status: 429 \
+                         Too Many Requests";
+        for status in [
+            Status::new(Code::Unknown, body_text),
+            Status::new(Code::Unknown, HTTP_429_INFERRED_MESSAGE),
+            Status::new(Code::FailedPrecondition, body_text),
+            Status::new(Code::Unavailable, body_text),
+            Status::new(Code::Internal, HTTP_429_INFERRED_MESSAGE),
+        ] {
+            let script = Script::new(vec![Err(status.clone()), Ok(voucher())]);
+            let err = withdraw_with_retry(&RetrySchedule::WITHDRAW, || script.next())
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), status.code());
+            assert_eq!(script.calls(), 1, "{:?}", status.code());
+        }
+    }
+
     /// The venue's words must come with UNAVAILABLE: the same text under
     /// another code is not a retry request.
     #[tokio::test(start_paused = true)]
@@ -1423,6 +1458,8 @@ mod fetch_tests {
         Grpc(u8, &'static str),
         /// A voucher.
         Voucher,
+        /// The request is read, then the connection is dropped with no status.
+        Drop,
     }
 
     /// Answer request `n` with `script[n]`, the last entry once it runs out.
@@ -1463,6 +1500,7 @@ mod fetch_tests {
                                     .unwrap();
                                 respond.send_response(response, true).unwrap();
                             }
+                            Answer::Drop => return,
                             Answer::Voucher => {
                                 let response = http::Response::builder()
                                     .status(200)
@@ -1569,6 +1607,13 @@ mod fetch_tests {
     #[tokio::test]
     async fn a_503_is_one_request() {
         let (got, served) = run(vec![Answer::Http(503, ""), Answer::Voucher]).await;
+        assert!(got.is_err());
+        assert_eq!(served, 1);
+    }
+
+    #[tokio::test]
+    async fn a_connection_dropped_after_the_request_is_one_request() {
+        let (got, served) = run(vec![Answer::Drop, Answer::Voucher]).await;
         assert!(got.is_err());
         assert_eq!(served, 1);
     }

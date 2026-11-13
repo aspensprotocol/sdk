@@ -118,9 +118,14 @@ bump (see **Versioning** in `README.md`).
   limit, whether it arrives with an empty body or a text body. Any other
   status, such as a dropped connection or a 503, is returned at once, because
   the request carries no nonce and a repeat after a voucher was issued would
-  issue a second one. A call can now take over a minute, and a caller that
-  times out must check the balance and voucher state before withdrawing again
-  for the same intent. Applies to the gRPC voucher request on every chain;
+  issue a second one. A call can now take about two minutes before the
+  on-chain submit (the last attempt may start at 60 s and has the channel's
+  own 60 s timeout), and a caller that times out must check the balance and
+  voucher state before withdrawing again for the same intent. A second
+  concurrent `withdraw` for the same account, which the venue used to refuse
+  while the first was in progress, now waits and then proceeds as its own
+  withdrawal; each call yields at most one voucher, and de-duplicating intent
+  is the caller's job. Applies to the gRPC voucher request on every chain;
   the FCE transport is unchanged.
 
 ## [0.8.0] — 2026-10-20
