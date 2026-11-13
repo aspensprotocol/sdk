@@ -107,6 +107,27 @@ bump (see **Versioning** in `README.md`).
   chain with an unknown architecture as "bad architecture" rather than in a
   guessed 18-decimal unit.
 
+### Fixed
+
+- A withdrawal the venue refuses before issuing anything is asked again,
+  after 0.5 s, 1 s, 2 s and 4 s (five attempts, and no new attempt more than
+  60 s after the first), and the last status is returned if all are refused.
+  Retried: `UNAVAILABLE` carrying the venue's "withdrawal not issued — retry
+  shortly" (another withdrawal for the account in progress, a settlement batch
+  being resolved, the settle lock busy), and the gateway's HTTP 429 rate
+  limit, whether it arrives with an empty body or a text body. Any other
+  status, such as a dropped connection or a 503, is returned at once, because
+  the request carries no nonce and a repeat after a voucher was issued would
+  issue a second one. A call can now take about two minutes before the
+  on-chain submit (the last attempt may start at 60 s and has the channel's
+  own 60 s timeout), and a caller that times out must check the balance and
+  voucher state before withdrawing again for the same intent. A second
+  concurrent `withdraw` for the same account, which the venue used to refuse
+  while the first was in progress, now waits and then proceeds as its own
+  withdrawal; each call yields at most one voucher, and de-duplicating intent
+  is the caller's job. Applies to the gRPC voucher request on every chain;
+  the FCE transport is unchanged.
+
 ## [0.8.0] — 2026-10-20
 
 **Pairs with an arborter that has replay protection (arborter #380).** Against
