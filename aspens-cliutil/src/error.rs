@@ -61,6 +61,18 @@ pub fn format_error(err: &eyre::Report, context: &str, ctx: &BinaryContext) -> S
         );
     }
 
+    // A voucher nonce the contract showed used before anything was submitted:
+    // the voucher may already have paid the account, so this is not a failure
+    // and must not reach the substring battery either.
+    if let Some(used) = err.chain().find_map(|e| {
+        e.downcast_ref::<aspens::commands::trading::withdraw::WithdrawNonceAlreadyUsed>()
+    }) {
+        return format!(
+            "Nothing submitted for {context}: {used}\n\n\
+             The withdrawal may already have paid. Check the chain before withdrawing again."
+        );
+    }
+
     // -- Transport / network ---------------------------------------------
 
     if err_string.contains("failed to connect")
@@ -572,6 +584,60 @@ mod tests {
              will be\n\n\
              The withdrawal may still pay. Before withdrawing again, look on chain for that \
              transaction and whether voucher nonce 404 is used on the trade contract."
+        );
+    }
+
+    fn nonce_already_used(nonce: u64, expiry: u64) -> eyre::Report {
+        use aspens::commands::trading::withdraw::WithdrawNonceAlreadyUsed;
+        eyre::Report::new(WithdrawNonceAlreadyUsed {
+            voucher_nonce: nonce,
+            voucher_expiry: expiry,
+        })
+    }
+
+    /// A voucher nonce already used before anything was submitted may mean
+    /// the withdrawal was paid: it is not a failure, and its digits (an
+    /// expiry containing "401", a nonce of 404) must not reach the auth or
+    /// not-found branches.
+    #[test]
+    fn withdraw_nonce_already_used_with_401_in_its_expiry_is_not_an_auth_failure() {
+        let e = nonce_already_used(9, 1_794_010_400);
+        let out = format_error(&e, "withdraw 1 USDC from base", &BinaryContext::TRADER_CLI);
+        assert_eq!(
+            out,
+            "Nothing submitted for withdraw 1 USDC from base: the contract already shows \
+             withdrawal voucher nonce 9 used before this call submitted anything: either \
+             this voucher (expiry 1794010400) was already paid to the account by another \
+             submitter, or the venue issued a nonce that an earlier voucher used; check the \
+             chain for a Withdrawn event for this account and nonce (its token and amount \
+             say which) before withdrawing again\n\n\
+             The withdrawal may already have paid. Check the chain before withdrawing again."
+        );
+    }
+
+    /// The same with a voucher nonce of 404, wrapped in context too.
+    #[test]
+    fn withdraw_nonce_already_used_with_nonce_404_is_not_resource_not_found() {
+        let e = nonce_already_used(404, 1_794_010_400);
+        let out = format_error(&e, "withdraw 1 USDC from base", &BinaryContext::TRADER_REPL);
+        assert_eq!(
+            out,
+            "Nothing submitted for withdraw 1 USDC from base: the contract already shows \
+             withdrawal voucher nonce 404 used before this call submitted anything: either \
+             this voucher (expiry 1794010400) was already paid to the account by another \
+             submitter, or the venue issued a nonce that an earlier voucher used; check the \
+             chain for a Withdrawn event for this account and nonce (its token and amount \
+             say which) before withdrawing again\n\n\
+             The withdrawal may already have paid. Check the chain before withdrawing again."
+        );
+        let wrapped = nonce_already_used(404, 1_794_010_400).wrap_err("withdrawing 1 USDC");
+        assert_eq!(
+            format_error(
+                &wrapped,
+                "withdraw 1 USDC from base",
+                &BinaryContext::TRADER_REPL
+            ),
+            out
         );
     }
 }

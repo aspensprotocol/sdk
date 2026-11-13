@@ -73,6 +73,13 @@ bump (see **Versioning** in `README.md`).
   again; once a block's timestamp is past the expiry with the nonce still
   unused, the voucher was not paid and never will be. `aspens-cli` and
   `aspens-repl` print it as an unknown outcome, not as a failure.
+- `commands::trading::withdraw::WithdrawNonceAlreadyUsed` (`voucher_nonce`,
+  `voucher_expiry`): the error an EVM withdrawal returns, with nothing
+  submitted, when the contract already shows the voucher's nonce used. Either
+  this voucher was already paid to the account by another submitter, or the
+  venue issued a nonce an earlier voucher used; check the chain for a
+  `Withdrawn` event for the account and nonce before withdrawing again.
+  `aspens-cli` and `aspens-repl` print it as such, not as a failure.
 
 ### Changed
 
@@ -146,8 +153,10 @@ bump (see **Versioning** in `README.md`).
   voucher, up to four. A broadcast that errors or times out counts as
   possibly sent, and when the attempts run out after one, the result is
   `WithdrawOutcomeUnknown`, never a plain failure. Before the first attempt
-  the nonce is read once, and a nonce already used is an error of its own
-  with nothing sent. Worst case, the submit takes nearly five minutes, and a
+  the nonce is read once; a nonce already used then is
+  `WithdrawNonceAlreadyUsed` with nothing sent (either this voucher was
+  already paid by another submitter, or the venue issued a nonce an earlier
+  voucher used: a `Withdrawn` event for the account and nonce says which). Worst case, the submit takes nearly five minutes, and a
   whole withdraw call about seven (the gas-balance read before the voucher
   is now bounded at 10 s too). Previously the submit had no timeout and could
   report a failure although its transaction had paid the voucher.

@@ -319,8 +319,8 @@ impl VoucherSource<'_> {
 /// When a transaction was broadcast but the chain never said the voucher was
 /// paid, the error is a [`WithdrawOutcomeUnknown`]: the withdrawal can still
 /// land, so check the chain before asking again. A voucher whose nonce the
-/// contract already shows used before anything is sent is an error of its
-/// own, and nothing is submitted.
+/// contract already shows used before anything is sent is a
+/// [`WithdrawNonceAlreadyUsed`], and nothing is submitted.
 ///
 /// Each call yields at most one voucher. A second concurrent call for the
 /// same account, which the venue refuses while the first is in progress,
@@ -1165,6 +1165,36 @@ impl std::fmt::Display for WithdrawOutcomeUnknown {
 
 impl std::error::Error for WithdrawOutcomeUnknown {}
 
+/// An EVM withdrawal voucher whose nonce the contract already showed used
+/// before the call submitted anything, so nothing was submitted. Anyone can
+/// submit a voucher, so there are two causes: this voucher was already paid
+/// to the account by another submitter, or the venue issued a nonce that an
+/// earlier voucher used. A `Withdrawn` event for the account and nonce, whose
+/// token and amount say which voucher it paid, tells them apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WithdrawNonceAlreadyUsed {
+    /// The voucher's nonce, already used on the contract.
+    pub voucher_nonce: u64,
+    /// The voucher's expiry as the venue returned it, a unix time in seconds.
+    pub voucher_expiry: u64,
+}
+
+impl std::fmt::Display for WithdrawNonceAlreadyUsed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the contract already shows withdrawal voucher nonce {} used before this call \
+             submitted anything: either this voucher (expiry {}) was already paid to the \
+             account by another submitter, or the venue issued a nonce that an earlier \
+             voucher used; check the chain for a Withdrawn event for this account and nonce \
+             (its token and amount say which) before withdrawing again",
+            self.voucher_nonce, self.voucher_expiry
+        )
+    }
+}
+
+impl std::error::Error for WithdrawNonceAlreadyUsed {}
+
 /// The provider that fills and signs a withdraw transaction.
 type SigningProvider = FillProvider<
     JoinFill<
@@ -1215,10 +1245,11 @@ fn receipt_paid(hash: B256, succeeded: bool) -> Result<()> {
 /// says about it.
 ///
 /// Before the first attempt, `nonce_used` is asked once whether the voucher's
-/// nonce is already used. A nonce used before anything was sent means the
-/// venue issued a voucher that cannot pay: that is an error of its own and
-/// nothing is sent. Reading "used" after an attempt as success relies on
-/// this check. If that first read is not answered within
+/// nonce is already used. If it is, nothing is sent and the result is
+/// [`WithdrawNonceAlreadyUsed`]: either this voucher was already paid by
+/// another submitter, or the venue issued a nonce an earlier voucher used.
+/// Reading "used" after an attempt as this call's success relies on this
+/// check. If that first read is not answered within
 /// [`EVM_NONCE_READ_TIMEOUT`], the submit goes ahead without it rather than
 /// block the withdrawal.
 ///
@@ -1267,12 +1298,11 @@ where
 {
     match tokio::time::timeout(EVM_NONCE_READ_TIMEOUT, nonce_used()).await {
         Ok(Ok(true)) => {
-            return Err(eyre::eyre!(
-                "the venue issued a withdrawal voucher with nonce {voucher_nonce}, which the \
-                 contract already shows used: it cannot pay, so nothing was submitted; report \
-                 this to the venue, which holds the amount until the voucher's expiry \
-                 {voucher_expiry}"
-            ));
+            return Err(WithdrawNonceAlreadyUsed {
+                voucher_nonce,
+                voucher_expiry,
+            }
+            .into());
         }
         Ok(Ok(false)) => {}
         Ok(Err(e)) => tracing::warn!(
@@ -1906,7 +1936,8 @@ mod submit_tests {
     use tokio::time::Instant;
 
     use super::{
-        EVM_VOUCHER_WATCH_TIMEOUT, WithdrawOutcomeUnknown, receipt_paid, submit_evm_voucher,
+        EVM_VOUCHER_WATCH_TIMEOUT, WithdrawNonceAlreadyUsed, WithdrawOutcomeUnknown, receipt_paid,
+        submit_evm_voucher,
     };
 
     const NONCE: u64 = 9;
@@ -1964,7 +1995,8 @@ mod submit_tests {
         watched: Mutex<Vec<B256>>,
         /// The read made before the first attempt.
         pre_read: Read,
-        pre_reads: AtomicUsize,
+        /// Every read, the one before the first attempt included.
+        read_calls: AtomicUsize,
         /// The reads made after attempts; `UsedFromSecond` counts these.
         read: Read,
         reads: AtomicUsize,
@@ -1987,7 +2019,7 @@ mod submit_tests {
                 watch,
                 watched: Mutex::new(Vec::new()),
                 pre_read: Read::Unused,
-                pre_reads: AtomicUsize::new(0),
+                read_calls: AtomicUsize::new(0),
                 read,
                 reads: AtomicUsize::new(0),
             }
@@ -2029,7 +2061,7 @@ mod submit_tests {
 
         async fn nonce_used(&self) -> Result<bool> {
             // The first read is the one before any attempt.
-            let (mode, read) = if self.pre_reads.fetch_add(1, Ordering::SeqCst) == 0 {
+            let (mode, read) = if self.read_calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 (self.pre_read, 0)
             } else {
                 (self.read, self.reads.fetch_add(1, Ordering::SeqCst) + 1)
@@ -2075,7 +2107,7 @@ mod submit_tests {
 
         /// Every read, the one before the first attempt included.
         fn all_reads(&self) -> usize {
-            self.pre_reads.load(Ordering::SeqCst)
+            self.read_calls.load(Ordering::SeqCst)
         }
     }
 
@@ -2343,8 +2375,8 @@ mod submit_tests {
     }
 
     /// The contract already shows the voucher's nonce used before anything
-    /// is sent: the venue issued a voucher that cannot pay. That is an error
-    /// of its own, never success, and nothing is sent.
+    /// is sent: an error of its own, which says it may have been paid, and
+    /// nothing is sent.
     #[tokio::test(start_paused = true)]
     async fn nonce_already_used_before_the_first_attempt_is_an_error_and_sends_nothing() {
         let mut chain = Chain::new(
@@ -2355,12 +2387,20 @@ mod submit_tests {
         );
         chain.pre_read = Read::Used;
         let err = chain.submit().await.unwrap_err();
-        assert!(err.downcast_ref::<WithdrawOutcomeUnknown>().is_none());
+        assert_eq!(
+            err.downcast_ref::<WithdrawNonceAlreadyUsed>(),
+            Some(&WithdrawNonceAlreadyUsed {
+                voucher_nonce: 9,
+                voucher_expiry: 1_900_000_000,
+            })
+        );
         assert_eq!(
             err.to_string(),
-            "the venue issued a withdrawal voucher with nonce 9, which the contract \
-             already shows used: it cannot pay, so nothing was submitted; report this \
-             to the venue, which holds the amount until the voucher's expiry 1900000000"
+            "the contract already shows withdrawal voucher nonce 9 used before this call \
+             submitted anything: either this voucher (expiry 1900000000) was already paid \
+             to the account by another submitter, or the venue issued a nonce that an \
+             earlier voucher used; check the chain for a Withdrawn event for this account \
+             and nonce (its token and amount say which) before withdrawing again"
         );
         assert_eq!(chain.prepares(), 0);
         assert!(chain.broadcasts().is_empty());

@@ -176,6 +176,9 @@ jobs:
       - name: Run MCP server tests
         run: cargo test -p aspens-mcp --features test-fake --verbose
 
+      - name: Run CLI helper tests
+        run: cargo test -p aspens-cliutil --verbose
+
   doc:
     name: Documentation
     runs-on: ubuntu-latest
