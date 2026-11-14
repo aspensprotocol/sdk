@@ -119,6 +119,10 @@ fn is_gateway_rate_limit(status: &tonic::Status) -> bool {
 /// follow a request the venue did serve). The venue's "exits paused"
 /// refusal (its signer locked, unreachable or failing attestation) is retried
 /// when it says the withdrawal was not issued, like any other such refusal.
+/// The same holds for the venue's solvency-halt refusals: while a halt is not
+/// yet confirmed the venue answers `UNAVAILABLE` with "withdrawal not issued"
+/// and the request is retried; once the halt is confirmed it answers
+/// `FAILED_PRECONDITION`, which is returned at once.
 fn refused_before_issue(status: &tonic::Status) -> bool {
     (status.code() == tonic::Code::Unavailable
         && status.message().contains(VENUE_NOT_ISSUED_MARKER))
@@ -1495,6 +1499,19 @@ mod retry_tests {
     const IN_PROGRESS: &str = "another withdrawal for this account on base is in progress; \
                                withdrawal not issued — retry shortly";
 
+    const HALT_UNCONFIRMED: &str = "withdrawals are halted for \
+        base/0xaaaa000000000000000000000000000000000001: the solvency circuit breaker read \
+        the chain's custody short of what the ledger encumbers and is reading again; \
+        withdrawal not issued — retry shortly";
+    const HALT_UNCONFIRMED_VENUE_WIDE: &str = "withdrawals are suspended venue-wide while \
+        flare/0xbbbb000000000000000000000000000000000002 is halted: the solvency circuit \
+        breaker read that chain's custody short of what the ledger encumbers and is reading \
+        again; withdrawal not issued — retry shortly";
+    const HALT_CONFIRMED: &str = "withdrawals are halted for \
+        base/0xaaaa000000000000000000000000000000000001: the solvency circuit breaker found \
+        the chain's custody short of what the ledger encumbers. This clears automatically \
+        once a covering on-chain read lands.";
+
     fn voucher() -> WithdrawResponse {
         WithdrawResponse {
             amount: "1000000".into(),
@@ -1702,6 +1719,47 @@ mod retry_tests {
         assert_eq!(start.elapsed(), ms(500));
     }
 
+    /// The two refusals a withdrawal meets while a solvency halt is not yet
+    /// confirmed are retried, each under the wait schedule.
+    #[tokio::test(start_paused = true)]
+    async fn an_unconfirmed_halt_refusal_is_retried() {
+        for text in [HALT_UNCONFIRMED, HALT_UNCONFIRMED_VENUE_WIDE] {
+            assert!(super::refused_before_issue(&Status::unavailable(text)));
+            let script = Script::new(vec![
+                Err(Status::unavailable(text)),
+                Err(Status::unavailable(text)),
+                Ok(voucher()),
+            ]);
+            let start = Instant::now();
+            let got = withdraw_with_retry(&RetrySchedule::WITHDRAW, || script.next()).await;
+            assert_eq!(got.unwrap().nonce, 7);
+            assert_eq!(script.calls(), 3);
+            assert_eq!(start.elapsed(), ms(1_500));
+        }
+    }
+
+    /// The confirmed-halt refusal is final: `FAILED_PRECONDITION` is one
+    /// request, and even its text under `UNAVAILABLE` is not retried because
+    /// it lacks the not-issued phrase.
+    #[tokio::test(start_paused = true)]
+    async fn a_confirmed_halt_refusal_is_one_request() {
+        let script = Script::new(vec![
+            Err(Status::failed_precondition(HALT_CONFIRMED)),
+            Ok(voucher()),
+        ]);
+        let start = Instant::now();
+        let err = withdraw_with_retry(&RetrySchedule::WITHDRAW, || script.next())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Code::FailedPrecondition);
+        assert_eq!(err.message(), HALT_CONFIRMED);
+        assert_eq!(script.calls(), 1);
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        assert!(!super::refused_before_issue(&Status::unavailable(
+            HALT_CONFIRMED
+        )));
+    }
+
     /// The gateway's 429 is recognised by the code and text tonic pairs
     /// together; either text under any other pairing is not a retry request.
     #[tokio::test(start_paused = true)]
@@ -1754,6 +1812,14 @@ mod fetch_tests {
 
     const NOT_ISSUED: &str =
         "settlement is in progress on base; withdrawal not issued — retry shortly";
+    const HALT_UNCONFIRMED: &str = "withdrawals are halted for \
+        base/0xaaaa000000000000000000000000000000000001: the solvency circuit breaker read \
+        the chain's custody short of what the ledger encumbers and is reading again; \
+        withdrawal not issued — retry shortly";
+    const HALT_CONFIRMED: &str = "withdrawals are halted for \
+        base/0xaaaa000000000000000000000000000000000001: the solvency circuit breaker found \
+        the chain's custody short of what the ledger encumbers. This clears automatically \
+        once a covering on-chain read lands.";
 
     /// What the fake server answers one request with.
     #[derive(Clone)]
@@ -1895,6 +1961,27 @@ mod fetch_tests {
         let (got, served) = run(vec![Answer::Grpc(14, NOT_ISSUED), Answer::Voucher]).await;
         assert_eq!(got.unwrap().nonce, 7);
         assert_eq!(served, 2);
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_halt_twice_then_a_voucher() {
+        let (got, served) = run(vec![
+            Answer::Grpc(14, HALT_UNCONFIRMED),
+            Answer::Grpc(14, HALT_UNCONFIRMED),
+            Answer::Voucher,
+        ])
+        .await;
+        assert_eq!(got.unwrap().nonce, 7);
+        assert_eq!(served, 3);
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_halt_is_one_request() {
+        let (got, served) = run(vec![Answer::Grpc(9, HALT_CONFIRMED), Answer::Voucher]).await;
+        let err = got.err().expect("the refusal is returned");
+        let status = err.downcast_ref::<tonic::Status>().expect("a status");
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(served, 1);
     }
 
     #[tokio::test]

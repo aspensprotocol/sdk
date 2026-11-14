@@ -146,6 +146,10 @@ bump (see **Versioning** in `README.md`).
   unreachable", "signer attestation failed") are retried like the refusals
   above when they carry "withdrawal not issued"; without the phrase they are
   returned at once.
+- A withdrawal the venue refuses because a solvency halt is not yet confirmed
+  ("withdrawal not issued — retry shortly", `UNAVAILABLE`) is retried like any
+  other pre-issue refusal; a confirmed halt (`FAILED_PRECONDITION`) is
+  returned at once.
 - The EVM withdraw submit is bounded and reports what the chain says. Each
   attempt (sign, broadcast, first confirmation) has 60 s; after any attempt
   that did not confirm, the contract's `usedWithdrawNonces` is read (10 s):
